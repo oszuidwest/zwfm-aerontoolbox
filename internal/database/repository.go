@@ -4,6 +4,7 @@ package database
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -38,7 +39,7 @@ func (r *Repository) Ping(ctx context.Context) error {
 	return r.db.PingContext(ctx)
 }
 
-// --- Artist operations ---
+// Artist operations.
 
 // GetArtist retrieves complete artist details by UUID.
 func (r *Repository) GetArtist(ctx context.Context, id string) (*ArtistDetails, error) {
@@ -47,7 +48,7 @@ func (r *Repository) GetArtist(ctx context.Context, id string) (*ArtistDetails, 
 	return getEntityByID[ArtistDetails](ctx, r.db, query, id, "artist", "fetch artist")
 }
 
-// --- Track operations ---
+// Track operations.
 
 // GetTrack retrieves complete track details by UUID.
 func (r *Repository) GetTrack(ctx context.Context, id string) (*TrackDetails, error) {
@@ -56,7 +57,7 @@ func (r *Repository) GetTrack(ctx context.Context, id string) (*TrackDetails, er
 	return getEntityByID[TrackDetails](ctx, r.db, query, id, "track", "fetch track")
 }
 
-// --- Image operations ---
+// Image operations.
 
 // GetImage retrieves the image for an entity.
 func (r *Repository) GetImage(ctx context.Context, table types.Table, id string) ([]byte, error) {
@@ -72,7 +73,7 @@ func (r *Repository) GetImage(ctx context.Context, table types.Table, id string)
 	var imageData []byte
 	err = r.db.GetContext(ctx, &imageData, query, id)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, types.NewNotFoundError(label, id)
 	}
 	if err != nil {
@@ -131,7 +132,7 @@ func (r *Repository) DeleteImage(ctx context.Context, table types.Table, id stri
 	return nil
 }
 
-// --- Count operations ---
+// Count operations.
 
 // CountWithImages counts entities that have images.
 func (r *Repository) CountWithImages(ctx context.Context, table types.Table) (int, error) {
@@ -182,7 +183,7 @@ func (r *Repository) DeleteAllImages(ctx context.Context, table types.Table) (in
 	return result.RowsAffected()
 }
 
-// --- Playlist operations ---
+// Playlist operations.
 
 // GetPlaylist retrieves playlist items based on options.
 func (r *Repository) GetPlaylist(ctx context.Context, opts *PlaylistOptions) ([]PlaylistItem, error) {

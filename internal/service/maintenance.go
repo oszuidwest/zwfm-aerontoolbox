@@ -1,4 +1,3 @@
-// Package service provides business logic for the Aeron Toolbox.
 package service
 
 import (
@@ -51,7 +50,7 @@ func (s *MaintenanceService) Close() {
 	s.runner.Close()
 }
 
-// --- Types ---
+// Maintenance types.
 
 // DatabaseHealth represents the overall health status of the database.
 type DatabaseHealth struct {
@@ -145,7 +144,7 @@ type maintenanceContext struct {
 	schema       string
 }
 
-// --- Health operations ---
+// Health operations.
 
 // GetHealth retrieves comprehensive database health information.
 func (s *MaintenanceService) GetHealth(ctx context.Context) (*DatabaseHealth, error) {
@@ -331,7 +330,7 @@ func lastVacuumTime(t *TableHealth) *time.Time {
 	return t.LastAutovacuum
 }
 
-// --- Maintenance operations ---
+// Maintenance operations.
 
 // newMaintenanceContext loads current table health data for maintenance operations.
 func (s *MaintenanceService) newMaintenanceContext(ctx context.Context) (*maintenanceContext, error) {
@@ -413,7 +412,7 @@ func (s *MaintenanceService) executeAnalyze(ctx context.Context, tableName strin
 	return err
 }
 
-// --- Async operations ---
+// Async operations.
 
 // maintenanceTask defines parameters for a generic maintenance operation.
 type maintenanceTask struct {

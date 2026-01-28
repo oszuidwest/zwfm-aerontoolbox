@@ -1,4 +1,3 @@
-// Package service provides business logic for the Aeron Toolbox.
 package service
 
 import (
@@ -26,21 +25,21 @@ func newMediaService(repo *database.Repository, cfg *config.Config) *MediaServic
 	}
 }
 
-// --- Artist operations ---
+// Artist operations.
 
 // GetArtist retrieves an artist by ID.
 func (s *MediaService) GetArtist(ctx context.Context, id string) (*database.ArtistDetails, error) {
 	return s.repo.GetArtist(ctx, id)
 }
 
-// --- Track operations ---
+// Track operations.
 
 // GetTrack retrieves a track by ID.
 func (s *MediaService) GetTrack(ctx context.Context, id string) (*database.TrackDetails, error) {
 	return s.repo.GetTrack(ctx, id)
 }
 
-// --- Image operations ---
+// Image operations.
 
 // GetImage retrieves the image for an entity.
 func (s *MediaService) GetImage(ctx context.Context, entityType types.EntityType, id string) ([]byte, error) {
@@ -137,7 +136,7 @@ func (s *MediaService) UploadImage(ctx context.Context, params *ImageUploadParam
 	}, nil
 }
 
-// --- Statistics operations ---
+// Statistics operations.
 
 // ImageStats represents statistics about images in the database.
 type ImageStats struct {
@@ -202,7 +201,7 @@ func (s *MediaService) DeleteAllImages(ctx context.Context, entityType types.Ent
 	return &DeleteResult{CountBefore: count, DeletedCount: deleted}, nil
 }
 
-// --- Playlist operations ---
+// Playlist operations.
 
 // PlaylistOptions configures playlist queries with filtering and pagination.
 type PlaylistOptions struct {
@@ -269,7 +268,7 @@ func (s *MediaService) GetPlaylistWithTracks(ctx context.Context, date string) (
 	return result, nil
 }
 
-// --- Validation helpers ---
+// Validation helpers.
 
 // validateEntityType ensures the entity type is either artist or track.
 func validateEntityType(entityType types.EntityType) error {

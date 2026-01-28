@@ -1,4 +1,3 @@
-// Package api provides the HTTP API server for the Aeron radio automation system.
 package api
 
 import (
