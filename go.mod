@@ -4,17 +4,17 @@ go 1.25.5
 
 require (
 	github.com/doyensec/safeurl v0.2.2
-	github.com/go-chi/chi/v5 v5.2.4
+	github.com/go-chi/chi/v5 v5.2.5
 	github.com/jmoiron/sqlx v1.4.0
-	github.com/lib/pq v1.10.9
+	github.com/lib/pq v1.11.1
 	golang.org/x/image v0.35.0
 )
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.41.1
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.7
-	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.21.0
-	github.com/aws/aws-sdk-go-v2/service/s3 v1.95.1
+	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.22.0
+	github.com/aws/aws-sdk-go-v2/service/s3 v1.96.0
 	github.com/go-playground/validator/v10 v10.30.1
 	github.com/netresearch/go-cron v0.9.1
 )
