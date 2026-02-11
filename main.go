@@ -66,7 +66,7 @@ func run() error {
 	}
 	defer svc.Close()
 
-	scheduler, err := service.NewScheduler(svc)
+	scheduler, err := service.NewScheduler(context.Background(), svc)
 	if err != nil {
 		slog.Error("Scheduler initialization failed", "error", err)
 		return err

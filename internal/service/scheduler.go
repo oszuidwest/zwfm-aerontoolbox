@@ -23,12 +23,13 @@ type Scheduler struct {
 
 // NewScheduler creates a scheduler and registers all enabled scheduled jobs.
 // The scheduler uses the system's local timezone (set via TZ environment variable).
-func NewScheduler(svc *AeronService) (*Scheduler, error) {
+func NewScheduler(ctx context.Context, svc *AeronService) (*Scheduler, error) {
 	cfg := svc.Config()
 
 	slog.Info("Scheduler using system timezone", "timezone", time.Local.String())
 
 	c := cron.New(
+		cron.WithContext(ctx),
 		cron.WithLocation(time.Local),
 		cron.WithChain(cron.SkipIfStillRunning(cron.DefaultLogger)),
 	)
@@ -52,9 +53,11 @@ func NewScheduler(svc *AeronService) (*Scheduler, error) {
 	return s, nil
 }
 
-// addJob registers a scheduled job using the scheduler's configured timezone.
-func (s *Scheduler) addJob(cfg config.SchedulerConfig, name string, job func()) error {
-	if _, err := s.cron.AddFunc(cfg.Schedule, job); err != nil {
+// addJob registers a context-aware scheduled job with a name for observability.
+// The context passed to the job function is derived from the cron's base context,
+// enabling graceful shutdown propagation to running jobs.
+func (s *Scheduler) addJob(cfg config.SchedulerConfig, name string, job func(context.Context)) error {
+	if _, err := s.cron.AddJob(cfg.Schedule, cron.FuncJobWithContext(job), cron.WithName(name)); err != nil {
 		return err
 	}
 
@@ -86,10 +89,11 @@ func (s *Scheduler) HasJobs() bool {
 	return len(s.jobs) > 0
 }
 
-// runBackup performs a scheduled backup.
-func (s *Scheduler) runBackup() {
+// runBackup performs a scheduled backup. The context is derived from the cron's
+// base context, so it will be canceled when the scheduler shuts down.
+func (s *Scheduler) runBackup(ctx context.Context) {
 	cfg := s.service.Config().Backup
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.GetTimeout())
+	ctx, cancel := context.WithTimeout(ctx, cfg.GetTimeout())
 	defer cancel()
 
 	slog.Info("Scheduled backup started")
@@ -101,7 +105,9 @@ func (s *Scheduler) runBackup() {
 }
 
 // runMaintenance performs scheduled VACUUM ANALYZE on tables that need it.
-func (s *Scheduler) runMaintenance() {
+// The context parameter is available for future use when maintenance operations
+// support context-based cancellation.
+func (s *Scheduler) runMaintenance(_ context.Context) {
 	slog.Info("Scheduled maintenance started")
 
 	if err := s.service.Maintenance.StartVacuum(VacuumOptions{Analyze: true}); err != nil {
