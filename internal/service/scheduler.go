@@ -24,6 +24,10 @@ type Scheduler struct {
 // NewScheduler creates a scheduler and registers all enabled scheduled jobs.
 // The scheduler uses the system's local timezone (set via TZ environment variable).
 func NewScheduler(ctx context.Context, svc *AeronService) (*Scheduler, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	cfg := svc.Config()
 
 	slog.Info("Scheduler using system timezone", "timezone", time.Local.String())
