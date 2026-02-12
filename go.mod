@@ -16,7 +16,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.22.0
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.96.0
 	github.com/go-playground/validator/v10 v10.30.1
-	github.com/netresearch/go-cron v0.10.0
+	github.com/netresearch/go-cron v0.11.0
 )
 
 require (
