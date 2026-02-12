@@ -10,6 +10,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -142,7 +143,7 @@ func serveUntilShutdown(server *api.Server, port string, scheduler *service.Sche
 	serverErr := make(chan error, 1)
 	go func() {
 		slog.Info("API server started", "port", port)
-		if err := server.Start(port); err != nil && err != http.ErrServerClosed {
+		if err := server.Start(port); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serverErr <- err
 		}
 	}()

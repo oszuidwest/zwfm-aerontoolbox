@@ -4,6 +4,7 @@ package config
 import (
 	"cmp"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -265,7 +266,7 @@ func Load(configPath string) (*Config, error) {
 		}
 	}
 
-	data, err := os.ReadFile(configPath)
+	data, err := os.ReadFile(configPath) //nolint:gosec // config path is validated via CLI flag or default
 	if err != nil {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
@@ -321,8 +322,8 @@ func validate(config *Config) error {
 
 // formatErrors converts validator errors to user-friendly messages.
 func formatErrors(err error) error {
-	ve, ok := err.(validator.ValidationErrors)
-	if !ok {
+	var ve validator.ValidationErrors
+	if !errors.As(err, &ve) {
 		return err
 	}
 

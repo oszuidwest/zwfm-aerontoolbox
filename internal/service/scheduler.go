@@ -1,4 +1,3 @@
-// Package service provides business logic for the Aeron Toolbox.
 package service
 
 import (
