@@ -10,7 +10,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
-	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
+	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/config"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
@@ -18,10 +18,10 @@ import (
 
 // s3Service manages uploads and deletions of backup files to S3-compatible storage.
 type s3Service struct {
-	uploader *manager.Uploader
-	client   *s3.Client
-	bucket   string
-	prefix   string
+	tm     *transfermanager.Client
+	client *s3.Client
+	bucket string
+	prefix string
 }
 
 // newS3Service creates an S3 client for backup synchronization, or returns nil if disabled.
@@ -48,10 +48,10 @@ func newS3Service(cfg *config.S3Config) (*s3Service, error) {
 		"prefix", cfg.GetPathPrefix())
 
 	return &s3Service{
-		uploader: manager.NewUploader(client),
-		client:   client,
-		bucket:   cfg.Bucket,
-		prefix:   cfg.GetPathPrefix(),
+		tm:     transfermanager.New(client),
+		client: client,
+		bucket: cfg.Bucket,
+		prefix: cfg.GetPathPrefix(),
 	}, nil
 }
 
@@ -78,7 +78,7 @@ func (s *s3Service) upload(ctx context.Context, filename, localPath string) (err
 	key := s.prefix + filename
 	start := time.Now()
 
-	_, err = s.uploader.Upload(ctx, &s3.PutObjectInput{
+	_, err = s.tm.UploadObject(ctx, &transfermanager.UploadObjectInput{
 		Bucket: aws.String(s.bucket),
 		Key:    aws.String(key),
 		Body:   file,
