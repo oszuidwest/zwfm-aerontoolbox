@@ -67,7 +67,13 @@ func run() error {
 	}
 	defer svc.Close()
 
-	scheduler, err := service.NewScheduler(svc)
+	// Create a root context that cancels on SIGINT/SIGTERM.
+	// This ties the scheduler's cron context to the application lifecycle,
+	// so scheduled jobs receive cancellation on shutdown.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	scheduler, err := service.NewScheduler(ctx, svc)
 	if err != nil {
 		slog.Error("Scheduler initialization failed", "error", err)
 		return err
@@ -76,7 +82,7 @@ func run() error {
 
 	server := api.New(svc, Version)
 
-	return serveUntilShutdown(server, *port, scheduler)
+	return serveUntilShutdown(server, *port, scheduler, ctx)
 }
 
 // printVersion prints the application version, commit hash, and build time.
@@ -136,10 +142,8 @@ func setupDatabase(cfg *config.Config) (*sqlx.DB, func(), error) {
 }
 
 // serveUntilShutdown runs the API server until a shutdown signal or error occurs.
-func serveUntilShutdown(server *api.Server, port string, scheduler *service.Scheduler) error {
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
-
+// The ctx parameter is the application lifecycle context, canceled on SIGINT/SIGTERM.
+func serveUntilShutdown(server *api.Server, port string, scheduler *service.Scheduler, ctx context.Context) error {
 	serverErr := make(chan error, 1)
 	go func() {
 		slog.Info("API server started", "port", port)
@@ -149,7 +153,7 @@ func serveUntilShutdown(server *api.Server, port string, scheduler *service.Sche
 	}()
 
 	select {
-	case <-stop:
+	case <-ctx.Done():
 		slog.Info("Shutdown signal received, stopping server...")
 	case err := <-serverErr:
 		slog.Error("API server error", "error", err)
