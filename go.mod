@@ -1,6 +1,6 @@
 module github.com/oszuidwest/zwfm-aerontoolbox
 
-go 1.25.5
+go 1.25.7
 
 require (
 	github.com/doyensec/safeurl v0.2.2
@@ -13,7 +13,7 @@ require (
 require (
 	github.com/aws/aws-sdk-go-v2 v1.41.1
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.7
-	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.22.0
+	github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager v0.1.2
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.96.0
 	github.com/go-playground/validator/v10 v10.30.1
 	github.com/netresearch/go-cron v0.9.1
