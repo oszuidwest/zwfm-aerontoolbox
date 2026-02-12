@@ -1,4 +1,3 @@
-// Package database provides PostgreSQL data access for the Aeron database.
 package database
 
 import (

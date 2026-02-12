@@ -1,4 +1,3 @@
-// Package service provides business logic for the Aeron Toolbox.
 package service
 
 import (
@@ -25,7 +24,7 @@ type s3Service struct {
 }
 
 // newS3Service creates an S3 client for backup synchronization, or returns nil if disabled.
-func newS3Service(cfg *config.S3Config) (*s3Service, error) {
+func newS3Service(cfg *config.S3Config) (*s3Service, error) { //nolint:unparam // error return kept for future use
 	if !cfg.Enabled {
 		return nil, nil
 	}
@@ -65,7 +64,7 @@ func ptrOrNil(s string) *string {
 
 // upload transfers a backup file to S3 storage.
 func (s *s3Service) upload(ctx context.Context, filename, localPath string) (err error) {
-	file, err := os.Open(localPath)
+	file, err := os.Open(localPath) //nolint:gosec // localPath is constructed from validated backup filename
 	if err != nil {
 		return types.NewOperationError("S3 upload", fmt.Errorf("open file: %w", err))
 	}
