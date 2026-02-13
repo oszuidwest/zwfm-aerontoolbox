@@ -61,6 +61,15 @@
       "force_path_style": false
     }
   },
+  "notifications": {
+    "email": {
+      "tenant_id": "",
+      "client_id": "",
+      "client_secret": "",
+      "from_address": "",
+      "recipients": ""
+    }
+  },
   "log": {
     "level": "info",
     "format": "text"

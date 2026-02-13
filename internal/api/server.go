@@ -83,6 +83,14 @@ func (s *Server) Start(port string) error {
 			})
 		})
 
+		// Notification endpoints
+		r.Group(func(r chi.Router) {
+			r.Use(s.authMiddleware)
+			r.Use(middleware.Timeout(s.service.Config().API.GetRequestTimeout()))
+
+			r.Post("/notifications/test-email", s.handleTestEmail)
+		})
+
 		// Backup routes - no special timeout needed
 		// POST /backup returns immediately (async), downloads are served via http.ServeFile
 		r.Group(func(r chi.Router) {
