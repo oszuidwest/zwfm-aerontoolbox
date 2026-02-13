@@ -268,10 +268,11 @@ func newCredentialsConfig(cfg *config.GraphConfig) *clientcredentials.Config {
 	}
 }
 
-// tokenSource returns an OAuth2 token source for the given config.
-func tokenSource(cfg *config.GraphConfig) (oauth2.TokenSource, error) {
+// tokenSourceContext returns an OAuth2 token source bound to the given context.
+// The context controls token acquisition timeouts.
+func tokenSourceContext(ctx context.Context, cfg *config.GraphConfig) (oauth2.TokenSource, error) {
 	if err := validateCredentials(cfg, false); err != nil {
 		return nil, err
 	}
-	return newCredentialsConfig(cfg).TokenSource(context.Background()), nil
+	return newCredentialsConfig(cfg).TokenSource(ctx), nil
 }
