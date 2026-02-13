@@ -18,6 +18,7 @@ import (
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/async"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/config"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/database"
+	"github.com/oszuidwest/zwfm-aerontoolbox/internal/notify"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/util"
 )
@@ -29,6 +30,7 @@ type BackupService struct {
 	backupRoot *os.Root
 	s3         *s3Service // nil if S3 is disabled
 	runner     *async.Runner
+	notify     *notify.NotificationService
 
 	pgDumpPath    string
 	pgRestorePath string
@@ -55,11 +57,12 @@ type S3SyncStatus struct {
 }
 
 // newBackupService creates a BackupService with resolved tool paths and optional S3 client.
-func newBackupService(repo *database.Repository, cfg *config.Config) (*BackupService, error) {
+func newBackupService(repo *database.Repository, cfg *config.Config, notifySvc *notify.NotificationService) (*BackupService, error) {
 	svc := &BackupService{
 		repo:   repo,
 		config: cfg,
 		runner: async.New(),
+		notify: notifySvc,
 	}
 
 	if cfg.Backup.Enabled {
@@ -318,6 +321,7 @@ func (s *BackupService) execute(ctx context.Context, req BackupRequest) error {
 	fileInfo, duration, err := s.executePgDump(ctx, s.pgDumpPath, filename, fullPath, args)
 	if err != nil {
 		s.setStatusDone(false, filename, err.Error())
+		s.notifyBackup()
 		return err
 	}
 
@@ -330,6 +334,7 @@ func (s *BackupService) execute(ctx context.Context, req BackupRequest) error {
 	if err := s.validateBackupFile(validateCtx, fullPath); err != nil {
 		slog.Error("Backup validation failed", "filename", filename, "error", err)
 		s.setStatusDone(false, filename, err.Error())
+		s.notifyBackup()
 		return err
 	}
 
@@ -341,6 +346,7 @@ func (s *BackupService) execute(ctx context.Context, req BackupRequest) error {
 	}
 
 	s.setStatusDone(true, filename, "")
+	s.notifyBackup()
 	slog.Info("Backup completed",
 		"filename", filename,
 		"size", util.FormatBytes(fileInfo.Size()),
@@ -355,8 +361,10 @@ func (s *BackupService) execute(ctx context.Context, req BackupRequest) error {
 			if err := s.s3.upload(uploadCtx, filename, fullPath); err != nil {
 				slog.Error("S3 synchronization failed", "filename", filename, "error", err)
 				s.setS3SyncStatus(false, err.Error())
+				s.notify.NotifyS3SyncResult(filename, &notify.S3SyncResult{Synced: false, Error: err.Error()})
 			} else {
 				s.setS3SyncStatus(true, "")
+				s.notify.NotifyS3SyncResult(filename, &notify.S3SyncResult{Synced: true})
 			}
 		})
 	}
@@ -415,6 +423,18 @@ func (s *BackupService) setS3SyncStatus(synced bool, errMsg string) {
 	if s.status != nil {
 		s.status.S3Sync = &S3SyncStatus{Synced: synced, Error: errMsg}
 	}
+}
+
+// notifyBackup sends a backup notification based on the current status.
+func (s *BackupService) notifyBackup() {
+	st := s.Status()
+	s.notify.NotifyBackupResult(&notify.BackupResult{
+		Success:   st.Success,
+		StartedAt: st.StartedAt,
+		EndedAt:   st.EndedAt,
+		Filename:  st.Filename,
+		Error:     st.Error,
+	})
 }
 
 // List returns metadata for all backup files in the backup directory.

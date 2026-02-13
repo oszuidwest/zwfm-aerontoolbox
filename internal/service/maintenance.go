@@ -9,6 +9,7 @@ import (
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/async"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/config"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/database"
+	"github.com/oszuidwest/zwfm-aerontoolbox/internal/notify"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/util"
 )
@@ -18,6 +19,7 @@ type MaintenanceService struct {
 	repo     *database.Repository
 	config   *config.Config
 	runner   *async.Runner
+	notify   *notify.NotificationService
 	statusMu sync.RWMutex
 	status   *MaintenanceStatus
 }
@@ -37,11 +39,12 @@ type MaintenanceStatus struct {
 }
 
 // newMaintenanceService creates a new MaintenanceService instance.
-func newMaintenanceService(repo *database.Repository, cfg *config.Config) *MaintenanceService {
+func newMaintenanceService(repo *database.Repository, cfg *config.Config, notifySvc *notify.NotificationService) *MaintenanceService {
 	return &MaintenanceService{
 		repo:   repo,
 		config: cfg,
 		runner: async.New(),
+		notify: notifySvc,
 	}
 }
 
@@ -585,21 +588,57 @@ func (s *MaintenanceService) runMaintenance(ctx context.Context, task maintenanc
 func (s *MaintenanceService) completeWithResult(result *MaintenanceResponse) {
 	now := time.Now()
 	s.statusMu.Lock()
-	defer s.statusMu.Unlock()
 	s.status.EndedAt = &now
 	s.status.Success = true
 	s.status.CurrentTable = ""
 	s.status.TablesDone = s.status.TablesTotal
 	s.status.LastResult = result
+	s.statusMu.Unlock()
+
+	s.notifyMaintenance()
 }
 
 // completeWithError marks the maintenance operation as completed with an error.
 func (s *MaintenanceService) completeWithError(errMsg string) {
 	now := time.Now()
 	s.statusMu.Lock()
-	defer s.statusMu.Unlock()
 	s.status.EndedAt = &now
 	s.status.Success = false
 	s.status.CurrentTable = ""
 	s.status.Error = errMsg
+	s.statusMu.Unlock()
+
+	s.notifyMaintenance()
+}
+
+// notifyMaintenance sends a maintenance notification based on the current status.
+func (s *MaintenanceService) notifyMaintenance() {
+	st := s.Status()
+	r := &notify.MaintenanceResult{
+		Success:   st.Success,
+		Operation: st.Operation,
+		StartedAt: st.StartedAt,
+		Error:     st.Error,
+	}
+
+	if st.LastResult != nil {
+		r.TablesTotal = st.LastResult.TablesTotal
+		r.TablesOK = st.LastResult.TablesSuccess
+		r.TablesFailed = st.LastResult.TablesFailed
+
+		for _, tr := range st.LastResult.Results {
+			r.Tables = append(r.Tables, notify.MaintenanceTableResult{
+				Table:          tr.Table,
+				Success:        tr.Success,
+				Message:        tr.Message,
+				Duration:       tr.Duration,
+				DeadTuples:     tr.DeadTuples,
+				DeadTupleRatio: tr.DeadTupleRatio,
+				Skipped:        tr.Skipped,
+				SkippedReason:  tr.SkippedReason,
+			})
+		}
+	}
+
+	s.notify.NotifyMaintenanceResult(r)
 }
