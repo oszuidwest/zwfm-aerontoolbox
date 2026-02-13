@@ -3,12 +3,15 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/oszuidwest/zwfm-aerontoolbox/internal/notify"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/service"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/util"
@@ -32,10 +35,19 @@ type ImageStatsResponse struct {
 
 // HealthResponse represents the response for the health check endpoint.
 type HealthResponse struct {
-	Status         string `json:"status"`
-	Version        string `json:"version"`
-	Database       string `json:"database"`
-	DatabaseStatus string `json:"database_status"`
+	Status         string              `json:"status"`
+	Version        string              `json:"version"`
+	Database       string              `json:"database"`
+	DatabaseStatus string              `json:"database_status"`
+	Notifications  *NotificationHealth `json:"notifications,omitempty"`
+}
+
+// NotificationHealth represents notification system status in the health response.
+type NotificationHealth struct {
+	Configured   bool                     `json:"configured"`
+	LastError    string                   `json:"last_error,omitempty"`
+	LastErrorAt  *time.Time               `json:"last_error_at,omitempty"`
+	SecretExpiry *notify.SecretExpiryInfo `json:"secret_expiry,omitempty"`
 }
 
 // ImageUploadResponse represents the response for image upload operations.
@@ -77,12 +89,35 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("Database health check failed", "error", err)
 	}
 
-	respondJSON(w, http.StatusOK, HealthResponse{
-		Status:         "healthy",
+	overallStatus := "healthy"
+
+	resp := HealthResponse{
 		Version:        s.version,
 		Database:       s.service.Config().Database.Name,
 		DatabaseStatus: dbStatus,
-	})
+	}
+
+	// Add notification health info
+	emailCfg := &s.service.Config().Notifications.Email
+	configured := notify.IsConfigured(emailCfg)
+	nh := &NotificationHealth{Configured: configured}
+
+	if configured {
+		lastErr, lastErrAt := s.service.Notify.LastError()
+		nh.LastError = lastErr
+		nh.LastErrorAt = lastErrAt
+
+		if expiry := s.service.Notify.SecretExpiry(); expiry != nil {
+			nh.SecretExpiry = expiry
+			if expiry.ExpiresSoon {
+				overallStatus = "degraded"
+			}
+		}
+	}
+	resp.Notifications = nh
+
+	resp.Status = overallStatus
+	respondJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) handleStats(entityType types.EntityType) http.HandlerFunc {
@@ -322,4 +357,32 @@ func (s *Server) handlePlaylist(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleTestEmail(w http.ResponseWriter, r *http.Request) {
+	emailCfg := &s.service.Config().Notifications.Email
+	if err := notify.ValidateConfig(emailCfg); err != nil {
+		respondError(w, http.StatusBadRequest, fmt.Sprintf("Notification configuration invalid: %v", err))
+		return
+	}
+
+	client, err := notify.NewGraphClient(emailCfg)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to create Graph client: %v", err))
+		return
+	}
+
+	if err := client.ValidateAuth(); err != nil {
+		respondError(w, http.StatusBadGateway, fmt.Sprintf("Authentication failed: %v", err))
+		return
+	}
+
+	if err := s.service.Notify.SendTestEmail(); err != nil {
+		respondError(w, http.StatusBadGateway, fmt.Sprintf("Failed to send test email: %v", err))
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]string{
+		"message": "Test e-mail succesvol verzonden",
+	})
 }

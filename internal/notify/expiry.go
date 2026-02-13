@@ -1,0 +1,171 @@
+package notify
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"sync"
+	"time"
+
+	"github.com/oszuidwest/zwfm-aerontoolbox/internal/config"
+)
+
+const (
+	// expiryWarningDays is the number of days before expiration to show a warning.
+	expiryWarningDays = 30
+	// expiryCacheTTL is how long to cache the expiry info before re-checking.
+	expiryCacheTTL = 1 * time.Hour
+)
+
+// SecretExpiryInfo contains information about client secret expiration.
+type SecretExpiryInfo struct {
+	ExpiresAt   string `json:"expires_at,omitempty"`
+	ExpiresSoon bool   `json:"expires_soon"`
+	DaysLeft    int    `json:"days_left"`
+	Error       string `json:"error,omitempty"`
+}
+
+// SecretExpiryChecker checks client secret expiration via Microsoft Graph API.
+type SecretExpiryChecker struct {
+	mu         sync.RWMutex
+	cfg        *config.GraphConfig
+	cached     SecretExpiryInfo
+	lastCheck  time.Time
+	httpClient *http.Client
+}
+
+// NewSecretExpiryChecker creates a new expiry checker for the given config.
+func NewSecretExpiryChecker(cfg *config.GraphConfig) *SecretExpiryChecker {
+	return &SecretExpiryChecker{
+		cfg:        cfg,
+		httpClient: &http.Client{Timeout: httpTimeout},
+	}
+}
+
+// Info returns the secret expiry information, using a cached value if fresh enough.
+func (c *SecretExpiryChecker) Info() SecretExpiryInfo {
+	c.mu.RLock()
+	if time.Since(c.lastCheck) < expiryCacheTTL && c.lastCheck.After(time.Time{}) {
+		info := c.cached
+		c.mu.RUnlock()
+		return info
+	}
+	c.mu.RUnlock()
+
+	return c.refresh()
+}
+
+// refresh fetches fresh expiry information from the Graph API.
+func (c *SecretExpiryChecker) refresh() SecretExpiryInfo {
+	c.mu.Lock()
+	cfg := c.cfg
+	c.mu.Unlock()
+
+	if cfg == nil || cfg.TenantID == "" || cfg.ClientID == "" || cfg.ClientSecret == "" {
+		info := SecretExpiryInfo{Error: "Graph API not configured"}
+		c.mu.Lock()
+		c.cached = info
+		c.lastCheck = time.Now()
+		c.mu.Unlock()
+		return info
+	}
+
+	info, err := c.fetchExpiryInfo(cfg)
+	if err != nil {
+		info = SecretExpiryInfo{Error: err.Error()}
+	}
+
+	c.mu.Lock()
+	c.cached = info
+	c.lastCheck = time.Now()
+	c.mu.Unlock()
+
+	return info
+}
+
+// applicationResponse represents a Microsoft Graph application response.
+type applicationResponse struct {
+	PasswordCredentials []passwordCredential `json:"passwordCredentials"`
+}
+
+type passwordCredential struct {
+	EndDateTime string `json:"endDateTime"`
+}
+
+// fetchExpiryInfo queries the Graph API for credential expiry information.
+func (c *SecretExpiryChecker) fetchExpiryInfo(cfg *config.GraphConfig) (SecretExpiryInfo, error) {
+	ts, err := tokenSource(cfg)
+	if err != nil {
+		return SecretExpiryInfo{}, fmt.Errorf("create token source: %w", err)
+	}
+
+	token, err := ts.Token()
+	if err != nil {
+		return SecretExpiryInfo{}, fmt.Errorf("acquire token: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeoutCause(
+		context.Background(),
+		httpTimeout,
+		errors.New("graph API request timeout"),
+	)
+	defer cancel()
+
+	apiURL := fmt.Sprintf("%s/applications(appId='%s')", graphBaseURL, url.PathEscape(cfg.ClientID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, http.NoBody)
+	if err != nil {
+		return SecretExpiryInfo{}, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token.AccessToken)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return SecretExpiryInfo{}, fmt.Errorf("request failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		return SecretExpiryInfo{}, fmt.Errorf("API returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	var appResp applicationResponse
+	if err := json.Unmarshal(body, &appResp); err != nil {
+		return SecretExpiryInfo{}, fmt.Errorf("parse response: %w", err)
+	}
+
+	// Find the earliest expiring credential
+	var earliest time.Time
+	for _, cred := range appResp.PasswordCredentials {
+		if cred.EndDateTime == "" {
+			continue
+		}
+		expiry, err := time.Parse(time.RFC3339, cred.EndDateTime)
+		if err != nil {
+			continue
+		}
+		if earliest.IsZero() || expiry.Before(earliest) {
+			earliest = expiry
+		}
+	}
+
+	if earliest.IsZero() {
+		return SecretExpiryInfo{Error: "no password credentials found"}, nil
+	}
+
+	daysLeft := int(time.Until(earliest).Hours() / 24)
+	if daysLeft < 0 {
+		daysLeft = 0
+	}
+
+	return SecretExpiryInfo{
+		ExpiresAt:   earliest.Format(time.RFC3339),
+		ExpiresSoon: daysLeft <= expiryWarningDays,
+		DaysLeft:    daysLeft,
+	}, nil
+}
