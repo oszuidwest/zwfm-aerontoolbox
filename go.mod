@@ -6,8 +6,8 @@ require (
 	github.com/doyensec/safeurl v0.2.2
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/jmoiron/sqlx v1.4.0
-	github.com/lib/pq v1.11.1
-	golang.org/x/image v0.35.0
+	github.com/lib/pq v1.11.2
+	golang.org/x/image v0.36.0
 )
 
 require (
@@ -35,5 +35,5 @@ require (
 	github.com/leodido/go-urn v1.4.0 // indirect
 	golang.org/x/crypto v0.46.0 // indirect
 	golang.org/x/sys v0.39.0 // indirect
-	golang.org/x/text v0.33.0 // indirect
+	golang.org/x/text v0.34.0 // indirect
 )
