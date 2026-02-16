@@ -27,8 +27,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-      id-token: write
-      security-events: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -106,17 +104,3 @@ jobs:
             BUILD_TIME=${{ steps.buildtime.outputs.time }}
           provenance: false
           sbom: false
-
-      - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version_without_v }}
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-          severity: 'CRITICAL,HIGH'
-
-      - name: Upload Trivy scan results to GitHub Security
-        uses: github/codeql-action/upload-sarif@v4
-        if: success()
-        with:
-          sarif_file: 'trivy-results.sarif'
