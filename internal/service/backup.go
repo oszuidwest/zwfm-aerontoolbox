@@ -212,7 +212,7 @@ func generateBackupFilename() string {
 
 // executePgDump runs pg_dump and returns file info on success, cleaning up on failure.
 func (s *BackupService) executePgDump(ctx context.Context, pgDumpPath, filename, fullPath string, args []string) (os.FileInfo, time.Duration, error) {
-	cmd := exec.CommandContext(ctx, pgDumpPath, args...)
+	cmd := exec.CommandContext(ctx, pgDumpPath, args...) //nolint:gosec // G204: pgDumpPath is resolved from config/PATH, not user HTTP input
 	cmd.Env = append(os.Environ(), "PGPASSWORD="+s.config.Database.Password)
 
 	start := time.Now()

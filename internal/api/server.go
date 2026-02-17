@@ -138,7 +138,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		apiKey := r.Header.Get("X-API-Key")
 
 		if !s.isValidAPIKey(apiKey) {
-			slog.Warn("Authentication failed",
+			slog.Warn("Authentication failed", //nolint:gosec // G706: logged as structured slog value for security auditing
 				"reason", "invalid_api_key",
 				"path", r.URL.Path,
 				"method", r.Method,
