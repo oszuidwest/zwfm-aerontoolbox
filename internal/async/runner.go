@@ -59,15 +59,13 @@ func (r *Runner) Context(timeout time.Duration) (context.Context, context.Cancel
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 
 	// Track this goroutine to prevent leaks during shutdown
-	r.wg.Add(1)
-	go func() {
-		defer r.wg.Done()
+	r.wg.Go(func() {
 		select {
 		case <-r.done:
 			cancel()
 		case <-ctx.Done():
 		}
-	}()
+	})
 
 	return ctx, cancel
 }
@@ -76,21 +74,17 @@ func (r *Runner) Context(timeout time.Duration) (context.Context, context.Cancel
 // The running flag is automatically cleared when fn returns.
 // Use this for the main operation (backup, vacuum, etc).
 func (r *Runner) Go(fn func()) {
-	r.wg.Add(1)
-	go func() {
-		defer r.wg.Done()
+	r.wg.Go(func() {
 		defer r.running.Store(false)
 		fn()
-	}()
+	})
 }
 
 // GoBackground starts a secondary operation in a goroutine.
 // Unlike Go, this does not affect the running flag.
 // Use this for follow-up operations like S3 sync or cleanup.
 func (r *Runner) GoBackground(fn func()) {
-	r.wg.Add(1)
-	go func() {
-		defer r.wg.Done()
+	r.wg.Go(func() {
 		fn()
-	}()
+	})
 }

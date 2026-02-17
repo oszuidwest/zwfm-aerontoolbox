@@ -191,7 +191,7 @@ func (s *Server) handleGetImage(entityType types.EntityType) http.HandlerFunc {
 		w.Header().Set("Content-Length", strconv.Itoa(len(imageData)))
 
 		w.WriteHeader(http.StatusOK)
-		if _, err := w.Write(imageData); err != nil {
+		if _, err := w.Write(imageData); err != nil { //nolint:gosec // G705: imageData is from internal storage, content type is detected and set explicitly
 			slog.Debug("Failed to write image to client", "error", err)
 		}
 	}
@@ -246,7 +246,7 @@ func (s *Server) handleDeleteImage(entityType types.EntityType) http.HandlerFunc
 
 		err := s.service.Media.DeleteImage(r.Context(), entityType, entityID)
 		if err != nil {
-			slog.Error("Failed to delete image", "entityType", entityType, "id", entityID, "error", err)
+			slog.Error("Failed to delete image", "entityType", entityType, "id", entityID, "error", err) //nolint:gosec // G706: entityID is validated, logged as structured slog value
 			respondError(w, errorCode(err), err.Error())
 			return
 		}
@@ -304,7 +304,7 @@ func (s *Server) handlePlaylist(w http.ResponseWriter, r *http.Request) {
 		opts := parsePlaylistOptions(query)
 		playlist, err := s.service.Media.GetPlaylist(r.Context(), &opts)
 		if err != nil {
-			slog.Error("Failed to retrieve playlist", "block_id", opts.BlockID, "error", err)
+			slog.Error("Failed to retrieve playlist", "block_id", opts.BlockID, "error", err) //nolint:gosec // G706: block_id is logged as a structured slog value
 			respondError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -316,7 +316,7 @@ func (s *Server) handlePlaylist(w http.ResponseWriter, r *http.Request) {
 	date := query.Get("date")
 	result, err := s.service.Media.GetPlaylistWithTracks(r.Context(), date)
 	if err != nil {
-		slog.Error("Failed to retrieve playlist with tracks", "date", date, "error", err)
+		slog.Error("Failed to retrieve playlist with tracks", "date", date, "error", err) //nolint:gosec // G706: date is logged as a structured slog value
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

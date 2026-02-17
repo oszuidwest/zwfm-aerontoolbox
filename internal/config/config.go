@@ -22,7 +22,7 @@ type DatabaseConfig struct {
 	Port                   string `json:"port" validate:"required"`
 	Name                   string `json:"name" validate:"required"`
 	User                   string `json:"user" validate:"required"`
-	Password               string `json:"password" validate:"required"`
+	Password               string `json:"password" validate:"required"` //nolint:gosec // G117: intentional config field for database auth
 	Schema                 string `json:"schema" validate:"required,identifier"`
 	SSLMode                string `json:"sslmode" validate:"required"`
 	MaxOpenConns           int    `json:"max_open_conns" validate:"gte=0"`
