@@ -377,7 +377,7 @@ func (s *Server) handleTestEmail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.service.Notify.SendTestEmail(); err != nil {
+	if err := s.service.Notify.SendTestEmail(r.Context()); err != nil {
 		respondError(w, http.StatusBadGateway, fmt.Sprintf("Failed to send test email: %v", err))
 		return
 	}

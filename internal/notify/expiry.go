@@ -36,6 +36,7 @@ type SecretExpiryChecker struct {
 	cached     SecretExpiryInfo
 	lastCheck  time.Time
 	httpClient *http.Client
+	refreshing bool // prevents multiple concurrent refreshes
 }
 
 // NewSecretExpiryChecker creates a new expiry checker for the given config.
@@ -46,32 +47,55 @@ func NewSecretExpiryChecker(cfg *config.GraphConfig) *SecretExpiryChecker {
 	}
 }
 
-// Info returns the secret expiry information, using a cached value if fresh enough.
-func (c *SecretExpiryChecker) Info() SecretExpiryInfo {
+// InfoCached returns the cached secret expiry information without triggering a refresh.
+// Use this for health checks to avoid blocking on external API calls.
+func (c *SecretExpiryChecker) InfoCached() SecretExpiryInfo {
 	c.mu.RLock()
-	if time.Since(c.lastCheck) < expiryCacheTTL && c.lastCheck.After(time.Time{}) {
-		info := c.cached
-		c.mu.RUnlock()
-		return info
-	}
-	c.mu.RUnlock()
-
-	return c.refresh()
+	defer c.mu.RUnlock()
+	return c.cached
 }
 
-// refresh fetches fresh expiry information from the Graph API.
-func (c *SecretExpiryChecker) refresh() SecretExpiryInfo {
+// Info returns the secret expiry information, using a cached value if fresh enough.
+// If the cache is stale, it triggers an async refresh and returns the stale cached value.
+// Only one refresh runs at a time to prevent thundering herd during outages.
+func (c *SecretExpiryChecker) Info() SecretExpiryInfo {
+	c.mu.RLock()
+	cached := c.cached
+	needsRefresh := time.Since(c.lastCheck) >= expiryCacheTTL || c.lastCheck.IsZero()
+	c.mu.RUnlock()
+
+	if needsRefresh {
+		// refresh() has its own guard to prevent concurrent refreshes
+		go c.refresh()
+	}
+
+	return cached
+}
+
+// refresh fetches fresh expiry information from the Graph API and updates the cache.
+func (c *SecretExpiryChecker) refresh() {
+	// Set refreshing flag and ensure it's cleared when done
 	c.mu.Lock()
+	if c.refreshing {
+		c.mu.Unlock()
+		return // Another refresh is already in progress
+	}
+	c.refreshing = true
 	cfg := c.cfg
 	c.mu.Unlock()
 
-	if cfg == nil || cfg.TenantID == "" || cfg.ClientID == "" || cfg.ClientSecret == "" {
-		info := SecretExpiryInfo{Error: "Graph API not configured"}
+	defer func() {
 		c.mu.Lock()
-		c.cached = info
+		c.refreshing = false
+		c.mu.Unlock()
+	}()
+
+	if cfg == nil || cfg.TenantID == "" || cfg.ClientID == "" || cfg.ClientSecret == "" {
+		c.mu.Lock()
+		c.cached = SecretExpiryInfo{Error: "Graph API not configured"}
 		c.lastCheck = time.Now()
 		c.mu.Unlock()
-		return info
+		return
 	}
 
 	info, err := c.fetchExpiryInfo(cfg)
@@ -83,8 +107,6 @@ func (c *SecretExpiryChecker) refresh() SecretExpiryInfo {
 	c.cached = info
 	c.lastCheck = time.Now()
 	c.mu.Unlock()
-
-	return info
 }
 
 // applicationResponse represents a Microsoft Graph application response.

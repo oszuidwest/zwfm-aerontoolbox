@@ -1,6 +1,7 @@
 package notify
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -195,6 +196,8 @@ func (s *NotificationService) LastError() (string, *time.Time) {
 }
 
 // SecretExpiry returns the cached secret expiry information, or nil if not configured.
+// This method never blocks on external API calls - it returns cached data and triggers
+// an async refresh if the cache is stale.
 func (s *NotificationService) SecretExpiry() *SecretExpiryInfo {
 	if s.expiryChecker == nil {
 		return nil
@@ -203,8 +206,17 @@ func (s *NotificationService) SecretExpiry() *SecretExpiryInfo {
 	return &info
 }
 
+// StartExpiryChecker triggers an initial background refresh of the secret expiry info.
+// Call this at startup to populate the cache before the first health check.
+func (s *NotificationService) StartExpiryChecker() {
+	if s.expiryChecker != nil {
+		go s.expiryChecker.refresh()
+	}
+}
+
 // SendTestEmail sends a synchronous test email to validate the notification setup.
-func (s *NotificationService) SendTestEmail() error {
+// The context controls cancellation of the request.
+func (s *NotificationService) SendTestEmail(ctx context.Context) error {
 	client, err := s.getOrCreateClient()
 	if err != nil {
 		return fmt.Errorf("client init: %w", err)
@@ -215,7 +227,7 @@ func (s *NotificationService) SendTestEmail() error {
 	body := fmt.Sprintf("Dit is een test-e-mail van Aeron Toolbox.\n\nTijdstip: %s\n\nAls u deze e-mail ontvangt, zijn de notificatie-instellingen correct geconfigureerd.",
 		time.Now().Format("2006-01-02 15:04:05"))
 
-	return client.SendMail(recipients, subject, body)
+	return client.SendMail(ctx, recipients, subject, body)
 }
 
 // Close stops the notification service runner.
@@ -254,6 +266,9 @@ func (s *NotificationService) sendAsync(subject, body string) {
 	})
 }
 
+// sendTimeout is the maximum time allowed for sending a notification email.
+const sendTimeout = 2 * time.Minute
+
 // send sends an email and tracks any errors.
 func (s *NotificationService) send(subject, body string) {
 	client, err := s.getOrCreateClient()
@@ -263,8 +278,11 @@ func (s *NotificationService) send(subject, body string) {
 		return
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), sendTimeout)
+	defer cancel()
+
 	recipients := ParseRecipients(s.config.Notifications.Email.Recipients)
-	if err := client.SendMail(recipients, subject, body); err != nil {
+	if err := client.SendMail(ctx, recipients, subject, body); err != nil {
 		slog.Error("Notificatie e-mail verzenden mislukt", "error", err, "subject", subject)
 		s.trackError(err)
 		return

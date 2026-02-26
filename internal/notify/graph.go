@@ -91,7 +91,8 @@ type graphEmailAddress struct {
 }
 
 // SendMail sends a plain text email to the specified recipients.
-func (c *GraphClient) SendMail(recipients []string, subject, body string) error {
+// The context controls cancellation of the request and any retries.
+func (c *GraphClient) SendMail(ctx context.Context, recipients []string, subject, body string) error {
 	if len(recipients) == 0 {
 		return fmt.Errorf("no recipients specified")
 	}
@@ -125,21 +126,30 @@ func (c *GraphClient) SendMail(recipients []string, subject, body string) error 
 	if err != nil {
 		return fmt.Errorf("marshal request: %w", err)
 	}
-	return c.doWithRetry(jsonData)
+	return c.doWithRetry(ctx, jsonData)
 }
 
 // doWithRetry sends the email request with automatic retries and exponential backoff.
-func (c *GraphClient) doWithRetry(jsonData []byte) error {
+// The context controls cancellation - if cancelled, the retry loop stops immediately.
+func (c *GraphClient) doWithRetry(ctx context.Context, jsonData []byte) error {
 	apiURL := fmt.Sprintf("%s/users/%s/sendMail", graphBaseURL, url.PathEscape(c.fromAddress))
 	backoff := NewBackoff(initialRetryWait, maxRetryWait)
 
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		if attempt > 0 {
-			time.Sleep(backoff.Next())
+		// Check context before each attempt
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("request cancelled: %w", err)
 		}
 
-		req, err := http.NewRequest(http.MethodPost, apiURL, bytes.NewReader(jsonData))
+		if attempt > 0 {
+			// Context-aware sleep
+			if err := sleepWithContext(ctx, backoff.Next()); err != nil {
+				return fmt.Errorf("request cancelled during retry wait: %w", err)
+			}
+		}
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(jsonData))
 		if err != nil {
 			return fmt.Errorf("create request: %w", err)
 		}
@@ -160,7 +170,9 @@ func (c *GraphClient) doWithRetry(jsonData []byte) error {
 		case http.StatusTooManyRequests:
 			if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "" {
 				if seconds, err := strconv.Atoi(retryAfter); err == nil && seconds > 0 {
-					time.Sleep(time.Duration(seconds) * time.Second)
+					if err := sleepWithContext(ctx, time.Duration(seconds)*time.Second); err != nil {
+						return fmt.Errorf("request cancelled during rate limit wait: %w", err)
+					}
 				}
 			}
 			lastErr = fmt.Errorf("graph API rate limited (429): %s", string(respBody))
@@ -175,6 +187,18 @@ func (c *GraphClient) doWithRetry(jsonData []byte) error {
 	}
 
 	return fmt.Errorf("max retries exceeded: %w", lastErr)
+}
+
+// sleepWithContext sleeps for the given duration or until the context is cancelled.
+func sleepWithContext(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // ValidateAuth verifies that the email credentials are valid by making a lightweight request.
@@ -215,16 +239,20 @@ func ValidateConfig(cfg *config.GraphConfig) error {
 	if cfg.FromAddress == "" {
 		return fmt.Errorf("from address (shared mailbox) is required")
 	}
-	if cfg.Recipients == "" {
-		return fmt.Errorf("recipients are required")
+	if len(ParseRecipients(cfg.Recipients)) == 0 {
+		return fmt.Errorf("at least one valid recipient is required")
 	}
 	return nil
 }
 
 // IsConfigured reports whether the Graph configuration has the minimum required fields.
+// It validates that credentials are present and at least one valid recipient exists.
 func IsConfigured(cfg *config.GraphConfig) bool {
-	return cfg.TenantID != "" && cfg.ClientID != "" && cfg.ClientSecret != "" &&
-		cfg.FromAddress != "" && cfg.Recipients != ""
+	if cfg.TenantID == "" || cfg.ClientID == "" || cfg.ClientSecret == "" || cfg.FromAddress == "" {
+		return false
+	}
+	// Verify at least one valid recipient after parsing
+	return len(ParseRecipients(cfg.Recipients)) > 0
 }
 
 // ParseRecipients splits a comma-separated recipients string into a slice.

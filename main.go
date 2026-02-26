@@ -67,6 +67,9 @@ func run() error {
 	}
 	defer svc.Close()
 
+	// Start background refresh of secret expiry info so health checks don't block
+	svc.Notify.StartExpiryChecker()
+
 	// Create a root context that cancels on SIGINT/SIGTERM.
 	// This ties the scheduler's cron context to the application lifecycle,
 	// so scheduled jobs receive cancellation on shutdown.
