@@ -308,16 +308,16 @@ func (s *NotificationService) formatBackupFailure(r *BackupResult) (subject, bod
 	var b strings.Builder
 	b.WriteString("Backup mislukt\n\n")
 	if r.StartedAt != nil {
-		b.WriteString(fmt.Sprintf("Tijdstip:       %s\n", r.StartedAt.Format("2006-01-02 15:04:05")))
+		fmt.Fprintf(&b, "Tijdstip:       %s\n", r.StartedAt.Format("2006-01-02 15:04:05"))
 	}
 	if r.StartedAt != nil && r.EndedAt != nil {
-		b.WriteString(fmt.Sprintf("Duur:           %s\n", r.EndedAt.Sub(*r.StartedAt).Round(time.Second)))
+		fmt.Fprintf(&b, "Duur:           %s\n", r.EndedAt.Sub(*r.StartedAt).Round(time.Second))
 	}
 	if r.Filename != "" {
-		b.WriteString(fmt.Sprintf("Bestandsnaam:   %s\n", r.Filename))
+		fmt.Fprintf(&b, "Bestandsnaam:   %s\n", r.Filename)
 	}
 	if r.Error != "" {
-		b.WriteString(fmt.Sprintf("Fout:           %s\n", r.Error))
+		fmt.Fprintf(&b, "Fout:           %s\n", r.Error)
 	}
 
 	return subject, b.String()
@@ -330,13 +330,13 @@ func (s *NotificationService) formatBackupRecovery(r *BackupResult) (subject, bo
 	b.WriteString("Backup hersteld\n\n")
 	b.WriteString("De backup is weer succesvol na een eerdere fout.\n\n")
 	if r.StartedAt != nil {
-		b.WriteString(fmt.Sprintf("Tijdstip:       %s\n", r.StartedAt.Format("2006-01-02 15:04:05")))
+		fmt.Fprintf(&b, "Tijdstip:       %s\n", r.StartedAt.Format("2006-01-02 15:04:05"))
 	}
 	if r.StartedAt != nil && r.EndedAt != nil {
-		b.WriteString(fmt.Sprintf("Duur:           %s\n", r.EndedAt.Sub(*r.StartedAt).Round(time.Second)))
+		fmt.Fprintf(&b, "Duur:           %s\n", r.EndedAt.Sub(*r.StartedAt).Round(time.Second))
 	}
 	if r.Filename != "" {
-		b.WriteString(fmt.Sprintf("Bestandsnaam:   %s\n", r.Filename))
+		fmt.Fprintf(&b, "Bestandsnaam:   %s\n", r.Filename)
 	}
 
 	return subject, b.String()
@@ -347,12 +347,12 @@ func (s *NotificationService) formatS3Failure(filename string, r *S3SyncResult) 
 
 	var b strings.Builder
 	b.WriteString("S3-synchronisatie mislukt\n\n")
-	b.WriteString(fmt.Sprintf("Tijdstip:       %s\n", time.Now().Format("2006-01-02 15:04:05")))
+	fmt.Fprintf(&b, "Tijdstip:       %s\n", time.Now().Format("2006-01-02 15:04:05"))
 	if filename != "" {
-		b.WriteString(fmt.Sprintf("Bestandsnaam:   %s\n", filename))
+		fmt.Fprintf(&b, "Bestandsnaam:   %s\n", filename)
 	}
 	if r.Error != "" {
-		b.WriteString(fmt.Sprintf("Fout:           %s\n", r.Error))
+		fmt.Fprintf(&b, "Fout:           %s\n", r.Error)
 	}
 
 	return subject, b.String()
@@ -364,9 +364,9 @@ func (s *NotificationService) formatS3Recovery(filename string) (subject, body s
 	var b strings.Builder
 	b.WriteString("S3-synchronisatie hersteld\n\n")
 	b.WriteString("De S3-synchronisatie is weer succesvol na een eerdere fout.\n\n")
-	b.WriteString(fmt.Sprintf("Tijdstip:       %s\n", time.Now().Format("2006-01-02 15:04:05")))
+	fmt.Fprintf(&b, "Tijdstip:       %s\n", time.Now().Format("2006-01-02 15:04:05"))
 	if filename != "" {
-		b.WriteString(fmt.Sprintf("Bestandsnaam:   %s\n", filename))
+		fmt.Fprintf(&b, "Bestandsnaam:   %s\n", filename)
 	}
 
 	return subject, b.String()
@@ -388,34 +388,34 @@ func (s *NotificationService) formatMaintenanceFailure(r *MaintenanceResult) (su
 	}
 
 	if r.Operation != "" {
-		b.WriteString(fmt.Sprintf("Operatie:         %s\n", strings.ToUpper(strings.ReplaceAll(r.Operation, "_", " ")))) //nolint:misspell // Dutch word
+		fmt.Fprintf(&b, "Operatie:         %s\n", strings.ToUpper(strings.ReplaceAll(r.Operation, "_", " "))) //nolint:misspell // Dutch word
 	}
 	if r.StartedAt != nil {
-		b.WriteString(fmt.Sprintf("Tijdstip:         %s\n", r.StartedAt.Format("2006-01-02 15:04:05")))
+		fmt.Fprintf(&b, "Tijdstip:         %s\n", r.StartedAt.Format("2006-01-02 15:04:05"))
 	}
 	if r.Error != "" {
-		b.WriteString(fmt.Sprintf("Fout:             %s\n", r.Error))
+		fmt.Fprintf(&b, "Fout:             %s\n", r.Error)
 	}
 
-	b.WriteString(fmt.Sprintf("Tabellen totaal:  %d\n", r.TablesTotal))
-	b.WriteString(fmt.Sprintf("Gelukt:           %d\n", r.TablesOK))
-	b.WriteString(fmt.Sprintf("Mislukt:          %d\n", r.TablesFailed))
+	fmt.Fprintf(&b, "Tabellen totaal:  %d\n", r.TablesTotal)
+	fmt.Fprintf(&b, "Gelukt:           %d\n", r.TablesOK)
+	fmt.Fprintf(&b, "Mislukt:          %d\n", r.TablesFailed)
 
 	if len(r.Tables) > 0 {
 		b.WriteString("\nResultaten:\n")
 		for _, t := range r.Tables {
 			if t.Skipped {
-				b.WriteString(fmt.Sprintf("  %-14s OVERGESLAGEN  %s\n", t.Table, t.SkippedReason))
+				fmt.Fprintf(&b, "  %-14s OVERGESLAGEN  %s\n", t.Table, t.SkippedReason)
 				continue
 			}
 			statusLabel := "GELUKT"
 			if !t.Success {
 				statusLabel = "MISLUKT"
 			}
-			b.WriteString(fmt.Sprintf("  %-14s %-8s %s    dead tuples: %d (%.1f%%)\n",
-				t.Table, statusLabel, t.Duration, t.DeadTuples, t.DeadTupleRatio))
+			fmt.Fprintf(&b, "  %-14s %-8s %s    dead tuples: %d (%.1f%%)\n",
+				t.Table, statusLabel, t.Duration, t.DeadTuples, t.DeadTupleRatio)
 			if !t.Success {
-				b.WriteString(fmt.Sprintf("    Fout: %s\n", t.Message))
+				fmt.Fprintf(&b, "    Fout: %s\n", t.Message)
 			}
 		}
 	}
@@ -431,14 +431,14 @@ func (s *NotificationService) formatMaintenanceRecovery(r *MaintenanceResult) (s
 	b.WriteString("Het database onderhoud is weer succesvol na een eerdere fout.\n\n")
 
 	if r.Operation != "" {
-		b.WriteString(fmt.Sprintf("Operatie:         %s\n", strings.ToUpper(strings.ReplaceAll(r.Operation, "_", " ")))) //nolint:misspell // Dutch word
+		fmt.Fprintf(&b, "Operatie:         %s\n", strings.ToUpper(strings.ReplaceAll(r.Operation, "_", " "))) //nolint:misspell // Dutch word
 	}
 	if r.StartedAt != nil {
-		b.WriteString(fmt.Sprintf("Tijdstip:         %s\n", r.StartedAt.Format("2006-01-02 15:04:05")))
+		fmt.Fprintf(&b, "Tijdstip:         %s\n", r.StartedAt.Format("2006-01-02 15:04:05"))
 	}
 
-	b.WriteString(fmt.Sprintf("Tabellen totaal:  %d\n", r.TablesTotal))
-	b.WriteString(fmt.Sprintf("Gelukt:           %d\n", r.TablesOK))
+	fmt.Fprintf(&b, "Tabellen totaal:  %d\n", r.TablesTotal)
+	fmt.Fprintf(&b, "Gelukt:           %d\n", r.TablesOK)
 
 	return subject, b.String()
 }

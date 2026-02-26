@@ -140,7 +140,7 @@ func (c *SecretExpiryChecker) fetchExpiryInfo(cfg *config.GraphConfig) (SecretEx
 	}
 	req.Header.Set("Authorization", "Bearer "+token.AccessToken)
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.httpClient.Do(req) //nolint:gosec // G704: URL is hardcoded Microsoft Graph API endpoint
 	if err != nil {
 		return SecretExpiryInfo{}, fmt.Errorf("request failed: %w", err)
 	}

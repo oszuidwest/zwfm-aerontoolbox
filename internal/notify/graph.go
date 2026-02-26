@@ -155,7 +155,7 @@ func (c *GraphClient) doWithRetry(ctx context.Context, jsonData []byte) error {
 		}
 		req.Header.Set("Content-Type", "application/json")
 
-		resp, err := c.httpClient.Do(req)
+		resp, err := c.httpClient.Do(req) //nolint:gosec // G704: URL is hardcoded Microsoft Graph API endpoint
 		if err != nil {
 			lastErr = fmt.Errorf("send request: %w", err)
 			continue
@@ -209,7 +209,7 @@ func (c *GraphClient) ValidateAuth() error {
 		return fmt.Errorf("create validation request: %w", err)
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.httpClient.Do(req) //nolint:gosec // G704: URL is hardcoded Microsoft Graph API endpoint
 	if err != nil {
 		if strings.Contains(err.Error(), "oauth2") || strings.Contains(err.Error(), "token") {
 			return fmt.Errorf("authentication failed: %w", err)
