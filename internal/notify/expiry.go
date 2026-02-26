@@ -90,17 +90,13 @@ func (c *SecretExpiryChecker) refresh() {
 		c.mu.Unlock()
 	}()
 
+	var info SecretExpiryInfo
 	if cfg == nil || cfg.TenantID == "" || cfg.ClientID == "" || cfg.ClientSecret == "" {
-		c.mu.Lock()
-		c.cached = SecretExpiryInfo{Error: "Graph API not configured"}
-		c.lastCheck = time.Now()
-		c.mu.Unlock()
-		return
-	}
-
-	info, err := c.fetchExpiryInfo(cfg)
-	if err != nil {
+		info = SecretExpiryInfo{Error: "Graph API not configured"}
+	} else if fetched, err := c.fetchExpiryInfo(cfg); err != nil {
 		info = SecretExpiryInfo{Error: err.Error()}
+	} else {
+		info = fetched
 	}
 
 	c.mu.Lock()
