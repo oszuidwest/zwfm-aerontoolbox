@@ -88,7 +88,7 @@ func (o *Optimizer) optimizeJPEG(data []byte) (optimized []byte, format, encoder
 		return nil, "", "", types.NewValidationError("image", fmt.Sprintf("failed to decode JPEG: %v", err))
 	}
 
-	return o.processImage(sourceImage, data, "jpeg")
+	return o.processImage(sourceImage, data, "jpeg", "jpeg")
 }
 
 // convertPNGToJPEG converts PNG image data to optimized JPEG format.
@@ -99,11 +99,12 @@ func (o *Optimizer) convertPNGToJPEG(data []byte) (optimized []byte, format, enc
 		return nil, "", "", types.NewValidationError("image", fmt.Sprintf("failed to decode PNG: %v", err))
 	}
 
-	return o.processImage(sourceImage, data, "jpeg")
+	return o.processImage(sourceImage, data, "png", "jpeg")
 }
 
 // processImage resizes and encodes an image, returning optimized data if smaller.
-func (o *Optimizer) processImage(sourceImage image.Image, originalData []byte, outputFormat string) (optimized []byte, format, encoder string, err error) {
+// If the optimized version is not smaller, it returns the original data with its original format.
+func (o *Optimizer) processImage(sourceImage image.Image, originalData []byte, originalFormat, targetFormat string) (optimized []byte, format, encoder string, err error) {
 	bounds := sourceImage.Bounds()
 	width, height := bounds.Dx(), bounds.Dy()
 
@@ -118,10 +119,10 @@ func (o *Optimizer) processImage(sourceImage image.Image, originalData []byte, o
 	optimizedData := jpegBuffer.Bytes()
 
 	if len(optimizedData) < len(originalData) {
-		return optimizedData, outputFormat, "optimized", nil
+		return optimizedData, targetFormat, "optimized", nil
 	}
 
-	return originalData, outputFormat, "original", nil
+	return originalData, originalFormat, "original", nil
 }
 
 // resizeImage scales an image to fit within max dimensions using Catmull-Rom.
@@ -232,17 +233,6 @@ func optimizeImageData(imageData []byte, originalInfo *Info, config Config) (*Pr
 			Height: originalInfo.Height,
 			Size:   len(optimizedData),
 		}
-	}
-
-	if len(optimizedData) >= len(imageData) {
-		return &ProcessingResult{
-			Data:      imageData,
-			Format:    originalInfo.Format,
-			Encoder:   "original (smaller than optimized version)",
-			Original:  *originalInfo,
-			Optimized: *originalInfo,
-			Savings:   0,
-		}, nil
 	}
 
 	savings := float64(originalInfo.Size-optimizedInfo.Size) / float64(originalInfo.Size) * 100

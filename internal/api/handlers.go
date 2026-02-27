@@ -17,9 +17,6 @@ import (
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/util"
 )
 
-// PlaylistBlockWithTracks is an alias for service.PlaylistBlockWithTracks for API responses.
-type PlaylistBlockWithTracks = service.PlaylistBlockWithTracks
-
 // ImageUploadRequest represents the JSON request body for image upload operations.
 type ImageUploadRequest struct {
 	URL   string `json:"url"`
@@ -222,7 +219,7 @@ func (s *Server) handleGetImage(entityType types.EntityType) http.HandlerFunc {
 		}
 
 		w.Header().Del("Content-Type")
-		w.Header().Set("Content-Type", detectImageContentType(imageData))
+		w.Header().Set("Content-Type", http.DetectContentType(imageData))
 		w.Header().Set("Content-Length", strconv.Itoa(len(imageData)))
 
 		w.WriteHeader(http.StatusOK)
