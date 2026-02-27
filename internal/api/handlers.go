@@ -194,12 +194,9 @@ func (s *Server) handleBulkDelete(entityType types.EntityType) http.HandlerFunc 
 			return
 		}
 
-		label := string(entityType)
-
-		message := strconv.FormatInt(result.DeletedCount, 10) + " " + label + " images deleted"
 		respondJSON(w, http.StatusOK, BulkDeleteResponse{
 			Deleted: result.DeletedCount,
-			Message: message,
+			Message: fmt.Sprintf("%d %s images deleted", result.DeletedCount, entityType),
 		})
 	}
 }

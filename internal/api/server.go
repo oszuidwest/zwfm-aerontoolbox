@@ -153,9 +153,12 @@ func (s *Server) isValidAPIKey(key string) bool {
 func parseQueryBoolParam(value string) *bool {
 	switch value {
 	case "yes", "true", "1":
-		return new(true)
+		v := true
+		return &v
 	case "no", "false", "0":
-		return new(false)
+		v := false
+		return &v
+	default:
+		return nil
 	}
-	return nil
 }
