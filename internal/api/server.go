@@ -56,7 +56,7 @@ func (s *Server) Start(port string) error {
 
 		r.Get("/health", s.handleHealth)
 
-		// Routes with standard request timeout
+		// Authenticated routes with standard request timeout
 		r.Group(func(r chi.Router) {
 			r.Use(s.authMiddleware)
 			r.Use(middleware.Timeout(s.service.Config().API.GetRequestTimeout()))
@@ -67,7 +67,7 @@ func (s *Server) Start(port string) error {
 			r.Get("/playlist", s.handlePlaylist)
 
 			r.Route("/db", func(r chi.Router) {
-				// Maintenance endpoints (async)
+				// Maintenance endpoints
 				r.Route("/maintenance", func(r chi.Router) {
 					r.Get("/health", s.handleDatabaseHealth)
 					r.Post("/vacuum", s.handleVacuum)
@@ -76,29 +76,15 @@ func (s *Server) Start(port string) error {
 				})
 
 				// Backup endpoints
-				r.Get("/backups", s.handleListBackups)
+				r.Post("/backup", s.handleCreateBackup)
 				r.Get("/backup/status", s.handleBackupStatus)
+				r.Get("/backups", s.handleListBackups)
+				r.Get("/backups/{filename}", s.handleDownloadBackupFile)
 				r.Get("/backups/{filename}/validate", s.handleValidateBackup)
 				r.Delete("/backups/{filename}", s.handleDeleteBackup)
 			})
-		})
-
-		// Notification endpoints
-		r.Group(func(r chi.Router) {
-			r.Use(s.authMiddleware)
-			r.Use(middleware.Timeout(s.service.Config().API.GetRequestTimeout()))
 
 			r.Post("/notifications/test-email", s.handleTestEmail)
-		})
-
-		// Backup routes - no special timeout needed
-		// POST /backup returns immediately (async), downloads are served via http.ServeFile
-		r.Group(func(r chi.Router) {
-			r.Use(s.authMiddleware)
-			r.Use(middleware.Timeout(s.service.Config().API.GetRequestTimeout()))
-
-			r.Post("/db/backup", s.handleCreateBackup)
-			r.Get("/db/backups/{filename}", s.handleDownloadBackupFile)
 		})
 	})
 
@@ -162,10 +148,6 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 
 func (s *Server) isValidAPIKey(key string) bool {
 	return key != "" && slices.Contains(s.service.Config().API.Keys, key)
-}
-
-func detectImageContentType(data []byte) string {
-	return http.DetectContentType(data)
 }
 
 func parseQueryBoolParam(value string) *bool {

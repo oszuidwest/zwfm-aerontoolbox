@@ -10,7 +10,6 @@ import (
 type Backoff struct {
 	mu           sync.Mutex
 	current      time.Duration
-	initial      time.Duration
 	maxDelay     time.Duration
 	factor       float64
 	jitterFactor float64 // 0.0 = no jitter, 0.5 = up to 50% random addition
@@ -20,7 +19,6 @@ type Backoff struct {
 func NewBackoff(initial, maxDelay time.Duration) *Backoff {
 	return &Backoff{
 		current:      initial,
-		initial:      initial,
 		maxDelay:     maxDelay,
 		factor:       2.0,
 		jitterFactor: 0.5,
@@ -42,11 +40,4 @@ func (b *Backoff) Next() time.Duration {
 	}
 
 	return delay
-}
-
-// Reset restores the delay to its initial value.
-func (b *Backoff) Reset() {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.current = b.initial
 }

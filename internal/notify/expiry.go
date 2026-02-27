@@ -47,14 +47,6 @@ func NewSecretExpiryChecker(cfg *config.GraphConfig) *SecretExpiryChecker {
 	}
 }
 
-// InfoCached returns the cached secret expiry information without triggering a refresh.
-// Use this for health checks to avoid blocking on external API calls.
-func (c *SecretExpiryChecker) InfoCached() SecretExpiryInfo {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.cached
-}
-
 // Info returns the secret expiry information, using a cached value if fresh enough.
 // If the cache is stale, it triggers an async refresh and returns the stale cached value.
 // Only one refresh runs at a time to prevent thundering herd during outages.
