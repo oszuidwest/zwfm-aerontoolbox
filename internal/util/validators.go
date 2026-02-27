@@ -23,6 +23,9 @@ var uuidRegex = sync.OnceValue(func() *regexp.Regexp {
 	return regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 })
 
+// GUIDPattern matches the standard GUID format (less strict than UUID v4).
+var GUIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
 // ValidateEntityID validates that an ID is a proper UUID v4 format.
 func ValidateEntityID(id, entityLabel string) error {
 	if id == "" {

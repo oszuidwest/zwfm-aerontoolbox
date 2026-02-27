@@ -8,13 +8,13 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/go-playground/validator/v10"
 
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
+	"github.com/oszuidwest/zwfm-aerontoolbox/internal/util"
 )
 
 // DatabaseConfig contains PostgreSQL database connection parameters.
@@ -305,9 +305,6 @@ func Load(configPath string) (*Config, error) {
 // configValidator is the singleton validator instance with custom validations.
 var configValidator = newConfigValidator()
 
-// guidPattern matches the standard GUID format (used by the guid validator tag).
-var guidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
-
 func newConfigValidator() *validator.Validate {
 	v := validator.New(validator.WithRequiredStructEnabled())
 
@@ -316,7 +313,7 @@ func newConfigValidator() *validator.Validate {
 	})
 
 	_ = v.RegisterValidation("guid", func(fl validator.FieldLevel) bool {
-		return guidPattern.MatchString(fl.Field().String())
+		return util.GUIDPattern.MatchString(fl.Field().String())
 	})
 
 	v.RegisterStructValidation(validateS3Config, S3Config{})

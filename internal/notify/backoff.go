@@ -6,22 +6,25 @@ import (
 	"time"
 )
 
+const (
+	// backoffFactor is the multiplier for exponential backoff.
+	backoffFactor = 2.0
+	// backoffJitter adds randomness to prevent thundering herd (0.5 = up to 50%).
+	backoffJitter = 0.5
+)
+
 // Backoff provides retry delay calculation with exponential growth.
 type Backoff struct {
-	mu           sync.Mutex
-	current      time.Duration
-	maxDelay     time.Duration
-	factor       float64
-	jitterFactor float64 // 0.0 = no jitter, 0.5 = up to 50% random addition
+	mu       sync.Mutex
+	current  time.Duration
+	maxDelay time.Duration
 }
 
 // NewBackoff returns a new Backoff with the given initial and maximum delays.
 func NewBackoff(initial, maxDelay time.Duration) *Backoff {
 	return &Backoff{
-		current:      initial,
-		maxDelay:     maxDelay,
-		factor:       2.0,
-		jitterFactor: 0.5,
+		current:  initial,
+		maxDelay: maxDelay,
 	}
 }
 
@@ -31,13 +34,11 @@ func (b *Backoff) Next() time.Duration {
 	defer b.mu.Unlock()
 
 	delay := b.current
-	b.current = min(time.Duration(float64(b.current)*b.factor), b.maxDelay)
+	b.current = min(time.Duration(float64(b.current)*backoffFactor), b.maxDelay)
 
 	// Add jitter to prevent thundering herd
-	if b.jitterFactor > 0 {
-		jitter := time.Duration(rand.Int64N(int64(float64(delay) * b.jitterFactor))) //nolint:gosec // Non-security random for jitter
-		delay += jitter
-	}
+	jitter := time.Duration(rand.Int64N(int64(float64(delay) * backoffJitter))) //nolint:gosec // Non-security random for jitter
+	delay += jitter
 
 	return delay
 }
