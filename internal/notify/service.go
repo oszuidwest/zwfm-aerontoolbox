@@ -296,8 +296,7 @@ func (s *NotificationService) trackError(err error) {
 	s.errorMu.Lock()
 	defer s.errorMu.Unlock()
 	s.lastError = err.Error()
-	now := time.Now()
-	s.lastErrorAt = &now
+	s.lastErrorAt = new(time.Now())
 }
 
 // Email formatting.
