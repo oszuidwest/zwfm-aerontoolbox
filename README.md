@@ -67,6 +67,7 @@ Kopieer [`config.example.json`](config.example.json) naar `config.json`. De bela
 | `api` | API-sleutels voor authenticatie |
 | `maintenance` | Thresholds en automatische scheduler voor databaseonderhoud |
 | `backup` | Pad naar backups, retentie, scheduler en optionele S3-sync |
+| `notifications` | E-mailmeldingen via Microsoft Graph API |
 | `log` | Logniveau (`debug`, `info`, `warn`, `error`) en format (`text`, `json`) |
 
 ### Backupfunctionaliteit
@@ -100,6 +101,28 @@ Database-onderhoud (VACUUM/ANALYZE) kan automatisch worden uitgevoerd:
 ```
 
 Dit draait elke zondag om 04:00 VACUUM ANALYZE op tabellen die het nodig hebben. Zie [API.md](API.md) voor details.
+
+### E-mailnotificaties
+
+Ontvang e-mailmeldingen bij mislukte backups, S3-synchronisatie of database-onderhoud. Vereist een Azure AD app-registratie met `Mail.Send` permissie.
+
+```json
+"notifications": {
+  "email": {
+    "tenant_id": "je-azure-tenant-id",
+    "client_id": "je-app-client-id",
+    "client_secret": "je-client-secret",
+    "from_address": "noreply@jouwdomein.nl",
+    "recipients": "admin@jouwdomein.nl,beheer@jouwdomein.nl"
+  }
+}
+```
+
+De applicatie stuurt:
+- **Foutmeldingen:** bij mislukte backup, S3-sync of onderhoud
+- **Herstelmeldingen:** wanneer een eerder mislukte operatie weer slaagt
+
+Test de configuratie via `POST /api/notifications/test-email`.
 
 ## Voorbeelden
 

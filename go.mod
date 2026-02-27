@@ -17,6 +17,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.96.0
 	github.com/go-playground/validator/v10 v10.30.1
 	github.com/netresearch/go-cron v0.12.0
+	golang.org/x/oauth2 v0.35.0
 )
 
 require (

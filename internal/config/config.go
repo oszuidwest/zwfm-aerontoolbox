@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -91,6 +92,20 @@ type BackupConfig struct {
 	S3                 S3Config        `json:"s3"`
 }
 
+// NotificationsConfig contains notification settings.
+type NotificationsConfig struct {
+	Email GraphConfig `json:"email"`
+}
+
+// GraphConfig contains Microsoft Graph API settings for email notifications.
+type GraphConfig struct {
+	TenantID     string `json:"tenant_id" validate:"omitempty,guid"`
+	ClientID     string `json:"client_id" validate:"omitempty,guid"`
+	ClientSecret string `json:"client_secret"` //nolint:gosec // Configuration field, not a credential
+	FromAddress  string `json:"from_address"`
+	Recipients   string `json:"recipients"`
+}
+
 // LogConfig contains logging configuration.
 type LogConfig struct {
 	Level  string `json:"level" validate:"omitempty,oneof=debug info warn error"`
@@ -99,12 +114,13 @@ type LogConfig struct {
 
 // Config represents the complete application configuration.
 type Config struct {
-	Database    DatabaseConfig    `json:"database"`
-	Image       ImageConfig       `json:"image"`
-	API         APIConfig         `json:"api"`
-	Maintenance MaintenanceConfig `json:"maintenance"`
-	Backup      BackupConfig      `json:"backup"`
-	Log         LogConfig         `json:"log"`
+	Database      DatabaseConfig      `json:"database"`
+	Image         ImageConfig         `json:"image"`
+	API           APIConfig           `json:"api"`
+	Maintenance   MaintenanceConfig   `json:"maintenance"`
+	Backup        BackupConfig        `json:"backup"`
+	Notifications NotificationsConfig `json:"notifications"`
+	Log           LogConfig           `json:"log"`
 }
 
 const (
@@ -289,11 +305,18 @@ func Load(configPath string) (*Config, error) {
 // configValidator is the singleton validator instance with custom validations.
 var configValidator = newConfigValidator()
 
+// guidPattern matches the standard GUID format (used by the guid validator tag).
+var guidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
 func newConfigValidator() *validator.Validate {
 	v := validator.New(validator.WithRequiredStructEnabled())
 
 	_ = v.RegisterValidation("identifier", func(fl validator.FieldLevel) bool {
 		return types.IsValidIdentifier(fl.Field().String())
+	})
+
+	_ = v.RegisterValidation("guid", func(fl validator.FieldLevel) bool {
+		return guidPattern.MatchString(fl.Field().String())
 	})
 
 	v.RegisterStructValidation(validateS3Config, S3Config{})
@@ -357,6 +380,8 @@ func tagMessage(tag, param string) string {
 		return fmt.Sprintf("must be one of [%s]", param)
 	case "identifier":
 		return "contains invalid characters (only letters, numbers and underscores allowed)"
+	case "guid":
+		return "must be a valid GUID (e.g., 12345678-1234-1234-1234-123456789abc)"
 	default:
 		return fmt.Sprintf("is invalid (%s)", tag)
 	}
