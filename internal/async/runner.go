@@ -84,7 +84,5 @@ func (r *Runner) Go(fn func()) {
 // Unlike Go, this does not affect the running flag.
 // Use this for follow-up operations like S3 sync or cleanup.
 func (r *Runner) GoBackground(fn func()) {
-	r.wg.Go(func() {
-		fn()
-	})
+	r.wg.Go(fn)
 }

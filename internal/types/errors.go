@@ -42,6 +42,9 @@ type ValidationError struct {
 
 // Error implements the error interface.
 func (e *ValidationError) Error() string {
+	if e.Field != "" {
+		return fmt.Sprintf("%s: %s", e.Field, e.Message)
+	}
 	return e.Message
 }
 

@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +17,7 @@ import (
 	"golang.org/x/oauth2/clientcredentials"
 
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/config"
+	"github.com/oszuidwest/zwfm-aerontoolbox/internal/util"
 )
 
 const (
@@ -33,9 +33,6 @@ const (
 	// HTTP client timeout.
 	httpTimeout = 30 * time.Second
 )
-
-// GUIDPattern matches the standard GUID format.
-var GUIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 // GraphClient sends emails via Microsoft Graph API.
 type GraphClient struct {
@@ -271,13 +268,13 @@ func validateCredentials(cfg *config.GraphConfig, strict bool) error {
 	if cfg.TenantID == "" {
 		return fmt.Errorf("tenant ID is required")
 	}
-	if strict && !GUIDPattern.MatchString(cfg.TenantID) {
+	if strict && !util.GUIDPattern.MatchString(cfg.TenantID) {
 		return fmt.Errorf("tenant ID must be a valid GUID (e.g., 12345678-1234-1234-1234-123456789abc)")
 	}
 	if cfg.ClientID == "" {
 		return fmt.Errorf("client ID is required")
 	}
-	if strict && !GUIDPattern.MatchString(cfg.ClientID) {
+	if strict && !util.GUIDPattern.MatchString(cfg.ClientID) {
 		return fmt.Errorf("client ID must be a valid GUID (e.g., 12345678-1234-1234-1234-123456789abc)")
 	}
 	if cfg.ClientSecret == "" {
