@@ -390,8 +390,7 @@ func (s *BackupService) Status() *BackupStatus {
 func (s *BackupService) setStatusStarted() {
 	s.statusMu.Lock()
 	defer s.statusMu.Unlock()
-	now := time.Now()
-	s.status = &BackupStatus{StartedAt: &now}
+	s.status = &BackupStatus{StartedAt: new(time.Now())}
 }
 
 func (s *BackupService) setStatusFilename(filename string) {
@@ -405,11 +404,11 @@ func (s *BackupService) setStatusFilename(filename string) {
 func (s *BackupService) setStatusDone(success bool, filename, errMsg string) {
 	s.statusMu.Lock()
 	defer s.statusMu.Unlock()
-	now := time.Now()
+	now := new(time.Now())
 	if s.status == nil {
-		s.status = &BackupStatus{StartedAt: &now}
+		s.status = &BackupStatus{StartedAt: now}
 	}
-	s.status.EndedAt = &now
+	s.status.EndedAt = now
 	s.status.Success = success
 	s.status.Error = errMsg
 	if filename != "" {

@@ -172,10 +172,7 @@ func (c *SecretExpiryChecker) fetchExpiryInfo(cfg *config.GraphConfig) (SecretEx
 		return SecretExpiryInfo{Error: "no valid (non-expired) credentials found"}, nil
 	}
 
-	daysLeft := int(time.Until(earliest).Hours() / 24)
-	if daysLeft < 0 {
-		daysLeft = 0
-	}
+	daysLeft := max(int(time.Until(earliest).Hours()/24), 0)
 
 	return SecretExpiryInfo{
 		ExpiresAt:   earliest.Format(time.RFC3339),
