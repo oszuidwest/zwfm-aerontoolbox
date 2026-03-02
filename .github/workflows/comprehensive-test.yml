@@ -57,7 +57,7 @@ jobs:
           ./zwfm-aerontoolbox -version
 
       - name: Upload binary
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: binary
           path: zwfm-aerontoolbox
