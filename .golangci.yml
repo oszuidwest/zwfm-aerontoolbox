@@ -12,7 +12,7 @@ linters:
     - misspell
     # Code quality
     - errorlint
-    #- gosec
+    - gosec
     - nilerr
     - unparam
     - unconvert
@@ -25,5 +25,11 @@ linters:
         - performance
     gocyclo:
       min-complexity: 20
+    gosec:
+      excludes:
+        - G118
+        - G122
+        - G703
+        - G704
     godot:
       scope: toplevel
