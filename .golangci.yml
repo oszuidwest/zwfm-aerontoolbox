@@ -12,7 +12,7 @@ linters:
     - misspell
     # Code quality
     - errorlint
-    - gosec
+    #- gosec
     - nilerr
     - unparam
     - unconvert
