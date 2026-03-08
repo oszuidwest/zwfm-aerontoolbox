@@ -30,10 +30,15 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
     -o zwfm-aerontoolbox .
 
 # Runtime stage
-FROM alpine:latest
+FROM alpine:3.23
+
+LABEL org.opencontainers.image.source="https://github.com/oszuidwest/zwfm-aerontoolbox"
+LABEL org.opencontainers.image.description="Headless REST API toolbox for the Aeron radio automation system"
+LABEL org.opencontainers.image.licenses="MIT"
 
 # Install runtime dependencies (postgresql16-client for pg_dump backup functionality)
-RUN apk --no-cache add ca-certificates tzdata postgresql16-client
+RUN apk --no-cache upgrade && \
+    apk --no-cache add ca-certificates tzdata postgresql16-client
 
 # Create non-root user
 RUN addgroup -g 1000 aeron && \
