@@ -36,6 +36,11 @@ type FileMonitorStatus struct {
 }
 
 // FileCheckResult contains the result of checking a single file.
+//
+// Three valid state profiles exist:
+//   - File exists:  FileExists=true,  FileAgeMinutes/LastModified set, Error empty
+//   - File missing: FileExists=false, FileAgeMinutes/LastModified nil,  Error empty
+//   - Stat error:   FileExists=nil,   FileAgeMinutes/LastModified nil,  Error set
 type FileCheckResult struct {
 	Name           string     `json:"name,omitempty"`
 	Path           string     `json:"path"`
