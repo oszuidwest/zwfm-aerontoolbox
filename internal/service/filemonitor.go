@@ -33,6 +33,7 @@ type FileMonitorStatus struct {
 	LastCheckAt     *time.Time        `json:"last_check_at,omitempty"`
 	IntervalMinutes int               `json:"interval_minutes"`
 	Checks          []FileCheckResult `json:"checks"`
+	staleCount      int
 }
 
 // FileCheckResult contains the result of checking a single file.
@@ -121,21 +122,22 @@ func (s *FileMonitorService) Run() {
 	}
 
 	// Update status for the API endpoint.
-	status := &FileMonitorStatus{
-		LastCheckAt:     &now,
-		IntervalMinutes: s.config.FileMonitor.CheckIntervalMinutes(),
-		Checks:          results,
-	}
-	s.statusMu.Lock()
-	s.lastCheck = status
-	s.statusMu.Unlock()
-
 	staleCount := 0
 	for _, r := range results {
 		if r.IsStale {
 			staleCount++
 		}
 	}
+	status := &FileMonitorStatus{
+		LastCheckAt:     &now,
+		IntervalMinutes: s.config.FileMonitor.CheckIntervalMinutes(),
+		Checks:          results,
+		staleCount:      staleCount,
+	}
+	s.statusMu.Lock()
+	s.lastCheck = status
+	s.statusMu.Unlock()
+
 	slog.Info("File monitor check completed", "total", len(results), "stale", staleCount)
 }
 
@@ -161,13 +163,7 @@ func (s *FileMonitorService) StaleCount() int {
 	if s.lastCheck == nil {
 		return 0
 	}
-	count := 0
-	for _, r := range s.lastCheck.Checks {
-		if r.IsStale {
-			count++
-		}
-	}
-	return count
+	return s.lastCheck.staleCount
 }
 
 // Close satisfies the service lifecycle pattern.
@@ -184,7 +180,7 @@ func (s *FileMonitorService) checkFile(check config.FileMonitorCheckConfig, now 
 	info, err := os.Stat(check.Path)
 	if err != nil {
 		result.IsStale = true
-		label := displayName(check)
+		label := check.DisplayName()
 
 		if errors.Is(err, os.ErrNotExist) {
 			exists := false
@@ -211,7 +207,7 @@ func (s *FileMonitorService) checkFile(check config.FileMonitorCheckConfig, now 
 	result.IsStale = age > maxAge
 
 	if result.IsStale {
-		label := displayName(check)
+		label := check.DisplayName()
 		slog.Warn("File monitor: file is stale",
 			"name", label,
 			"path", check.Path,
@@ -236,12 +232,4 @@ func toAlertResult(check config.FileMonitorCheckConfig, result *FileCheckResult,
 		alert.ActualAge = time.Duration(*result.FileAgeMinutes * float64(time.Minute))
 	}
 	return alert
-}
-
-// displayName returns the check name if set, otherwise the file path.
-func displayName(check config.FileMonitorCheckConfig) string {
-	if check.Name != "" {
-		return check.Name
-	}
-	return check.Path
 }
