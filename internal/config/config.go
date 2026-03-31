@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -115,7 +116,7 @@ type FileMonitorConfig struct {
 // FileMonitorCheckConfig defines a single file to monitor for staleness.
 type FileMonitorCheckConfig struct {
 	Name          string `json:"name"`
-	Path          string `json:"path" validate:"required"`
+	Path          string `json:"path" validate:"required,absolute_path"`
 	MaxAgeMinutes int    `json:"max_age_minutes" validate:"required,gte=1"`
 }
 
@@ -345,6 +346,10 @@ func newConfigValidator() *validator.Validate {
 		return util.GUIDPattern.MatchString(fl.Field().String())
 	})
 
+	_ = v.RegisterValidation("absolute_path", func(fl validator.FieldLevel) bool {
+		return filepath.IsAbs(fl.Field().String())
+	})
+
 	v.RegisterStructValidation(validateS3Config, S3Config{})
 	v.RegisterStructValidation(validateFileMonitorConfig, FileMonitorConfig{})
 
@@ -362,7 +367,8 @@ func validateS3Config(sl validator.StructLevel) {
 	}
 }
 
-// validateFileMonitorConfig checks that at least one check is configured when file monitor is enabled.
+// validateFileMonitorConfig checks that at least one check is configured when file monitor
+// is enabled, and that no two checks share the same path.
 func validateFileMonitorConfig(sl validator.StructLevel) {
 	fm := sl.Current().Interface().(FileMonitorConfig)
 	if !fm.Enabled {
@@ -370,6 +376,14 @@ func validateFileMonitorConfig(sl validator.StructLevel) {
 	}
 	if len(fm.Checks) == 0 {
 		sl.ReportError(fm.Checks, "checks", "Checks", "required_when_enabled", "")
+		return
+	}
+	seen := make(map[string]bool, len(fm.Checks))
+	for i, c := range fm.Checks {
+		if seen[c.Path] {
+			sl.ReportError(fm.Checks[i].Path, "path", "Path", "duplicate_path", c.Path)
+		}
+		seen[c.Path] = true
 	}
 }
 
@@ -408,6 +422,10 @@ func tagMessage(tag, param string) string {
 		return "is required when no endpoint is specified"
 	case "required_when_enabled":
 		return "must have at least one entry when enabled"
+	case "duplicate_path":
+		return fmt.Sprintf("is duplicated (%s)", param)
+	case "absolute_path":
+		return "must be an absolute path"
 	case "gt":
 		return fmt.Sprintf("must be greater than %s", param)
 	case "gte":

@@ -145,7 +145,7 @@ func (s *FileMonitorService) Status() *FileMonitorStatus {
 	return s.lastCheck
 }
 
-// StaleCount returns the number of files currently in alert state.
+// StaleCount returns the number of files that were stale in the most recent check.
 func (s *FileMonitorService) StaleCount() int {
 	s.statusMu.RLock()
 	defer s.statusMu.RUnlock()
@@ -162,7 +162,7 @@ func (s *FileMonitorService) StaleCount() int {
 	return count
 }
 
-// Close is a no-op for now but satisfies the service lifecycle pattern.
+// Close satisfies the service lifecycle pattern.
 func (s *FileMonitorService) Close() {}
 
 // checkFile inspects a single file and returns its check result.

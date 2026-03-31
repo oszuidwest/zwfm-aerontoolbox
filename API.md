@@ -1149,7 +1149,9 @@ Toont de resultaten van de meest recente bestandscontrole.
 }
 ```
 
-**Response bij ontbrekend bestand:**
+De volgende voorbeelden tonen individuele items uit de `checks`-array voor specifieke situaties:
+
+**Check-item bij ontbrekend bestand:**
 ```json
 {
   "name": "Nieuws bulletin",
@@ -1161,7 +1163,7 @@ Toont de resultaten van de meest recente bestandscontrole.
 }
 ```
 
-**Response bij fout (bijv. geen toegang):**
+**Check-item bij fout (bijv. geen toegang):**
 ```json
 {
   "name": "Nieuws bulletin",

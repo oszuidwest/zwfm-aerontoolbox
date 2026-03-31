@@ -112,6 +112,31 @@ func TestFileMonitorCheckIntervalMinutes(t *testing.T) {
 	}
 }
 
+func TestFileMonitorValidation_DuplicatePaths(t *testing.T) {
+	cfg := minimalConfig()
+	cfg.FileMonitor.Enabled = true
+	cfg.FileMonitor.Checks = []FileMonitorCheckConfig{
+		{Path: "/data/news.mp3", MaxAgeMinutes: 10},
+		{Path: "/data/news.mp3", MaxAgeMinutes: 30},
+	}
+
+	if err := validate(cfg); err == nil {
+		t.Fatal("expected validation error for duplicate paths, got nil")
+	}
+}
+
+func TestFileMonitorValidation_RelativePath(t *testing.T) {
+	cfg := minimalConfig()
+	cfg.FileMonitor.Enabled = true
+	cfg.FileMonitor.Checks = []FileMonitorCheckConfig{
+		{Path: "data/news.mp3", MaxAgeMinutes: 30},
+	}
+
+	if err := validate(cfg); err == nil {
+		t.Fatal("expected validation error for relative path, got nil")
+	}
+}
+
 func TestFileMonitorValidation_LoadFromJSON(t *testing.T) {
 	cfgJSON := `{
 		"database": {"host":"h","port":"5432","name":"db","user":"u","password":"p","schema":"s","sslmode":"disable"},
