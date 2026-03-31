@@ -106,6 +106,34 @@ type GraphConfig struct {
 	Recipients   string `json:"recipients"`
 }
 
+// FileMonitorConfig contains settings for monitoring file freshness on disk.
+type FileMonitorConfig struct {
+	Enabled bool                     `json:"enabled"`
+	Checks  []FileMonitorCheckConfig `json:"checks" validate:"required_if=Enabled true,dive"`
+}
+
+// FileMonitorCheckConfig defines a single file to monitor for staleness.
+type FileMonitorCheckConfig struct {
+	Name          string `json:"name"`
+	Path          string `json:"path" validate:"required"`
+	MaxAgeMinutes int    `json:"max_age_minutes" validate:"required,gte=1"`
+}
+
+// CheckIntervalMinutes returns the smallest max_age_minutes across all checks.
+// This is used as the scheduler interval so the most urgent file is checked on time.
+func (c *FileMonitorConfig) CheckIntervalMinutes() int {
+	if len(c.Checks) == 0 {
+		return 0
+	}
+	m := c.Checks[0].MaxAgeMinutes
+	for _, check := range c.Checks[1:] {
+		if check.MaxAgeMinutes < m {
+			m = check.MaxAgeMinutes
+		}
+	}
+	return m
+}
+
 // LogConfig contains logging configuration.
 type LogConfig struct {
 	Level  string `json:"level" validate:"omitempty,oneof=debug info warn error"`
@@ -119,6 +147,7 @@ type Config struct {
 	API           APIConfig           `json:"api"`
 	Maintenance   MaintenanceConfig   `json:"maintenance"`
 	Backup        BackupConfig        `json:"backup"`
+	FileMonitor   FileMonitorConfig   `json:"file_monitor"`
 	Notifications NotificationsConfig `json:"notifications"`
 	Log           LogConfig           `json:"log"`
 }

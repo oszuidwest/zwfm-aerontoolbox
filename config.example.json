@@ -61,6 +61,21 @@
       "force_path_style": false
     }
   },
+  "file_monitor": {
+    "enabled": false,
+    "checks": [
+      {
+        "name": "Nieuws bulletin",
+        "path": "/data/news.mp3",
+        "max_age_minutes": 30
+      },
+      {
+        "name": "Weer",
+        "path": "/data/weather.mp3",
+        "max_age_minutes": 60
+      }
+    ]
+  },
   "notifications": {
     "email": {
       "tenant_id": "",

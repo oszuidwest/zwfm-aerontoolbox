@@ -17,6 +17,7 @@ type AeronService struct {
 	Media       *MediaService
 	Backup      *BackupService
 	Maintenance *MaintenanceService
+	FileMonitor *FileMonitorService
 	Notify      *notify.NotificationService
 
 	repo   *database.Repository
@@ -37,6 +38,7 @@ func New(db *sqlx.DB, cfg *config.Config) (*AeronService, error) {
 		Media:       newMediaService(repo, cfg),
 		Backup:      backupSvc,
 		Maintenance: newMaintenanceService(repo, cfg, notifySvc),
+		FileMonitor: newFileMonitorService(cfg, notifySvc),
 		Notify:      notifySvc,
 		repo:        repo,
 		config:      cfg,
@@ -57,6 +59,7 @@ func (s *AeronService) Repository() *database.Repository {
 func (s *AeronService) Close() {
 	s.Maintenance.Close()
 	s.Backup.Close()
+	s.FileMonitor.Close()
 	s.Notify.Close()
 }
 
