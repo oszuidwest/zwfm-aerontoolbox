@@ -120,6 +120,14 @@ type FileMonitorCheckConfig struct {
 	MaxAgeMinutes int    `json:"max_age_minutes" validate:"required,gte=1"`
 }
 
+// DisplayName returns the check name if set, otherwise the file path.
+func (c *FileMonitorCheckConfig) DisplayName() string {
+	if c.Name != "" {
+		return c.Name
+	}
+	return c.Path
+}
+
 // CheckIntervalMinutes returns the smallest max_age_minutes across all checks.
 // This is used as the scheduler interval so the most urgent file is checked on time.
 func (c *FileMonitorConfig) CheckIntervalMinutes() int {
