@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -106,6 +107,34 @@ type GraphConfig struct {
 	Recipients   string `json:"recipients"`
 }
 
+// FileMonitorConfig contains settings for monitoring file freshness on disk.
+type FileMonitorConfig struct {
+	Enabled bool                     `json:"enabled"`
+	Checks  []FileMonitorCheckConfig `json:"checks" validate:"required_if=Enabled true,dive"`
+}
+
+// FileMonitorCheckConfig defines a single file to monitor for staleness.
+type FileMonitorCheckConfig struct {
+	Name          string `json:"name"`
+	Path          string `json:"path" validate:"required,absolute_path"`
+	MaxAgeMinutes int    `json:"max_age_minutes" validate:"required,gte=1"`
+}
+
+// CheckIntervalMinutes returns the smallest max_age_minutes across all checks.
+// This is used as the scheduler interval so the most urgent file is checked on time.
+func (c *FileMonitorConfig) CheckIntervalMinutes() int {
+	if len(c.Checks) == 0 {
+		return 0
+	}
+	m := c.Checks[0].MaxAgeMinutes
+	for _, check := range c.Checks[1:] {
+		if check.MaxAgeMinutes < m {
+			m = check.MaxAgeMinutes
+		}
+	}
+	return m
+}
+
 // LogConfig contains logging configuration.
 type LogConfig struct {
 	Level  string `json:"level" validate:"omitempty,oneof=debug info warn error"`
@@ -119,6 +148,7 @@ type Config struct {
 	API           APIConfig           `json:"api"`
 	Maintenance   MaintenanceConfig   `json:"maintenance"`
 	Backup        BackupConfig        `json:"backup"`
+	FileMonitor   FileMonitorConfig   `json:"file_monitor"`
 	Notifications NotificationsConfig `json:"notifications"`
 	Log           LogConfig           `json:"log"`
 }
@@ -316,7 +346,12 @@ func newConfigValidator() *validator.Validate {
 		return util.GUIDPattern.MatchString(fl.Field().String())
 	})
 
+	_ = v.RegisterValidation("absolute_path", func(fl validator.FieldLevel) bool {
+		return filepath.IsAbs(fl.Field().String())
+	})
+
 	v.RegisterStructValidation(validateS3Config, S3Config{})
+	v.RegisterStructValidation(validateFileMonitorConfig, FileMonitorConfig{})
 
 	return v
 }
@@ -329,6 +364,26 @@ func validateS3Config(sl validator.StructLevel) {
 	}
 	if s3.Region == "" && s3.Endpoint == "" {
 		sl.ReportError(s3.Region, "region", "Region", "required_without_endpoint", "")
+	}
+}
+
+// validateFileMonitorConfig checks that at least one check is configured when file monitor
+// is enabled, and that no two checks share the same path.
+func validateFileMonitorConfig(sl validator.StructLevel) {
+	fm := sl.Current().Interface().(FileMonitorConfig)
+	if !fm.Enabled {
+		return
+	}
+	if len(fm.Checks) == 0 {
+		sl.ReportError(fm.Checks, "checks", "Checks", "required_when_enabled", "")
+		return
+	}
+	seen := make(map[string]bool, len(fm.Checks))
+	for i, c := range fm.Checks {
+		if seen[c.Path] {
+			sl.ReportError(fm.Checks[i].Path, "path", "Path", "duplicate_path", c.Path)
+		}
+		seen[c.Path] = true
 	}
 }
 
@@ -365,6 +420,12 @@ func tagMessage(tag, param string) string {
 		return "is required when enabled"
 	case "required_without_endpoint":
 		return "is required when no endpoint is specified"
+	case "required_when_enabled":
+		return "must have at least one entry when enabled"
+	case "duplicate_path":
+		return fmt.Sprintf("is duplicated (%s)", param)
+	case "absolute_path":
+		return "must be an absolute path"
 	case "gt":
 		return fmt.Sprintf("must be greater than %s", param)
 	case "gte":

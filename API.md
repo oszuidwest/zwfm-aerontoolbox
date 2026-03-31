@@ -14,6 +14,7 @@
   - [Playlist-endpoints](#playlist-endpoints)
   - [Database onderhoud](#database-onderhoud)
   - [Backup-endpoints](#backup-endpoints)
+  - [Bestandscontrole](#bestandscontrole)
 - [Codevoorbeelden](#codevoorbeelden)
 - [Configuratie](#configuratie)
 
@@ -51,6 +52,8 @@ De Aeron Toolbox API biedt RESTful-endpoints voor het Aeron-radioautomatiserings
 | `/api/db/maintenance/vacuum` | POST | VACUUM starten (async) | Ja |
 | `/api/db/maintenance/analyze` | POST | ANALYZE starten (async) | Ja |
 | `/api/db/maintenance/status` | GET | Onderhoud status opvragen | Ja |
+| **Bestandscontrole** |
+| `/api/file-monitor/status` | GET | Status bestandscontrole | Ja |
 | **Backups** |
 | `/api/db/backup` | POST | Nieuwe backup aanmaken | Ja |
 | `/api/db/backup/status` | GET | Backup status opvragen | Ja |
@@ -1103,6 +1106,115 @@ Validatie gebeurt via `pg_restore --list` die de TOC en interne checksums contro
 
 ---
 
+## Bestandscontrole
+
+De bestandscontrole (file monitor) bewaakt bestanden op schijf en signaleert wanneer ze ouder zijn dan een geconfigureerde maximumleeftijd. Dit is nuttig voor het detecteren van falende downloads of updates van externe processen (bijv. nieuwsbulletins, weerbericht-MP3's).
+
+De controle draait automatisch op een interval dat is afgeleid van de kleinste `max_age_minutes` uit alle geconfigureerde checks. Na een herstart wordt de eerste controle als "grace run" beschouwd: resultaten worden geobserveerd maar er worden geen meldingen verstuurd, om valse alarmen te voorkomen.
+
+### Status bestandscontrole
+
+Toont de resultaten van de meest recente bestandscontrole.
+
+**Endpoint:** `GET /api/file-monitor/status`
+**Authenticatie:** Vereist
+
+**Response:** `200 OK`
+```json
+{
+  "last_check_at": "2024-01-15T10:30:00Z",
+  "interval_minutes": 10,
+  "checks": [
+    {
+      "name": "Nieuws bulletin",
+      "path": "/data/news.mp3",
+      "max_age_minutes": 10,
+      "file_exists": true,
+      "file_age_minutes": 7.5,
+      "last_modified": "2024-01-15T10:22:30Z",
+      "is_stale": false,
+      "in_alert": false
+    },
+    {
+      "name": "Weer",
+      "path": "/data/weather.mp3",
+      "max_age_minutes": 60,
+      "file_exists": true,
+      "file_age_minutes": 75.2,
+      "last_modified": "2024-01-15T09:15:00Z",
+      "is_stale": true,
+      "in_alert": true
+    }
+  ]
+}
+```
+
+De volgende voorbeelden tonen individuele items uit de `checks`-array voor specifieke situaties:
+
+**Check-item bij ontbrekend bestand:**
+```json
+{
+  "name": "Nieuws bulletin",
+  "path": "/data/news.mp3",
+  "max_age_minutes": 10,
+  "file_exists": false,
+  "is_stale": true,
+  "in_alert": true
+}
+```
+
+**Check-item bij fout (bijv. geen toegang):**
+```json
+{
+  "name": "Nieuws bulletin",
+  "path": "/data/news.mp3",
+  "max_age_minutes": 10,
+  "file_exists": null,
+  "is_stale": true,
+  "in_alert": true,
+  "error": "stat /data/news.mp3: permission denied"
+}
+```
+
+**Velden:**
+- `last_check_at`: Tijdstip van de laatste controle
+- `interval_minutes`: Automatisch berekend controle-interval (kleinste `max_age_minutes`)
+- `checks`: Array met resultaten per bestand
+  - `name`: Optionele weergavenaam (uit configuratie)
+  - `path`: Bestandspad op schijf
+  - `max_age_minutes`: Maximaal toegestane leeftijd
+  - `file_exists`: Of het bestand bestaat (`true`, `false`, of `null` bij fouten)
+  - `file_age_minutes`: Leeftijd in minuten (afwezig als bestand niet bestaat of niet bereikbaar is)
+  - `last_modified`: Laatste wijzigingstijd (afwezig als bestand niet bestaat of niet bereikbaar is)
+  - `is_stale`: Of het bestand te oud of onbereikbaar is
+  - `in_alert`: Of er momenteel een alert actief is voor dit bestand
+  - `error`: Foutmelding bij toegangsproblemen (afwezig bij normaal gebruik)
+
+> [!NOTE]
+> Het veld `file_exists` is nullable: `true` = bestand bestaat, `false` = bestand niet gevonden, `null` = onbekend (bijv. bij een permissiefout). Controleer het `error`-veld voor details wanneer `file_exists` `null` is.
+
+### Integratie met health-endpoint
+
+Wanneer de bestandscontrole is ingeschakeld, toont het health-endpoint (`GET /api/health`) een extra `file_monitor`-veld:
+
+```json
+{
+  "status": "degraded",
+  "version": "1.0.0",
+  "database": "aeron",
+  "database_status": "connected",
+  "file_monitor": {
+    "enabled": true,
+    "checks_total": 2,
+    "checks_stale": 1
+  }
+}
+```
+
+De overall status wordt `"degraded"` wanneer een of meer bestanden verouderd zijn.
+
+---
+
 ## Afbeeldingsverwerking
 
 ### Afbeeldingsoptimalisatie
@@ -1327,12 +1439,36 @@ Het gedrag van de API kan worden geconfigureerd via `config.json`:
       "force_path_style": false
     }
   },
+  "file_monitor": {
+    "enabled": false,
+    "checks": [
+      {
+        "name": "Nieuws bulletin",
+        "path": "/data/news.mp3",
+        "max_age_minutes": 30
+      },
+      {
+        "name": "Weer",
+        "path": "/data/weather.mp3",
+        "max_age_minutes": 60
+      }
+    ]
+  },
   "log": {
     "level": "info",
     "format": "text"
   }
 }
 ```
+
+**Bestandscontrole-instellingen:**
+- `file_monitor.enabled`: Schakel de bestandscontrole in
+- `file_monitor.checks`: Array van te bewaken bestanden (minstens 1 vereist wanneer ingeschakeld)
+  - `name`: Optionele weergavenaam voor meldingen
+  - `path`: Absoluut pad naar het bestand
+  - `max_age_minutes`: Maximale leeftijd in minuten (minimaal 1)
+
+Het controle-interval wordt automatisch afgeleid van de kleinste `max_age_minutes` waarde. Er is geen apart schedule nodig.
 
 Zie [config.example.json](config.example.json) voor alle beschikbare opties.
 

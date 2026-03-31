@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -49,6 +50,15 @@ func NewScheduler(ctx context.Context, svc *AeronService) (*Scheduler, error) {
 	// Register maintenance job if enabled
 	if cfg.Maintenance.Scheduler.Enabled {
 		if err := s.addJob(cfg.Maintenance.Scheduler, "maintenance", s.runMaintenance); err != nil {
+			return nil, err
+		}
+	}
+
+	// Register file monitor job if enabled (interval auto-derived from checks)
+	if cfg.FileMonitor.Enabled {
+		interval := cfg.FileMonitor.CheckIntervalMinutes()
+		schedule := fmt.Sprintf("@every %dm", interval)
+		if err := s.addJob(config.SchedulerConfig{Enabled: true, Schedule: schedule}, "file-monitor", s.runFileMonitor); err != nil {
 			return nil, err
 		}
 	}
@@ -105,6 +115,12 @@ func (s *Scheduler) runBackup(ctx context.Context) {
 	}); err != nil {
 		slog.Error("Scheduled backup failed", "error", err)
 	}
+}
+
+// runFileMonitor checks all monitored files for staleness.
+func (s *Scheduler) runFileMonitor(_ context.Context) {
+	slog.Info("Scheduled file monitor check started")
+	s.service.FileMonitor.Run()
 }
 
 // runMaintenance performs scheduled VACUUM ANALYZE on tables that need it.

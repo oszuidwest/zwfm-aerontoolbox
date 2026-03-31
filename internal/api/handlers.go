@@ -37,6 +37,14 @@ type HealthResponse struct {
 	Database       string              `json:"database"`
 	DatabaseStatus string              `json:"database_status"`
 	Notifications  *NotificationHealth `json:"notifications,omitempty"`
+	FileMonitor    *FileMonitorHealth  `json:"file_monitor,omitempty"`
+}
+
+// FileMonitorHealth represents file monitor status in the health response.
+type FileMonitorHealth struct {
+	Enabled     bool `json:"enabled"`
+	ChecksTotal int  `json:"checks_total"`
+	ChecksStale int  `json:"checks_stale"`
 }
 
 // NotificationHealth represents notification system status in the health response.
@@ -112,6 +120,20 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	resp.Notifications = nh
+
+	// Add file monitor health info
+	fmCfg := s.service.Config().FileMonitor
+	if fmCfg.Enabled {
+		fmh := &FileMonitorHealth{
+			Enabled:     true,
+			ChecksTotal: len(fmCfg.Checks),
+			ChecksStale: s.service.FileMonitor.StaleCount(),
+		}
+		if fmh.ChecksStale > 0 {
+			overallStatus = "degraded"
+		}
+		resp.FileMonitor = fmh
+	}
 
 	resp.Status = overallStatus
 	respondJSON(w, http.StatusOK, resp)

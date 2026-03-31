@@ -84,6 +84,8 @@ func (s *Server) Start(port string) error {
 				r.Delete("/backups/{filename}", s.handleDeleteBackup)
 			})
 
+			r.Get("/file-monitor/status", s.handleFileMonitorStatus)
+
 			r.Post("/notifications/test-email", s.handleTestEmail)
 		})
 	})
