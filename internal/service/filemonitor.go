@@ -60,42 +60,44 @@ func newFileMonitorService(cfg *config.Config, notifySvc *notify.NotificationSer
 func (s *FileMonitorService) Run() {
 	now := time.Now()
 	checks := s.config.FileMonitor.Checks
-	results := make([]FileCheckResult, 0, len(checks))
+
+	// Perform I/O (os.Stat) outside the lock to avoid blocking state reads
+	// when files are on network mounts that may be slow or unresponsive.
+	results := make([]FileCheckResult, len(checks))
+	for i, check := range checks {
+		results[i] = s.checkFile(check, now)
+	}
 
 	var newAlerts []notify.FileAlertResult
 	var newRecoveries []notify.FileAlertResult
 
+	// Acquire lock only for alert state updates.
 	s.stateMu.Lock()
 	isGraceRun := !s.graceRunDone
 
-	for _, check := range checks {
-		result := s.checkFile(check, now)
-
+	for i, check := range checks {
 		if isGraceRun {
 			// Grace run: observe only — don't update alert state or send notifications.
 			// This avoids false alerts immediately after a restart.
-			results = append(results, result)
 			continue
 		}
 
 		wasInAlert := s.alertState[check.Path]
 
-		if result.IsStale {
+		if results[i].IsStale {
 			s.alertState[check.Path] = true
-			result.InAlert = true
+			results[i].InAlert = true
 
 			if !wasInAlert {
-				newAlerts = append(newAlerts, toAlertResult(check, &result, now))
+				newAlerts = append(newAlerts, toAlertResult(check, &results[i], now))
 			}
 		} else {
 			s.alertState[check.Path] = false
 
 			if wasInAlert {
-				newRecoveries = append(newRecoveries, toAlertResult(check, &result, now))
+				newRecoveries = append(newRecoveries, toAlertResult(check, &results[i], now))
 			}
 		}
-
-		results = append(results, result)
 	}
 
 	if isGraceRun {
