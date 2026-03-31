@@ -1,6 +1,6 @@
 # Aeron Toolbox
 
-Het radioautomatiseringssysteem Aeron mist een REST API. Aeron Toolbox vult een deel van dat gat: een headless API waarmee je via HTTP afbeeldingen beheert, media browst, de database onderhoudt en backups maakt.
+Het radioautomatiseringssysteem Aeron mist een REST API. Aeron Toolbox vult een deel van dat gat: een headless API waarmee je via HTTP afbeeldingen beheert, media doorzoekt, de database onderhoudt en backups maakt.
 
 > [!WARNING]
 > Dit is een **onofficiële** tool, niet ontwikkeld door of in samenwerking met Cellnex Broadcast Partners. Gebruik op eigen risico. Maak altijd een backup voordat je begint.
@@ -8,9 +8,10 @@ Het radioautomatiseringssysteem Aeron mist een REST API. Aeron Toolbox vult een 
 ## Wat kan het?
 
 - **Afbeeldingen:** upload en optimaliseer albumhoezen en artiestfoto's
-- **Media:** browse artiesten, tracks en playlists met metadata
-- **Onderhoud:** monitor gezondheid van de database, automatische of handmatige VACUUM/ANALYZE
+- **Media:** doorzoek artiesten, tracks en playlists met metadata
+- **Onderhoud:** bewaak de gezondheid van de database, automatisch of handmatig VACUUM/ANALYZE
 - **Backups:** maak, valideer en download databasebackups (optioneel naar S3)
+- **Bestandscontrole:** controleer of bestanden actueel zijn, met meldingen bij verouderde of ontbrekende bestanden
 
 ## Snel starten
 
@@ -38,7 +39,7 @@ docker run -d -p 8080:8080 \
 ```
 
 > [!NOTE]
-> De `TZ` environment variable bepaalt de tijdzone voor geplande taken (backups en onderhoud).
+> De `TZ` omgevingsvariabele bepaalt de tijdzone voor geplande taken (backups en onderhoud).
 
 ### Binary
 
@@ -54,7 +55,7 @@ go build -o zwfm-aerontoolbox .
 ./zwfm-aerontoolbox -config=config.json -port=8080
 ```
 
-Vereist: Go 1.25+
+Vereist: Go 1.26+
 
 ## Configuratie
 
@@ -62,13 +63,14 @@ Kopieer [`config.example.json`](config.example.json) naar `config.json`. De bela
 
 | Sectie | Wat configureer je? |
 |--------|---------------------|
-| `database` | PostgreSQL-verbinding (host, poort, credentials, schema) |
+| `database` | PostgreSQL-verbinding (host, poort, inloggegevens, schema) |
 | `image` | Doelafmetingen en JPEG-kwaliteit voor geüploade afbeeldingen |
 | `api` | API-sleutels voor authenticatie |
-| `maintenance` | Thresholds en automatische scheduler voor databaseonderhoud |
+| `maintenance` | Drempelwaarden en automatische scheduler voor databaseonderhoud |
 | `backup` | Pad naar backups, retentie, scheduler en optionele S3-sync |
+| `file_monitor` | Signaleert verouderde of ontbrekende bestanden op schijf |
 | `notifications` | E-mailmeldingen via Microsoft Graph API |
-| `log` | Logniveau (`debug`, `info`, `warn`, `error`) en format (`text`, `json`) |
+| `log` | Logniveau (`debug`, `info`, `warn`, `error`) en formaat (`text`, `json`) |
 
 ### Backupfunctionaliteit
 
@@ -104,7 +106,7 @@ Dit draait elke zondag om 04:00 VACUUM ANALYZE op tabellen die het nodig hebben.
 
 ### E-mailnotificaties
 
-Ontvang e-mailmeldingen bij mislukte backups, S3-synchronisatie of database-onderhoud. Vereist een Azure AD app-registratie met `Mail.Send` permissie.
+Ontvang e-mailmeldingen bij mislukte backups, S3-synchronisatie, database-onderhoud en verouderde of ontbrekende bestanden. Vereist een Azure AD app-registratie met `Mail.Send` permissie.
 
 ```json
 "notifications": {
@@ -119,8 +121,8 @@ Ontvang e-mailmeldingen bij mislukte backups, S3-synchronisatie of database-onde
 ```
 
 De applicatie stuurt:
-- **Foutmeldingen:** bij mislukte backup, S3-sync of onderhoud
-- **Herstelmeldingen:** wanneer een eerder mislukte operatie weer slaagt
+- **Foutmeldingen:** bij mislukte backup, S3-sync, onderhoud of verouderde/ontbrekende bestanden
+- **Herstelmeldingen:** wanneer een eerder mislukte operatie weer slaagt of een bestand weer actueel is
 
 Test de configuratie via `POST /api/notifications/test-email`.
 
