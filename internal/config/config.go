@@ -346,6 +346,7 @@ func newConfigValidator() *validator.Validate {
 	})
 
 	v.RegisterStructValidation(validateS3Config, S3Config{})
+	v.RegisterStructValidation(validateFileMonitorConfig, FileMonitorConfig{})
 
 	return v
 }
@@ -358,6 +359,17 @@ func validateS3Config(sl validator.StructLevel) {
 	}
 	if s3.Region == "" && s3.Endpoint == "" {
 		sl.ReportError(s3.Region, "region", "Region", "required_without_endpoint", "")
+	}
+}
+
+// validateFileMonitorConfig checks that at least one check is configured when file monitor is enabled.
+func validateFileMonitorConfig(sl validator.StructLevel) {
+	fm := sl.Current().Interface().(FileMonitorConfig)
+	if !fm.Enabled {
+		return
+	}
+	if len(fm.Checks) == 0 {
+		sl.ReportError(fm.Checks, "checks", "Checks", "required_when_enabled", "")
 	}
 }
 
@@ -394,6 +406,8 @@ func tagMessage(tag, param string) string {
 		return "is required when enabled"
 	case "required_without_endpoint":
 		return "is required when no endpoint is specified"
+	case "required_when_enabled":
+		return "must have at least one entry when enabled"
 	case "gt":
 		return fmt.Sprintf("must be greater than %s", param)
 	case "gte":

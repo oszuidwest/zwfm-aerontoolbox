@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -44,6 +45,7 @@ type FileCheckResult struct {
 	LastModified   *time.Time `json:"last_modified,omitempty"`
 	IsStale        bool       `json:"is_stale"`
 	InAlert        bool       `json:"in_alert"`
+	Error          string     `json:"error,omitempty"`
 }
 
 func newFileMonitorService(cfg *config.Config, notifySvc *notify.NotificationService) *FileMonitorService {
@@ -69,20 +71,27 @@ func (s *FileMonitorService) Run() {
 	for _, check := range checks {
 		result := s.checkFile(check, now)
 
+		if isGraceRun {
+			// Grace run: observe only — don't update alert state or send notifications.
+			// This avoids false alerts immediately after a restart.
+			results = append(results, result)
+			continue
+		}
+
 		wasInAlert := s.alertState[check.Path]
 
 		if result.IsStale {
 			s.alertState[check.Path] = true
 			result.InAlert = true
 
-			if !isGraceRun && !wasInAlert {
-				newAlerts = append(newAlerts, toAlertResult(check, result, now))
+			if !wasInAlert {
+				newAlerts = append(newAlerts, toAlertResult(check, &result, now))
 			}
 		} else {
 			s.alertState[check.Path] = false
 
-			if !isGraceRun && wasInAlert {
-				newRecoveries = append(newRecoveries, toAlertResult(check, result, now))
+			if wasInAlert {
+				newRecoveries = append(newRecoveries, toAlertResult(check, &result, now))
 			}
 		}
 
@@ -166,11 +175,17 @@ func (s *FileMonitorService) checkFile(check config.FileMonitorCheckConfig, now 
 
 	info, err := os.Stat(check.Path)
 	if err != nil {
-		result.FileExists = false
 		result.IsStale = true
-
 		label := displayName(check)
-		slog.Warn("File monitor: file not found", "name", label, "path", check.Path)
+
+		if errors.Is(err, os.ErrNotExist) {
+			result.FileExists = false
+			slog.Warn("File monitor: file not found", "name", label, "path", check.Path)
+		} else {
+			result.FileExists = false
+			result.Error = err.Error()
+			slog.Warn("File monitor: file stat error", "name", label, "path", check.Path, "error", err)
+		}
 		return result
 	}
 
@@ -198,12 +213,13 @@ func (s *FileMonitorService) checkFile(check config.FileMonitorCheckConfig, now 
 }
 
 // toAlertResult converts a check result to a notification alert result.
-func toAlertResult(check config.FileMonitorCheckConfig, result FileCheckResult, checkedAt time.Time) notify.FileAlertResult {
+func toAlertResult(check config.FileMonitorCheckConfig, result *FileCheckResult, checkedAt time.Time) notify.FileAlertResult {
 	alert := notify.FileAlertResult{
 		Name:          check.Name,
 		Path:          check.Path,
 		MaxAgeMinutes: check.MaxAgeMinutes,
 		Exists:        result.FileExists,
+		Error:         result.Error,
 		CheckedAt:     checkedAt,
 	}
 	if result.FileAgeMinutes != nil {

@@ -14,6 +14,7 @@ type FileAlertResult struct {
 	MaxAgeMinutes int
 	ActualAge     time.Duration // Zero if file does not exist.
 	Exists        bool
+	Error         string // Non-empty when stat failed for a reason other than "not found".
 	CheckedAt     time.Time
 }
 
@@ -54,9 +55,12 @@ func formatFileAlerts(alerts []FileAlertResult) (subject, body string) {
 		fmt.Fprintf(&b, "  %s\n", fileLabel(a))
 		fmt.Fprintf(&b, "    Pad:              %s\n", a.Path)
 		fmt.Fprintf(&b, "    Max. leeftijd:    %d minuten\n", a.MaxAgeMinutes)
-		if !a.Exists {
+		switch {
+		case a.Error != "":
+			fmt.Fprintf(&b, "    Status:           Fout: %s\n", a.Error)
+		case !a.Exists:
 			b.WriteString("    Status:           Bestand niet gevonden\n")
-		} else {
+		default:
 			fmt.Fprintf(&b, "    Huidige leeftijd: %.0f minuten\n", math.Round(a.ActualAge.Minutes()))
 		}
 		b.WriteString("\n")
