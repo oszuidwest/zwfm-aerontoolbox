@@ -40,7 +40,7 @@ type FileCheckResult struct {
 	Name           string     `json:"name,omitempty"`
 	Path           string     `json:"path"`
 	MaxAgeMinutes  int        `json:"max_age_minutes"`
-	FileExists     bool       `json:"file_exists"`
+	FileExists     *bool      `json:"file_exists"`
 	FileAgeMinutes *float64   `json:"file_age_minutes,omitempty"`
 	LastModified   *time.Time `json:"last_modified,omitempty"`
 	IsStale        bool       `json:"is_stale"`
@@ -179,17 +179,19 @@ func (s *FileMonitorService) checkFile(check config.FileMonitorCheckConfig, now 
 		label := displayName(check)
 
 		if errors.Is(err, os.ErrNotExist) {
-			result.FileExists = false
+			exists := false
+			result.FileExists = &exists
 			slog.Warn("File monitor: file not found", "name", label, "path", check.Path)
 		} else {
-			result.FileExists = false
+			// FileExists stays nil — we cannot determine existence.
 			result.Error = err.Error()
 			slog.Warn("File monitor: file stat error", "name", label, "path", check.Path, "error", err)
 		}
 		return result
 	}
 
-	result.FileExists = true
+	exists := true
+	result.FileExists = &exists
 	modTime := info.ModTime()
 	result.LastModified = &modTime
 
@@ -218,7 +220,7 @@ func toAlertResult(check config.FileMonitorCheckConfig, result *FileCheckResult,
 		Name:          check.Name,
 		Path:          check.Path,
 		MaxAgeMinutes: check.MaxAgeMinutes,
-		Exists:        result.FileExists,
+		Exists:        result.FileExists != nil && *result.FileExists,
 		Error:         result.Error,
 		CheckedAt:     checkedAt,
 	}
