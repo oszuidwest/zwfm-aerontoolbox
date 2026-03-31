@@ -1184,8 +1184,8 @@ De volgende voorbeelden tonen individuele items uit de `checks`-array voor speci
   - `path`: Bestandspad op schijf
   - `max_age_minutes`: Maximaal toegestane leeftijd
   - `file_exists`: Of het bestand bestaat (`true`, `false`, of `null` bij fouten)
-  - `file_age_minutes`: Leeftijd in minuten (afwezig als bestand niet bestaat)
-  - `last_modified`: Laatste wijzigingstijd (afwezig als bestand niet bestaat)
+  - `file_age_minutes`: Leeftijd in minuten (afwezig als bestand niet bestaat of niet bereikbaar is)
+  - `last_modified`: Laatste wijzigingstijd (afwezig als bestand niet bestaat of niet bereikbaar is)
   - `is_stale`: Of het bestand te oud of onbereikbaar is
   - `in_alert`: Of er momenteel een alert actief is voor dit bestand
   - `error`: Foutmelding bij toegangsproblemen (afwezig bij normaal gebruik)

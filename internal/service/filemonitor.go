@@ -147,6 +147,7 @@ func (s *FileMonitorService) Status() *FileMonitorStatus {
 	if s.lastCheck == nil {
 		return &FileMonitorStatus{
 			IntervalMinutes: s.config.FileMonitor.CheckIntervalMinutes(),
+			Checks:          []FileCheckResult{},
 		}
 	}
 	return s.lastCheck
