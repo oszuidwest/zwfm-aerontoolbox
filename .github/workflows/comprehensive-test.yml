@@ -826,7 +826,7 @@ jobs:
             if ! lsof -i:${{ env.API_PORT }} > /dev/null 2>&1; then break; fi
             sleep 1
           done
-          ./zwfm-aerontoolbox -config=${{ env.CONFIG_FILE }} -port=${{ env.API_PORT }} > /tmp/api_output.log 2>&1 &
+          ./zwfm-aerontoolbox -config=test_config.json -port=${{ env.API_PORT }} > /tmp/api_output.log 2>&1 &
           echo $! > api.pid
           for i in {1..30}; do
             curl -sf http://localhost:${{ env.API_PORT }}/api/health > /dev/null 2>&1 && break
