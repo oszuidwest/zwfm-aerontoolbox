@@ -164,10 +164,12 @@ func (s *MaintenanceService) GetHealth(ctx context.Context) (*DatabaseHealth, er
 }
 
 // CheckHealthAndAlert runs a health check and sends an alert if issues are detected.
+// When the health check itself fails (e.g. database unreachable), an error alert is sent.
 func (s *MaintenanceService) CheckHealthAndAlert(ctx context.Context) {
 	health, err := s.GetHealth(ctx)
 	if err != nil {
 		slog.Error("Scheduled health check failed", "error", err)
+		s.notify.NotifyHealthCheckError(err)
 		return
 	}
 

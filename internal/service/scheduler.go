@@ -121,8 +121,14 @@ func (s *Scheduler) runFileMonitor(_ context.Context) {
 	s.service.FileMonitor.Run()
 }
 
+// healthCheckTimeout is the maximum time allowed for a scheduled health check.
+const healthCheckTimeout = 2 * time.Minute
+
 // runHealthCheck performs a scheduled database health check and sends alerts if issues are detected.
 func (s *Scheduler) runHealthCheck(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(ctx, healthCheckTimeout)
+	defer cancel()
+
 	slog.Info("Scheduled health check started")
 	s.service.Maintenance.CheckHealthAndAlert(ctx)
 }

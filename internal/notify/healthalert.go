@@ -29,6 +29,28 @@ func (r *HealthAlertResult) HasIssues() bool {
 	return len(r.Recommendations) > 0 || len(r.LongRunningQueries) > 0
 }
 
+// NotifyHealthCheckError sends an alert when the health check itself fails (e.g. database unreachable).
+// Uses the same state tracking as NotifyHealthAlert so a recovery email is sent when the next check succeeds.
+func (s *NotificationService) NotifyHealthCheckError(err error) {
+	if !IsConfigured(&s.config.Notifications.Email) || err == nil {
+		return
+	}
+
+	s.stateMu.Lock()
+	s.prevHealthAlertActive = true
+	s.stateMu.Unlock()
+
+	subject := "[FOUT] Database health check mislukt - Aeron Toolbox"
+
+	var b strings.Builder
+	b.WriteString("Database health check mislukt\n\n")
+	b.WriteString("De health check kon niet worden uitgevoerd. Controleer de databaseverbinding.\n\n")
+	fmt.Fprintf(&b, "Tijdstip:  %s\n", time.Now().Format("2006-01-02 15:04:05"))
+	fmt.Fprintf(&b, "Fout:      %s\n", err.Error())
+
+	s.sendAsync(subject, b.String())
+}
+
 // NotifyHealthAlert sends a failure or recovery email based on the health check result.
 func (s *NotificationService) NotifyHealthAlert(r *HealthAlertResult) {
 	if !IsConfigured(&s.config.Notifications.Email) || r == nil {
