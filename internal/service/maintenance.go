@@ -30,7 +30,8 @@ func newMaintenanceService(repo *database.Repository, cfg *config.Config, notify
 	}
 }
 
-// noIssuesDetected is the placeholder recommendation shown in the API when no problems are found.
+// noIssuesDetected is a placeholder recommendation inserted for the API response when no problems
+// are found. It is stripped before passing results to the notification system.
 const noIssuesDetected = "No issues detected"
 
 // Health types.
@@ -96,6 +97,7 @@ type tableHealthRow struct {
 }
 
 // longRunningQueryRow is the database scan target for long-running query detection.
+// Fields must match types.LongRunningQuery exactly (direct type conversion is used).
 type longRunningQueryRow struct {
 	PID      int    `db:"pid"`
 	Duration string `db:"duration"`
