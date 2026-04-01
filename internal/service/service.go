@@ -57,7 +57,6 @@ func (s *AeronService) Repository() *database.Repository {
 
 // Close gracefully shuts down all services.
 func (s *AeronService) Close() {
-	s.Maintenance.Close()
 	s.Backup.Close()
 	s.FileMonitor.Close()
 	s.Notify.Close()

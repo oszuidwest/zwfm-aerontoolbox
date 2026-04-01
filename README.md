@@ -9,7 +9,7 @@ Het radioautomatiseringssysteem Aeron mist tooling voor beheer en onderhoud. Aer
 
 - **Afbeeldingen:** upload en optimaliseer albumhoezen en artiestfoto's
 - **Media:** doorzoek artiesten, tracks en playlists met metadata
-- **Onderhoud:** bewaak de gezondheid van de database, automatisch of handmatig VACUUM/ANALYZE
+- **Onderhoud:** bewaak de gezondheid van de database met automatische meldingen bij problemen
 - **Backups:** maak, valideer en download databasebackups (optioneel naar S3)
 - **Bestandscontrole:** controleer of bestanden actueel zijn, met meldingen bij verouderde of ontbrekende bestanden
 
@@ -39,7 +39,7 @@ docker run -d -p 8080:8080 \
 ```
 
 > [!NOTE]
-> De `TZ` omgevingsvariabele bepaalt de tijdzone voor geplande taken (backups en onderhoud).
+> De `TZ` omgevingsvariabele bepaalt de tijdzone voor geplande taken (backups en health checks).
 
 ### Binary
 
@@ -66,7 +66,7 @@ Kopieer [`config.example.json`](config.example.json) naar `config.json`. De bela
 | `database` | PostgreSQL-verbinding (host, poort, inloggegevens, schema) |
 | `image` | Doelafmetingen en JPEG-kwaliteit voor geüploade afbeeldingen |
 | `api` | API-sleutels voor authenticatie |
-| `maintenance` | Drempelwaarden en automatische scheduler voor databaseonderhoud |
+| `maintenance` | Drempelwaarden en automatische scheduler voor database health checks |
 | `backup` | Pad naar backups, retentie, scheduler en optionele S3-sync |
 | `file_monitor` | Signaleert verouderde of ontbrekende bestanden op schijf |
 | `notifications` | E-mailmeldingen via Microsoft Graph API |
@@ -89,12 +89,14 @@ brew install libpq
 
 De applicatie valideert bij het opstarten of deze tools beschikbaar zijn wanneer `backup.enabled: true`.
 
-### Automatisch onderhoud
+### Automatische health checks
 
-Database-onderhoud (VACUUM/ANALYZE) kan automatisch worden uitgevoerd:
+Database health checks kunnen automatisch worden uitgevoerd. Bij problemen (hoge bloat, veel connecties, langlopende queries) wordt een e-mailmelding verstuurd:
 
 ```json
 "maintenance": {
+  "connection_usage_threshold_pct": 80,
+  "long_query_threshold_seconds": 10,
   "scheduler": {
     "enabled": true,
     "schedule": "0 4 * * 0"
@@ -102,11 +104,11 @@ Database-onderhoud (VACUUM/ANALYZE) kan automatisch worden uitgevoerd:
 }
 ```
 
-Dit draait elke zondag om 04:00 VACUUM ANALYZE op tabellen die het nodig hebben. Zie [API.md](API.md) voor details.
+Dit controleert elke zondag om 04:00 de database en stuurt een melding bij problemen. Zie [API.md](API.md) voor details.
 
 ### E-mailnotificaties
 
-Ontvang e-mailmeldingen bij mislukte backups, S3-synchronisatie, database-onderhoud en verouderde of ontbrekende bestanden. Vereist een Azure AD app-registratie met `Mail.Send` permissie.
+Ontvang e-mailmeldingen bij mislukte backups, S3-synchronisatie, database health checks en verouderde of ontbrekende bestanden. Vereist een Azure AD app-registratie met `Mail.Send` permissie.
 
 ```json
 "notifications": {
@@ -121,8 +123,8 @@ Ontvang e-mailmeldingen bij mislukte backups, S3-synchronisatie, database-onderh
 ```
 
 De applicatie stuurt:
-- **Foutmeldingen:** bij mislukte backup, S3-sync, onderhoud of verouderde/ontbrekende bestanden
-- **Herstelmeldingen:** wanneer een eerder mislukte operatie weer slaagt of een bestand weer actueel is
+- **Foutmeldingen:** bij mislukte backup, S3-sync, database health check of verouderde/ontbrekende bestanden
+- **Herstelmeldingen:** wanneer een eerder gemeld probleem is opgelost of een bestand weer actueel is
 
 Test de configuratie via `POST /api/notifications/test-email`.
 

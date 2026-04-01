@@ -49,9 +49,6 @@ De Aeron Toolbox API biedt RESTful-endpoints voor het Aeron-radioautomatiserings
 | `/api/playlist?block_id={id}` | GET | Tracks in playlistblok | Ja |
 | **Database onderhoud** |
 | `/api/db/maintenance/health` | GET | Database health en statistieken | Ja |
-| `/api/db/maintenance/vacuum` | POST | VACUUM starten (async) | Ja |
-| `/api/db/maintenance/analyze` | POST | ANALYZE starten (async) | Ja |
-| `/api/db/maintenance/status` | GET | Onderhoud status opvragen | Ja |
 | **Bestandscontrole** |
 | `/api/file-monitor/status` | GET | Status bestandscontrole | Ja |
 | **Backups** |
@@ -116,7 +113,7 @@ Alle fouten volgen dit formaat:
 - `400` Bad Request - Ongeldige invoerparameters
 - `401` Unauthorized - Ongeldige of ontbrekende API-sleutel
 - `404` Not Found - Bron niet gevonden
-- `409` Conflict - Operatie al bezig (backup of onderhoud)
+- `409` Conflict - Operatie al bezig (backup)
 - `500` Internal Server Error - Serverfout
 
 ---
@@ -562,7 +559,7 @@ Bekijk tracks voor een specifiek playlistblok.
 
 ### Database health ophalen
 
-Bekijk gedetailleerde databasestatistieken inclusief tabelgroottes, bloat-percentages en onderhoudsaanbevelingen.
+Bekijk gedetailleerde databasestatistieken inclusief tabelgroottes, bloat-percentages, connectiegebruik, langlopende queries en onderhoudsaanbevelingen.
 
 **Endpoint:** `GET /api/db/maintenance/health`
 **Authenticatie:** Vereist
@@ -575,6 +572,9 @@ Bekijk gedetailleerde databasestatistieken inclusief tabelgroottes, bloat-percen
   "database_size": "2.45 GB",
   "database_size_bytes": 2630451200,
   "schema_name": "aeron",
+  "active_connections": 12,
+  "max_connections": 100,
+  "connection_usage_pct": 12.0,
   "tables": [
     {
       "name": "track",
@@ -600,6 +600,7 @@ Bekijk gedetailleerde databasestatistieken inclusief tabelgroottes, bloat-percen
       "needs_analyze": false
     }
   ],
+  "long_running_queries": [],
   "needs_maintenance": true,
   "recommendations": [
     "Table 'playlistitem' has high dead tuple ratio (15.2%) - VACUUM recommended",
@@ -609,136 +610,16 @@ Bekijk gedetailleerde databasestatistieken inclusief tabelgroottes, bloat-percen
 }
 ```
 
-### VACUUM starten
+### Automatische health check
 
-VACUUM starten op tabellen om opslagruimte vrij te maken en prestaties te verbeteren. De operatie draait asynchroon op de achtergrond.
-
-**Endpoint:** `POST /api/db/maintenance/vacuum`
-**Authenticatie:** Vereist
-
-**Request Body:**
-```json
-{
-  "tables": ["track", "artist"],
-  "analyze": true
-}
-```
-
-**Parameters:**
-- `tables` (optioneel): Specifieke tabellen om te vacuumen. Indien leeg, worden tabellen die onderhoud nodig hebben automatisch geselecteerd.
-- `analyze` (optioneel): Indien `true`, wordt ANALYZE na VACUUM uitgevoerd.
-
-**Response:** `202 Accepted`
-```json
-{
-  "message": "Vacuum with analyze started",
-  "check": "/api/db/maintenance/status"
-}
-```
-
-**Foutresponse:** `409 Conflict`
-```json
-{
-  "error": "maintenance operation already in progress"
-}
-```
-
-### ANALYZE starten
-
-ANALYZE starten om tabelstatistieken bij te werken voor de PostgreSQL-queryoptimizer.
-
-**Endpoint:** `POST /api/db/maintenance/analyze`
-**Authenticatie:** Vereist
-
-**Request Body:**
-```json
-{
-  "tables": ["track"]
-}
-```
-
-**Parameters:**
-- `tables` (optioneel): Specifieke tabellen om te analyzeren. Indien leeg, worden tabellen die het nodig hebben automatisch geselecteerd.
-
-**Response:** `202 Accepted`
-```json
-{
-  "message": "Analyze started",
-  "check": "/api/db/maintenance/status"
-}
-```
-
-### Onderhoud status opvragen
-
-Controleer de voortgang en resultaten van de laatste onderhoudsoperatie.
-
-**Endpoint:** `GET /api/db/maintenance/status`
-**Authenticatie:** Vereist
-
-**Response tijdens onderhoud:** `200 OK`
-```json
-{
-  "running": true,
-  "operation": "vacuum",
-  "started_at": "2025-12-22T14:30:00Z",
-  "tables_total": 5,
-  "tables_done": 2,
-  "current_table": "track"
-}
-```
-
-**Response na voltooiing:** `200 OK`
-```json
-{
-  "running": false,
-  "operation": "vacuum",
-  "started_at": "2025-12-22T14:30:00Z",
-  "ended_at": "2025-12-22T14:30:45Z",
-  "success": true,
-  "tables_total": 5,
-  "tables_done": 5,
-  "last_result": {
-    "tables_total": 5,
-    "tables_success": 5,
-    "tables_failed": 0,
-    "tables_skipped": 0,
-    "results": [
-      {
-        "table": "track",
-        "success": true,
-        "message": "VACUUM completed",
-        "dead_tuples_before": 4500,
-        "dead_tuple_ratio_before": 3.6,
-        "duration": "1.25s",
-        "analyzed": true
-      }
-    ],
-    "executed_at": "2025-12-22T14:30:45Z"
-  }
-}
-```
-
-**Response na fout:** `200 OK`
-```json
-{
-  "running": false,
-  "operation": "vacuum",
-  "started_at": "2025-12-22T14:30:00Z",
-  "ended_at": "2025-12-22T14:30:05Z",
-  "success": false,
-  "error": "maintenance timeout after 30m0s"
-}
-```
-
-### Automatisch onderhoud
-
-Database-onderhoud kan automatisch worden uitgevoerd via de ingebouwde scheduler. Configureer dit in `config.json`:
+De health check kan automatisch worden uitgevoerd via de ingebouwde scheduler. Bij problemen wordt een e-mailmelding verstuurd. Configureer dit in `config.json`:
 
 ```json
 "maintenance": {
   "bloat_threshold": 10.0,
   "dead_tuple_threshold": 10000,
-  "timeout_minutes": 30,
+  "connection_usage_threshold_pct": 80,
+  "long_query_threshold_seconds": 10,
   "scheduler": {
     "enabled": true,
     "schedule": "0 4 * * 0"
@@ -747,13 +628,14 @@ Database-onderhoud kan automatisch worden uitgevoerd via de ingebouwde scheduler
 ```
 
 **Parameters:**
-- `bloat_threshold`: Percentage dead tuples waarboven VACUUM wordt aanbevolen
-- `dead_tuple_threshold`: Absoluut aantal dead tuples waarboven VACUUM wordt aanbevolen
-- `timeout_minutes`: Maximale tijd voor onderhoudsoperaties (standaard: 30)
-- `scheduler.enabled`: Schakel automatisch onderhoud in/uit
+- `bloat_threshold`: Percentage dead tuples waarboven een waarschuwing wordt gegeven
+- `dead_tuple_threshold`: Absoluut aantal dead tuples waarboven een waarschuwing wordt gegeven
+- `connection_usage_threshold_pct`: Percentage connectiegebruik waarboven een waarschuwing wordt gegeven (standaard: 80)
+- `long_query_threshold_seconds`: Drempel in seconden waarboven een query als langlopend wordt beschouwd (standaard: 10)
+- `scheduler.enabled`: Schakel automatische health checks in/uit
 - `scheduler.schedule`: Cron-expressie (zie backup-sectie voor voorbeelden)
 
-De scheduler draait VACUUM ANALYZE op tabellen die aan de threshold-criteria voldoen. De tijdzone wordt bepaald door de systeemtijdzone (instelbaar via `TZ` environment variable).
+Bij detectie van problemen (hoge bloat, veel connecties, langlopende queries) wordt een e-mailmelding verstuurd. Wanneer alle problemen zijn opgelost, volgt een herstelmelding. De tijdzone wordt bepaald door de systeemtijdzone (instelbaar via `TZ` environment variable).
 
 ---
 

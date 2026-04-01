@@ -29,31 +29,7 @@ type S3SyncResult struct {
 	Error  string
 }
 
-// MaintenanceResult contains the information needed to send a maintenance notification.
-type MaintenanceResult struct {
-	Success      bool
-	Operation    string
-	StartedAt    *time.Time
-	Error        string
-	TablesTotal  int
-	TablesOK     int
-	TablesFailed int
-	Tables       []MaintenanceTableResult
-}
-
-// MaintenanceTableResult contains per-table maintenance results for email formatting.
-type MaintenanceTableResult struct {
-	Table          string
-	Success        bool
-	Message        string
-	Duration       string
-	DeadTuples     int64
-	DeadTupleRatio float64
-	Skipped        bool
-	SkippedReason  string
-}
-
-// NotificationService handles email notifications for backup, maintenance, and S3 sync events.
+// NotificationService handles email notifications for backup, health check, and S3 sync events.
 type NotificationService struct {
 	config *config.Config
 	runner *async.Runner
@@ -65,7 +41,7 @@ type NotificationService struct {
 
 	// Recovery state (in-memory, lost on restart)
 	prevBackupFailed      bool
-	prevMaintenanceFailed bool
+	prevHealthAlertActive bool
 	prevS3Failed          bool
 	stateMu               sync.Mutex
 
@@ -149,38 +125,6 @@ func (s *NotificationService) NotifyS3SyncResult(filename string, r *S3SyncResul
 		s.stateMu.Unlock()
 
 		subject, body := s.formatS3Recovery(filename)
-		s.sendAsync(subject, body)
-		return
-	}
-
-	s.stateMu.Unlock()
-}
-
-// NotifyMaintenanceResult sends a failure or recovery email based on the maintenance result.
-func (s *NotificationService) NotifyMaintenanceResult(r *MaintenanceResult) {
-	if !IsConfigured(&s.config.Notifications.Email) || r == nil {
-		return
-	}
-
-	hasFailed := !r.Success || r.TablesFailed > 0
-
-	s.stateMu.Lock()
-	prevFailed := s.prevMaintenanceFailed
-
-	if hasFailed {
-		s.prevMaintenanceFailed = true
-		s.stateMu.Unlock()
-
-		subject, body := s.formatMaintenanceFailure(r)
-		s.sendAsync(subject, body)
-		return
-	}
-
-	if prevFailed {
-		s.prevMaintenanceFailed = false
-		s.stateMu.Unlock()
-
-		subject, body := s.formatMaintenanceRecovery(r)
 		s.sendAsync(subject, body)
 		return
 	}
@@ -368,77 +312,6 @@ func (s *NotificationService) formatS3Recovery(filename string) (subject, body s
 	if filename != "" {
 		fmt.Fprintf(&b, "Bestandsnaam:   %s\n", filename)
 	}
-
-	return subject, b.String()
-}
-
-func (s *NotificationService) formatMaintenanceFailure(r *MaintenanceResult) (subject, body string) {
-	allFailed := r.TablesOK == 0
-	if allFailed {
-		subject = "[FOUT] Database onderhoud mislukt - Aeron Toolbox"
-	} else {
-		subject = "[FOUT] Database onderhoud deels mislukt - Aeron Toolbox"
-	}
-
-	var b strings.Builder
-	if allFailed {
-		b.WriteString("Database onderhoud mislukt\n\n")
-	} else {
-		b.WriteString("Database onderhoud deels mislukt\n\n")
-	}
-
-	if r.Operation != "" {
-		fmt.Fprintf(&b, "Operatie:         %s\n", strings.ToUpper(strings.ReplaceAll(r.Operation, "_", " "))) //nolint:misspell // Dutch word
-	}
-	if r.StartedAt != nil {
-		fmt.Fprintf(&b, "Tijdstip:         %s\n", r.StartedAt.Format("2006-01-02 15:04:05"))
-	}
-	if r.Error != "" {
-		fmt.Fprintf(&b, "Fout:             %s\n", r.Error)
-	}
-
-	fmt.Fprintf(&b, "Tabellen totaal:  %d\n", r.TablesTotal)
-	fmt.Fprintf(&b, "Gelukt:           %d\n", r.TablesOK)
-	fmt.Fprintf(&b, "Mislukt:          %d\n", r.TablesFailed)
-
-	if len(r.Tables) > 0 {
-		b.WriteString("\nResultaten:\n")
-		for _, t := range r.Tables {
-			if t.Skipped {
-				fmt.Fprintf(&b, "  %-14s OVERGESLAGEN  %s\n", t.Table, t.SkippedReason)
-				continue
-			}
-			statusLabel := "GELUKT"
-			if !t.Success {
-				statusLabel = "MISLUKT"
-			}
-			fmt.Fprintf(&b, "  %-14s %-8s %s    dead tuples: %d (%.1f%%)\n",
-				t.Table, statusLabel, t.Duration, t.DeadTuples, t.DeadTupleRatio)
-			if !t.Success {
-				fmt.Fprintf(&b, "    Fout: %s\n", t.Message)
-			}
-		}
-	}
-
-	return subject, b.String()
-}
-
-func (s *NotificationService) formatMaintenanceRecovery(r *MaintenanceResult) (subject, body string) {
-	subject = "[OK] Database onderhoud hersteld - Aeron Toolbox"
-
-	var b strings.Builder
-	b.WriteString("Database onderhoud hersteld\n\n")
-	b.WriteString("Het database onderhoud is weer succesvol na een eerdere fout.\n\n")
-
-	if r.Operation != "" {
-		fmt.Fprintf(&b, "Operatie:         %s\n", strings.ToUpper(strings.ReplaceAll(r.Operation, "_", " "))) //nolint:misspell // Dutch word
-	}
-	if r.StartedAt != nil {
-		fmt.Fprintf(&b, "Tijdstip:         %s\n", r.StartedAt.Format("2006-01-02 15:04:05"))
-	}
-
-	fmt.Fprintf(&b, "Tabellen totaal:  %d\n", r.TablesTotal)
-	fmt.Fprintf(&b, "Gelukt:           %d\n", r.TablesOK)
 
 	return subject, b.String()
 }

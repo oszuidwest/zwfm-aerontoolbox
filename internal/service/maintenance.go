@@ -3,10 +3,10 @@ package service
 import (
 	"context"
 	"fmt"
-	"sync"
+	"log/slog"
+	"strconv"
 	"time"
 
-	"github.com/oszuidwest/zwfm-aerontoolbox/internal/async"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/config"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/database"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/notify"
@@ -14,28 +14,11 @@ import (
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/util"
 )
 
-// MaintenanceService handles database health monitoring and maintenance operations.
+// MaintenanceService handles database health monitoring.
 type MaintenanceService struct {
-	repo     *database.Repository
-	config   *config.Config
-	runner   *async.Runner
-	notify   *notify.NotificationService
-	statusMu sync.RWMutex
-	status   *MaintenanceStatus
-}
-
-// MaintenanceStatus tracks the progress of an async maintenance operation.
-type MaintenanceStatus struct {
-	Running      bool                 `json:"running"`
-	Operation    string               `json:"operation,omitempty"`
-	StartedAt    *time.Time           `json:"started_at,omitempty"`
-	EndedAt      *time.Time           `json:"ended_at,omitempty"`
-	Success      bool                 `json:"success"`
-	TablesTotal  int                  `json:"tables_total"`
-	TablesDone   int                  `json:"tables_done"`
-	CurrentTable string               `json:"current_table,omitempty"`
-	LastResult   *MaintenanceResponse `json:"last_result,omitempty"`
-	Error        string               `json:"error,omitempty"`
+	repo   *database.Repository
+	config *config.Config
+	notify *notify.NotificationService
 }
 
 // newMaintenanceService creates a new MaintenanceService instance.
@@ -43,29 +26,27 @@ func newMaintenanceService(repo *database.Repository, cfg *config.Config, notify
 	return &MaintenanceService{
 		repo:   repo,
 		config: cfg,
-		runner: async.New(),
 		notify: notifySvc,
 	}
 }
 
-// Close stops the maintenance service and waits for any running operation to complete.
-func (s *MaintenanceService) Close() {
-	s.runner.Close()
-}
-
-// Maintenance types.
+// Health types.
 
 // DatabaseHealth represents the overall health status of the database.
 type DatabaseHealth struct {
-	DatabaseName     string        `json:"database_name"`
-	DatabaseVersion  string        `json:"database_version"`
-	DatabaseSize     string        `json:"database_size"`
-	DatabaseSizeRaw  int64         `json:"database_size_bytes"`
-	SchemaName       string        `json:"schema_name"`
-	Tables           []TableHealth `json:"tables"`
-	NeedsMaintenance bool          `json:"needs_maintenance"`
-	Recommendations  []string      `json:"recommendations"`
-	CheckedAt        time.Time     `json:"checked_at"`
+	DatabaseName       string             `json:"database_name"`
+	DatabaseVersion    string             `json:"database_version"`
+	DatabaseSize       string             `json:"database_size"`
+	DatabaseSizeRaw    int64              `json:"database_size_bytes"`
+	SchemaName         string             `json:"schema_name"`
+	ActiveConnections  int                `json:"active_connections"`
+	MaxConnections     int                `json:"max_connections"`
+	ConnectionUsagePct float64            `json:"connection_usage_pct"`
+	Tables             []TableHealth      `json:"tables"`
+	LongRunningQueries []LongRunningQuery `json:"long_running_queries"`
+	NeedsMaintenance   bool               `json:"needs_maintenance"`
+	Recommendations    []string           `json:"recommendations"`
+	CheckedAt          time.Time          `json:"checked_at"`
 }
 
 // TableHealth represents health statistics for a single table.
@@ -93,33 +74,12 @@ type TableHealth struct {
 	NeedsAnalyze    bool       `json:"needs_analyze"`
 }
 
-// VacuumOptions configures vacuum operation parameters.
-type VacuumOptions struct {
-	Tables  []string // Tables lists the tables to vacuum; auto-selects when empty
-	Analyze bool     // Analyze runs ANALYZE after VACUUM completes
-}
-
-// MaintenanceResult represents the result of a maintenance operation (vacuum or analyze) on a single table.
-type MaintenanceResult struct {
-	Table          string  `json:"table"`
-	Success        bool    `json:"success"`
-	Message        string  `json:"message"`
-	DeadTuples     int64   `json:"dead_tuples_before"`
-	DeadTupleRatio float64 `json:"dead_tuple_ratio_before"`
-	Duration       string  `json:"duration,omitempty"`
-	Analyzed       bool    `json:"analyzed"`
-	Skipped        bool    `json:"skipped,omitempty"`
-	SkippedReason  string  `json:"skipped_reason,omitempty"`
-}
-
-// MaintenanceResponse represents the overall result of maintenance operations (vacuum/analyze).
-type MaintenanceResponse struct {
-	TablesTotal   int                 `json:"tables_total"`
-	TablesSuccess int                 `json:"tables_success"`
-	TablesFailed  int                 `json:"tables_failed"`
-	TablesSkipped int                 `json:"tables_skipped"`
-	Results       []MaintenanceResult `json:"results"`
-	ExecutedAt    time.Time           `json:"executed_at"`
+// LongRunningQuery represents a query that has been running longer than the configured threshold.
+type LongRunningQuery struct {
+	PID      int    `json:"pid"`
+	Duration string `json:"duration"`
+	Query    string `json:"query"`
+	State    string `json:"state"`
 }
 
 // tableHealthRow contains health statistics and size information for a database table.
@@ -140,11 +100,12 @@ type tableHealthRow struct {
 	ToastSize       int64      `db:"toast_size"`
 }
 
-// maintenanceContext provides table health data for vacuum and analyze operations.
-type maintenanceContext struct {
-	tables       []TableHealth
-	tablesByName map[string]TableHealth
-	schema       string
+// longRunningQueryRow is the database scan target for long-running query detection.
+type longRunningQueryRow struct {
+	PID      int    `db:"pid"`
+	Duration string `db:"duration"`
+	Query    string `db:"query"`
+	State    string `db:"state"`
 }
 
 // Health operations.
@@ -176,7 +137,21 @@ func (s *MaintenanceService) GetHealth(ctx context.Context) (*DatabaseHealth, er
 	}
 	health.Tables = tables
 
-	health.Recommendations = s.generateRecommendations(tables)
+	active, maxConns, pct, err := s.getConnectionUsage(ctx)
+	if err != nil {
+		return nil, types.NewOperationError("get connection usage", err)
+	}
+	health.ActiveConnections = active
+	health.MaxConnections = maxConns
+	health.ConnectionUsagePct = pct
+
+	queries, err := s.getLongRunningQueries(ctx)
+	if err != nil {
+		return nil, types.NewOperationError("get long-running queries", err)
+	}
+	health.LongRunningQueries = queries
+
+	health.Recommendations = s.generateRecommendations(health)
 
 	for i := range tables {
 		if tables[i].NeedsVacuum || tables[i].NeedsAnalyze {
@@ -188,6 +163,48 @@ func (s *MaintenanceService) GetHealth(ctx context.Context) (*DatabaseHealth, er
 	return health, nil
 }
 
+// CheckHealthAndAlert runs a health check and sends an alert if issues are detected.
+// When the health check itself fails (e.g. database unreachable), an error alert is sent.
+func (s *MaintenanceService) CheckHealthAndAlert(ctx context.Context) {
+	health, err := s.GetHealth(ctx)
+	if err != nil {
+		slog.Error("Scheduled health check failed", "error", err)
+		s.notify.NotifyHealthCheckError(err)
+		return
+	}
+
+	cfg := s.config.Maintenance
+	result := &notify.HealthAlertResult{
+		Recommendations:    health.Recommendations,
+		ActiveConnections:  health.ActiveConnections,
+		MaxConnections:     health.MaxConnections,
+		ConnectionUsagePct: health.ConnectionUsagePct,
+		CheckedAt:          health.CheckedAt,
+	}
+
+	// Filter out the "No issues detected" placeholder from recommendations.
+	if len(result.Recommendations) == 1 && result.Recommendations[0] == "No issues detected" {
+		result.Recommendations = nil
+	}
+
+	// Add connection usage as a recommendation if above threshold.
+	if int(health.ConnectionUsagePct) >= cfg.GetConnectionUsageThreshold() {
+		result.Recommendations = append(result.Recommendations,
+			fmt.Sprintf("Connection usage is high: %d/%d (%.0f%%)", health.ActiveConnections, health.MaxConnections, health.ConnectionUsagePct))
+	}
+
+	for _, q := range health.LongRunningQueries {
+		result.LongRunningQueries = append(result.LongRunningQueries, notify.LongRunningQueryAlert{
+			PID:      q.PID,
+			Duration: q.Duration,
+			Query:    q.Query,
+			State:    q.State,
+		})
+	}
+
+	s.notify.NotifyHealthAlert(result)
+}
+
 // getDatabaseSize returns the total database size.
 func (s *MaintenanceService) getDatabaseSize(ctx context.Context) (size string, sizeRaw int64, err error) {
 	err = s.repo.DB().GetContext(ctx, &sizeRaw, "SELECT pg_database_size(current_database())")
@@ -195,6 +212,63 @@ func (s *MaintenanceService) getDatabaseSize(ctx context.Context) (size string, 
 		return "", 0, err
 	}
 	return util.FormatBytes(sizeRaw), sizeRaw, nil
+}
+
+// getConnectionUsage returns the current connection count, maximum, and usage percentage.
+func (s *MaintenanceService) getConnectionUsage(ctx context.Context) (active, maxConns int, pct float64, err error) {
+	if err := s.repo.DB().GetContext(ctx, &active,
+		"SELECT count(*) FROM pg_stat_activity WHERE datname = current_database()"); err != nil {
+		return 0, 0, 0, err
+	}
+
+	var maxStr string
+	if err := s.repo.DB().GetContext(ctx, &maxStr,
+		"SELECT current_setting('max_connections')"); err != nil {
+		return 0, 0, 0, err
+	}
+
+	maxConns, err = strconv.Atoi(maxStr)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("parse max_connections: %w", err)
+	}
+
+	if maxConns > 0 {
+		pct = float64(active) / float64(maxConns) * 100
+	}
+
+	return active, maxConns, pct, nil
+}
+
+// getLongRunningQueries returns queries running longer than the configured threshold.
+func (s *MaintenanceService) getLongRunningQueries(ctx context.Context) ([]LongRunningQuery, error) {
+	threshold := s.config.Maintenance.GetLongQueryThresholdSeconds()
+
+	query := `
+		SELECT
+			pid,
+			(now() - query_start)::text AS duration,
+			LEFT(query, 200) AS query,
+			state
+		FROM pg_stat_activity
+		WHERE state != 'idle'
+			AND query_start IS NOT NULL
+			AND now() - query_start > make_interval(secs => $1)
+			AND datname = current_database()
+			AND pid != pg_backend_pid()
+		ORDER BY query_start ASC
+	`
+
+	var rows []longRunningQueryRow
+	if err := s.repo.DB().SelectContext(ctx, &rows, query, threshold); err != nil {
+		return nil, err
+	}
+
+	queries := make([]LongRunningQuery, 0, len(rows))
+	for _, row := range rows {
+		queries = append(queries, LongRunningQuery(row))
+	}
+
+	return queries, nil
 }
 
 // getTableHealth retrieves health statistics for all tables in the schema.
@@ -269,13 +343,25 @@ func (s *MaintenanceService) getTableHealth(ctx context.Context) ([]TableHealth,
 	return tables, nil
 }
 
-// generateRecommendations returns maintenance recommendations for tables requiring attention.
-func (s *MaintenanceService) generateRecommendations(tables []TableHealth) []string {
+// Recommendations.
+
+// generateRecommendations returns recommendations for the entire database health report.
+func (s *MaintenanceService) generateRecommendations(health *DatabaseHealth) []string {
 	var recs []string
 
-	for i := range tables {
-		t := &tables[i]
+	for i := range health.Tables {
+		t := &health.Tables[i]
 		recs = s.checkTableHealth(t, recs)
+	}
+
+	cfg := s.config.Maintenance
+	if int(health.ConnectionUsagePct) >= cfg.GetConnectionUsageThreshold() {
+		recs = append(recs, fmt.Sprintf("Connection usage is high: %d/%d (%.0f%%) - check for connection leaks",
+			health.ActiveConnections, health.MaxConnections, health.ConnectionUsagePct))
+	}
+
+	for _, q := range health.LongRunningQueries {
+		recs = append(recs, fmt.Sprintf("Long-running query detected (PID %d, running for %s)", q.PID, q.Duration))
 	}
 
 	if len(recs) == 0 {
@@ -331,314 +417,4 @@ func lastVacuumTime(t *TableHealth) *time.Time {
 		return t.LastVacuum
 	}
 	return t.LastAutovacuum
-}
-
-// Maintenance operations.
-
-// newMaintenanceContext loads current table health data for maintenance operations.
-func (s *MaintenanceService) newMaintenanceContext(ctx context.Context) (*maintenanceContext, error) {
-	tables, err := s.getTableHealth(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	tablesByName := make(map[string]TableHealth, len(tables))
-	for i := range tables {
-		tablesByName[tables[i].Name] = tables[i]
-	}
-
-	return &maintenanceContext{
-		tables:       tables,
-		tablesByName: tablesByName,
-		schema:       s.repo.Schema(),
-	}, nil
-}
-
-// selectTablesToProcess determines tables for maintenance based on request or automatic selection.
-// Returns tables to process and any skipped table results.
-func (mctx *maintenanceContext) selectTablesToProcess(requestedTables []string, autoSelectFn func(TableHealth) bool) ([]TableHealth, []MaintenanceResult) {
-	var tablesToProcess []TableHealth
-	var skipped []MaintenanceResult
-
-	if len(requestedTables) > 0 {
-		for _, tableName := range requestedTables {
-			if t, exists := mctx.tablesByName[tableName]; exists {
-				tablesToProcess = append(tablesToProcess, t)
-			} else {
-				skipped = append(skipped, MaintenanceResult{
-					Table:         tableName,
-					Success:       false,
-					Message:       fmt.Sprintf("Table '%s' not found in schema '%s'", tableName, mctx.schema),
-					Skipped:       true,
-					SkippedReason: "not found",
-				})
-			}
-		}
-	} else {
-		for i := range mctx.tables {
-			if autoSelectFn(mctx.tables[i]) {
-				tablesToProcess = append(tablesToProcess, mctx.tables[i])
-			}
-		}
-	}
-
-	return tablesToProcess, skipped
-}
-
-// executeVacuum executes VACUUM on a table with optional ANALYZE.
-func (s *MaintenanceService) executeVacuum(ctx context.Context, tableName string, analyze bool) error {
-	if !types.IsValidIdentifier(tableName) {
-		return types.NewValidationError("table", fmt.Sprintf("invalid table name: %s", tableName))
-	}
-
-	schema := s.repo.Schema()
-	var query string
-	if analyze {
-		query = fmt.Sprintf("VACUUM ANALYZE %s.%s", schema, tableName)
-	} else {
-		query = fmt.Sprintf("VACUUM %s.%s", schema, tableName)
-	}
-
-	_, err := s.repo.DB().ExecContext(ctx, query)
-	return err
-}
-
-// executeAnalyze executes ANALYZE on the specified table.
-func (s *MaintenanceService) executeAnalyze(ctx context.Context, tableName string) error {
-	if !types.IsValidIdentifier(tableName) {
-		return types.NewValidationError("table", fmt.Sprintf("invalid table name: %s", tableName))
-	}
-
-	schema := s.repo.Schema()
-	query := fmt.Sprintf("ANALYZE %s.%s", schema, tableName)
-	_, err := s.repo.DB().ExecContext(ctx, query)
-	return err
-}
-
-// Async operations.
-
-// maintenanceTask defines parameters for a generic maintenance operation.
-type maintenanceTask struct {
-	operationName string                                        // "VACUUM", "VACUUM ANALYZE", "ANALYZE"
-	tables        []string                                      // Requested tables (empty = auto-select)
-	autoSelect    func(TableHealth) bool                        // Auto-selection criteria
-	execute       func(ctx context.Context, table string) error // Execute operation on a table
-	analyzed      bool                                          // Whether this operation includes ANALYZE
-}
-
-// Status returns the current state and result of the last maintenance operation.
-func (s *MaintenanceService) Status() *MaintenanceStatus {
-	s.statusMu.RLock()
-	defer s.statusMu.RUnlock()
-
-	if s.status == nil {
-		return &MaintenanceStatus{Running: s.runner.IsRunning()}
-	}
-
-	status := *s.status
-	status.Running = s.runner.IsRunning()
-	return &status
-}
-
-// StartVacuum starts an async vacuum operation.
-// Returns an error if a maintenance operation is already running.
-func (s *MaintenanceService) StartVacuum(opts VacuumOptions) error {
-	if !s.runner.TryStart() {
-		return types.NewConflictError("maintenance", "maintenance operation already in progress")
-	}
-
-	statusKey, opName := "vacuum", "VACUUM"
-	if opts.Analyze {
-		statusKey, opName = "vacuum_analyze", "VACUUM ANALYZE"
-	}
-	s.initStatus(statusKey)
-
-	cfg := s.config.Maintenance
-	task := maintenanceTask{
-		operationName: opName,
-		tables:        opts.Tables,
-		autoSelect: func(t TableHealth) bool {
-			return t.DeadTupleRatio > cfg.GetBloatThreshold() || t.DeadTuples > cfg.GetDeadTupleThreshold()
-		},
-		execute: func(ctx context.Context, table string) error {
-			return s.executeVacuum(ctx, table, opts.Analyze)
-		},
-		analyzed: opts.Analyze,
-	}
-
-	s.runner.Go(func() {
-		ctx, cancel := s.runner.Context(s.config.Maintenance.GetTimeout())
-		defer cancel()
-		s.runMaintenance(ctx, task)
-	})
-	return nil
-}
-
-// StartAnalyze starts an async analyze operation.
-// Returns an error if a maintenance operation is already running.
-func (s *MaintenanceService) StartAnalyze(tableNames []string) error {
-	if !s.runner.TryStart() {
-		return types.NewConflictError("maintenance", "maintenance operation already in progress")
-	}
-
-	s.initStatus("analyze")
-
-	cfg := s.config.Maintenance
-	task := maintenanceTask{
-		operationName: "ANALYZE",
-		tables:        tableNames,
-		autoSelect: func(t TableHealth) bool {
-			if t.LastAnalyze == nil && t.LastAutoanalyze == nil && t.RowCount > 0 {
-				return true
-			}
-			if t.RowCount > 0 {
-				threshold := t.RowCount * int64(cfg.GetStaleStatsThreshold()) / 100
-				if t.ModSinceAnalyze > threshold {
-					return true
-				}
-			}
-			return false
-		},
-		execute: func(ctx context.Context, table string) error {
-			return s.executeAnalyze(ctx, table)
-		},
-		analyzed: true,
-	}
-
-	s.runner.Go(func() {
-		ctx, cancel := s.runner.Context(s.config.Maintenance.GetTimeout())
-		defer cancel()
-		s.runMaintenance(ctx, task)
-	})
-	return nil
-}
-
-// initStatus initializes the status for a new maintenance operation.
-func (s *MaintenanceService) initStatus(operation string) {
-	now := time.Now()
-	s.statusMu.Lock()
-	s.status = &MaintenanceStatus{
-		Operation: operation,
-		StartedAt: &now,
-	}
-	s.statusMu.Unlock()
-}
-
-// runMaintenance executes a maintenance task. Context is managed by the caller via runner.Go().
-func (s *MaintenanceService) runMaintenance(ctx context.Context, task maintenanceTask) {
-	mctx, err := s.newMaintenanceContext(ctx)
-	if err != nil {
-		s.completeWithError(err.Error())
-		return
-	}
-
-	tables, skipped := mctx.selectTablesToProcess(task.tables, task.autoSelect)
-
-	response := &MaintenanceResponse{
-		ExecutedAt:    time.Now(),
-		Results:       skipped,
-		TablesTotal:   len(tables) + len(skipped),
-		TablesSkipped: len(skipped),
-	}
-
-	s.statusMu.Lock()
-	s.status.TablesTotal = response.TablesTotal
-	s.statusMu.Unlock()
-
-	for i := range tables {
-		// Abort early if operation was cancelled
-		if ctx.Err() != nil {
-			s.completeWithError("operation cancelled")
-			return
-		}
-
-		s.statusMu.Lock()
-		s.status.CurrentTable = tables[i].Name
-		s.status.TablesDone = i
-		s.statusMu.Unlock()
-
-		result := MaintenanceResult{
-			Table:          tables[i].Name,
-			DeadTuples:     tables[i].DeadTuples,
-			DeadTupleRatio: tables[i].DeadTupleRatio,
-			Analyzed:       task.analyzed,
-		}
-
-		start := time.Now()
-		err := task.execute(ctx, tables[i].Name)
-		result.Duration = time.Since(start).Round(time.Millisecond).String()
-
-		if err != nil {
-			result.Success = false
-			result.Message = fmt.Sprintf("%s failed on '%s': %v", task.operationName, tables[i].Name, err)
-			response.TablesFailed++
-		} else {
-			result.Success = true
-			result.Message = fmt.Sprintf("%s completed successfully on '%s'", task.operationName, tables[i].Name)
-			response.TablesSuccess++
-		}
-
-		response.Results = append(response.Results, result)
-	}
-
-	s.completeWithResult(response)
-}
-
-// completeWithResult marks the maintenance operation as completed with a result.
-func (s *MaintenanceService) completeWithResult(result *MaintenanceResponse) {
-	now := time.Now()
-	s.statusMu.Lock()
-	s.status.EndedAt = &now
-	s.status.Success = true
-	s.status.CurrentTable = ""
-	s.status.TablesDone = s.status.TablesTotal
-	s.status.LastResult = result
-	s.statusMu.Unlock()
-
-	s.notifyMaintenance()
-}
-
-// completeWithError marks the maintenance operation as completed with an error.
-func (s *MaintenanceService) completeWithError(errMsg string) {
-	now := time.Now()
-	s.statusMu.Lock()
-	s.status.EndedAt = &now
-	s.status.Success = false
-	s.status.CurrentTable = ""
-	s.status.Error = errMsg
-	s.statusMu.Unlock()
-
-	s.notifyMaintenance()
-}
-
-// notifyMaintenance sends a maintenance notification based on the current status.
-func (s *MaintenanceService) notifyMaintenance() {
-	st := s.Status()
-	r := &notify.MaintenanceResult{
-		Success:   st.Success,
-		Operation: st.Operation,
-		StartedAt: st.StartedAt,
-		Error:     st.Error,
-	}
-
-	if st.LastResult != nil {
-		r.TablesTotal = st.LastResult.TablesTotal
-		r.TablesOK = st.LastResult.TablesSuccess
-		r.TablesFailed = st.LastResult.TablesFailed
-
-		for _, tr := range st.LastResult.Results {
-			r.Tables = append(r.Tables, notify.MaintenanceTableResult{
-				Table:          tr.Table,
-				Success:        tr.Success,
-				Message:        tr.Message,
-				Duration:       tr.Duration,
-				DeadTuples:     tr.DeadTuples,
-				DeadTupleRatio: tr.DeadTupleRatio,
-				Skipped:        tr.Skipped,
-				SkippedReason:  tr.SkippedReason,
-			})
-		}
-	}
-
-	s.notify.NotifyMaintenanceResult(r)
 }

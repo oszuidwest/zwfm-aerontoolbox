@@ -70,9 +70,6 @@ func (s *Server) Start(port string) error {
 				// Maintenance endpoints
 				r.Route("/maintenance", func(r chi.Router) {
 					r.Get("/health", s.handleDatabaseHealth)
-					r.Post("/vacuum", s.handleVacuum)
-					r.Post("/analyze", s.handleAnalyze)
-					r.Get("/status", s.handleMaintenanceStatus)
 				})
 
 				// Backup endpoints

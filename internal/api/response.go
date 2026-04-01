@@ -16,7 +16,7 @@ type Response struct {
 	Error   string `json:"error,omitempty"`
 }
 
-// AsyncStartResponse is the response for async operations (backup, vacuum, analyze).
+// AsyncStartResponse is the response for async operations (backup).
 type AsyncStartResponse struct {
 	Message string `json:"message"`
 	Check   string `json:"check"`

@@ -205,12 +205,27 @@ jobs:
 
       - name: Start API server
         run: |
-          ./zwfm-aerontoolbox -config=test_config.json -port=${{ env.API_PORT }} &
+          ./zwfm-aerontoolbox -config=test_config.json -port=${{ env.API_PORT }} > /tmp/api_startup.log 2>&1 &
           echo $! > api.pid
+          STARTED=false
           for i in {1..30}; do
-            curl -sf http://localhost:${{ env.API_PORT }}/api/health > /dev/null 2>&1 && break
+            if curl -sf http://localhost:${{ env.API_PORT }}/api/health > /dev/null 2>&1; then
+              STARTED=true
+              break
+            fi
+            # Check if process is still alive
+            if ! kill -0 $(cat api.pid) 2>/dev/null; then
+              echo "::error::API server process died during startup"
+              cat /tmp/api_startup.log
+              exit 1
+            fi
             sleep 1
           done
+          if [ "$STARTED" = "false" ]; then
+            echo "::error::API server did not become ready within 30 seconds"
+            cat /tmp/api_startup.log
+            exit 1
+          fi
           echo "API server gestart op poort ${{ env.API_PORT }}"
 
       # ==================== DATABASE TESTS ====================
@@ -686,188 +701,173 @@ jobs:
         run: |
           echo "Checking table health fields"
           RESPONSE=$(curl -s -H "X-API-Key: ${{ env.API_KEY }}" http://localhost:${{ env.API_PORT }}/api/db/maintenance/health)
-          # Check for new fields: dead_tuple_ratio, modifications_since_analyze, needs_vacuum, needs_analyze
           FIRST_TABLE=$(echo "$RESPONSE" | jq -r '.data.tables[0]')
           HAS_DTR=$(echo "$FIRST_TABLE" | jq 'has("dead_tuple_ratio")')
           HAS_MSA=$(echo "$FIRST_TABLE" | jq 'has("modifications_since_analyze")')
           HAS_NV=$(echo "$FIRST_TABLE" | jq 'has("needs_vacuum")')
           HAS_NA=$(echo "$FIRST_TABLE" | jq 'has("needs_analyze")')
           if [ "$HAS_DTR" = "true" ] && [ "$HAS_MSA" = "true" ] && [ "$HAS_NV" = "true" ] && [ "$HAS_NA" = "true" ]; then
-            echo "Alle nieuwe tabel health velden aanwezig"
+            echo "Alle tabel health velden aanwezig"
           else
-            echo "::error::Nieuwe tabel health velden ontbreken"
+            echo "::error::Tabel health velden ontbreken"
             echo "First table: $FIRST_TABLE"
             exit 1
           fi
 
-      - name: "Maintenance: Status endpoint (no operation running)"
+      - name: "Maintenance: Health endpoint shows connection info"
         if: matrix.suite == 'maintenance'
         run: |
-          echo "GET /api/db/maintenance/status"
-          RESPONSE=$(curl -s -H "X-API-Key: ${{ env.API_KEY }}" http://localhost:${{ env.API_PORT }}/api/db/maintenance/status)
-          SUCCESS=$(echo "$RESPONSE" | jq -r '.success')
-          RUNNING=$(echo "$RESPONSE" | jq -r '.data.running')
-          if [ "$SUCCESS" = "true" ] && [ "$RUNNING" = "false" ]; then
-            echo "Status endpoint OK - geen operatie actief"
+          echo "Checking connection usage fields"
+          RESPONSE=$(curl -s -H "X-API-Key: ${{ env.API_KEY }}" http://localhost:${{ env.API_PORT }}/api/db/maintenance/health)
+          DATA=$(echo "$RESPONSE" | jq '.data')
+          ACTIVE=$(echo "$DATA" | jq '.active_connections')
+          MAX=$(echo "$DATA" | jq '.max_connections')
+          PCT=$(echo "$DATA" | jq '.connection_usage_pct')
+          HAS_LRQ=$(echo "$DATA" | jq 'has("long_running_queries")')
+          if [ "$ACTIVE" -ge 1 ] && [ "$MAX" -gt 0 ] && [ "$HAS_LRQ" = "true" ]; then
+            echo "Connection info OK - active: $ACTIVE, max: $MAX, pct: $PCT"
           else
-            echo "::error::Status endpoint gefaald"
-            echo "Response: $RESPONSE"
+            echo "::error::Connection info velden ontbreken of ongeldig"
+            echo "Data: $DATA"
             exit 1
           fi
 
-      - name: "Maintenance: Start vacuum (async, returns 202)"
+      - name: "Maintenance: Long-running query detection"
         if: matrix.suite == 'maintenance'
         run: |
-          echo "POST /api/db/maintenance/vacuum (table=artist)"
-          HTTP_CODE=$(curl -s -o /tmp/vacuum_response.json -w "%{http_code}" -X POST \
-            -H "X-API-Key: ${{ env.API_KEY }}" \
-            -H 'Content-Type: application/json' \
-            http://localhost:${{ env.API_PORT }}/api/db/maintenance/vacuum \
-            -d '{"tables": ["artist"]}')
-          RESPONSE=$(cat /tmp/vacuum_response.json)
-          if [ "$HTTP_CODE" = "202" ]; then
-            echo "Vacuum gestart (202 Accepted)"
-          else
-            echo "::error::Verwachtte 202, kreeg $HTTP_CODE"
-            echo "Response: $RESPONSE"
-            exit 1
-          fi
-          # Wait for completion
+          echo "Testing long-running query detection via pg_sleep"
+          # Start a long-running query in the background (sleeps 30 seconds)
+          PGPASSWORD=aeron123 psql -h localhost -p 5433 -U aeron -d aeron_db -c "SELECT pg_sleep(30);" &
+          SLEEP_PID=$!
+
+          # Give it a moment to register in pg_stat_activity
           sleep 2
 
-      - name: "Maintenance: Check status shows completed vacuum"
-        if: matrix.suite == 'maintenance'
-        run: |
-          echo "GET /api/db/maintenance/status (after vacuum)"
-          RESPONSE=$(curl -s -H "X-API-Key: ${{ env.API_KEY }}" http://localhost:${{ env.API_PORT }}/api/db/maintenance/status)
-          RUNNING=$(echo "$RESPONSE" | jq -r '.data.running')
-          OPERATION=$(echo "$RESPONSE" | jq -r '.data.operation')
-          TABLES_SUCCESS=$(echo "$RESPONSE" | jq -r '.data.last_result.tables_success')
-          if [ "$RUNNING" = "false" ] && [ "$TABLES_SUCCESS" -ge 0 ]; then
-            echo "Vacuum voltooid - operation: $OPERATION, tables_success: $TABLES_SUCCESS"
+          # Query health endpoint (default threshold is 10s, but query just started ~2s ago)
+          # Use a config with a very low threshold to ensure detection
+          RESPONSE=$(curl -s -H "X-API-Key: ${{ env.API_KEY }}" http://localhost:${{ env.API_PORT }}/api/db/maintenance/health)
+          LRQ_COUNT=$(echo "$RESPONSE" | jq '.data.long_running_queries | length')
+
+          # Clean up the background query
+          kill $SLEEP_PID 2>/dev/null || true
+          wait $SLEEP_PID 2>/dev/null || true
+
+          # The query ran for ~2s which is under the default 10s threshold,
+          # so we mainly verify the field is a valid array. For actual detection
+          # we would need to wait 10+ seconds, but we can verify the structure.
+          if [ "$LRQ_COUNT" -ge 0 ]; then
+            echo "Long-running queries field OK (count: $LRQ_COUNT)"
+            # If it was detected (threshold might be low), verify structure
+            if [ "$LRQ_COUNT" -gt 0 ]; then
+              FIRST=$(echo "$RESPONSE" | jq '.data.long_running_queries[0]')
+              HAS_PID=$(echo "$FIRST" | jq 'has("pid")')
+              HAS_DUR=$(echo "$FIRST" | jq 'has("duration")')
+              HAS_QRY=$(echo "$FIRST" | jq 'has("query")')
+              HAS_STATE=$(echo "$FIRST" | jq 'has("state")')
+              if [ "$HAS_PID" = "true" ] && [ "$HAS_DUR" = "true" ] && [ "$HAS_QRY" = "true" ] && [ "$HAS_STATE" = "true" ]; then
+                echo "Long-running query structure OK"
+              else
+                echo "::error::Long-running query velden ontbreken"
+                echo "First: $FIRST"
+                exit 1
+              fi
+            fi
           else
-            echo "::error::Vacuum status check gefaald"
+            echo "::error::long_running_queries is geen array"
             echo "Response: $RESPONSE"
             exit 1
           fi
 
-      - name: "Maintenance: Start analyze (async, returns 202)"
+      - name: "Maintenance: Long-running query detected with low threshold"
         if: matrix.suite == 'maintenance'
         run: |
-          echo "POST /api/db/maintenance/analyze (table=artist)"
-          HTTP_CODE=$(curl -s -o /tmp/analyze_response.json -w "%{http_code}" -X POST \
-            -H "X-API-Key: ${{ env.API_KEY }}" \
-            -H 'Content-Type: application/json' \
-            http://localhost:${{ env.API_PORT }}/api/db/maintenance/analyze \
-            -d '{"tables": ["artist"]}')
-          RESPONSE=$(cat /tmp/analyze_response.json)
-          if [ "$HTTP_CODE" = "202" ]; then
-            echo "Analyze gestart (202 Accepted)"
-          else
-            echo "::error::Verwachtte 202, kreeg $HTTP_CODE"
-            echo "Response: $RESPONSE"
-            exit 1
-          fi
-          # Wait for completion
-          sleep 2
-
-      - name: "Maintenance: Vacuum with analyze option"
-        if: matrix.suite == 'maintenance'
-        run: |
-          echo "POST /api/db/maintenance/vacuum (table=track, analyze=true)"
-          HTTP_CODE=$(curl -s -o /tmp/vacuum_analyze_response.json -w "%{http_code}" -X POST \
-            -H "X-API-Key: ${{ env.API_KEY }}" \
-            -H 'Content-Type: application/json' \
-            http://localhost:${{ env.API_PORT }}/api/db/maintenance/vacuum \
-            -d '{"tables": ["track"], "analyze": true}')
-          if [ "$HTTP_CODE" = "202" ]; then
-            echo "Vacuum met analyze gestart (202 Accepted)"
-            sleep 2
-            # Check status
-            STATUS=$(curl -s -H "X-API-Key: ${{ env.API_KEY }}" http://localhost:${{ env.API_PORT }}/api/db/maintenance/status)
-            OPERATION=$(echo "$STATUS" | jq -r '.data.operation')
-            echo "Operation was: $OPERATION"
-          else
-            echo "::error::Verwachtte 202, kreeg $HTTP_CODE"
-            exit 1
-          fi
-
-      - name: "Maintenance: Concurrent operation rejected"
-        if: matrix.suite == 'maintenance'
-        run: |
-          echo "Testing concurrent operation rejection"
-          # Start two vacuum requests simultaneously - one should get 409
-          # Using background processes ensures we catch the race condition
-          curl -s -o /tmp/vacuum1.json -w "\n%{http_code}" -X POST \
-            -H "X-API-Key: ${{ env.API_KEY }}" \
-            -H 'Content-Type: application/json' \
-            http://localhost:${{ env.API_PORT }}/api/db/maintenance/vacuum \
-            -d '{"tables": ["artist"]}' > /tmp/r1.txt &
-          PID1=$!
-
-          curl -s -o /tmp/vacuum2.json -w "\n%{http_code}" -X POST \
-            -H "X-API-Key: ${{ env.API_KEY }}" \
-            -H 'Content-Type: application/json' \
-            http://localhost:${{ env.API_PORT }}/api/db/maintenance/vacuum \
-            -d '{"tables": ["track"]}' > /tmp/r2.txt &
-          PID2=$!
-
-          wait $PID1 $PID2
-
-          # Extract HTTP codes (last line of output)
-          HTTP1=$(tail -1 /tmp/r1.txt)
-          HTTP2=$(tail -1 /tmp/r2.txt)
-          echo "Request 1 HTTP: $HTTP1, Request 2 HTTP: $HTTP2"
-
-          # Exactly one should succeed (202) and one should fail (409)
-          # Or both could succeed if the first completed before the second started (unlikely but valid)
-          GOT_202=0
-          GOT_409=0
-          [ "$HTTP1" = "202" ] && GOT_202=$((GOT_202 + 1))
-          [ "$HTTP2" = "202" ] && GOT_202=$((GOT_202 + 1))
-          [ "$HTTP1" = "409" ] && GOT_409=$((GOT_409 + 1))
-          [ "$HTTP2" = "409" ] && GOT_409=$((GOT_409 + 1))
-
-          echo "Got $GOT_202 x 202 (Accepted) and $GOT_409 x 409 (Conflict)"
-
-          if [ "$GOT_409" -ge 1 ]; then
-            # At least one request was rejected - concurrent protection works
-            echo "Correct: concurrent operatie correct afgehandeld"
-            # Verify the 409 response has the expected error message
-            if [ "$HTTP1" = "409" ]; then
-              ERROR=$(jq -r '.error' /tmp/vacuum1.json)
-            else
-              ERROR=$(jq -r '.error' /tmp/vacuum2.json)
-            fi
-            if echo "$ERROR" | grep -q "maintenance operation already in progress"; then
-              echo "Correct: foutmelding bevat 'maintenance operation already in progress'"
-            else
-              echo "::warning::Verwachtte 'maintenance operation already in progress' in foutmelding, kreeg: $ERROR"
-            fi
-          elif [ "$GOT_202" -eq 2 ]; then
-            # Both succeeded - first completed before second started (race condition timing)
-            # This is technically correct behavior but makes test less useful
-            echo "::warning::Beide requests slaagden (202) - eerste was al klaar voor tweede startte"
-            echo "Dit is correct gedrag maar test was niet effectief"
-          else
-            echo "::error::Onverwachte HTTP codes: $HTTP1 en $HTTP2"
-            echo "Response 1: $(cat /tmp/vacuum1.json)"
-            echo "Response 2: $(cat /tmp/vacuum2.json)"
-            exit 1
-          fi
-
-          # Wait for any running operation to complete
-          for i in {1..30}; do
-            RUNNING=$(curl -s -H "X-API-Key: ${{ env.API_KEY }}" \
-              http://localhost:${{ env.API_PORT }}/api/db/maintenance/status | jq -r '.data.running')
-            [ "$RUNNING" = "false" ] && break
+          echo "Testing detection with 1 second threshold"
+          # Stop current API server
+          kill -9 $(cat api.pid) 2>/dev/null || true
+          for i in {1..10}; do
+            if ! lsof -i:${{ env.API_PORT }} > /dev/null 2>&1; then break; fi
             sleep 1
+          done
+
+          # Create config with 1 second threshold
+          cat > test_lrq.json << 'EOF'
+          {
+            "database": { "host": "localhost", "port": "5433", "name": "aeron_db", "user": "aeron", "password": "aeron123", "schema": "aeron", "sslmode": "disable" },
+            "image": { "target_width": 1280, "target_height": 1280, "quality": 90, "reject_smaller": true },
+            "api": { "enabled": true, "keys": ["test-api-key-12345"] },
+            "maintenance": { "long_query_threshold_seconds": 1 }
+          }
+          EOF
+
+          # Restart with low threshold
+          ./zwfm-aerontoolbox -config=test_lrq.json -port=${{ env.API_PORT }} > /tmp/lrq_output.log 2>&1 &
+          echo $! > api.pid
+          for i in {1..30}; do
+            curl -sf http://localhost:${{ env.API_PORT }}/api/health > /dev/null 2>&1 && break
+            sleep 1
+          done
+
+          # Start a query that sleeps 30 seconds
+          PGPASSWORD=aeron123 psql -h localhost -p 5433 -U aeron -d aeron_db -c "SELECT pg_sleep(30);" &
+          SLEEP_PID=$!
+          sleep 3
+
+          # Now the query has been running ~3s, threshold is 1s, should be detected
+          RESPONSE=$(curl -s -H "X-API-Key: ${{ env.API_KEY }}" http://localhost:${{ env.API_PORT }}/api/db/maintenance/health)
+          LRQ_COUNT=$(echo "$RESPONSE" | jq '.data.long_running_queries | length')
+
+          # Clean up
+          kill $SLEEP_PID 2>/dev/null || true
+          wait $SLEEP_PID 2>/dev/null || true
+
+          if [ "$LRQ_COUNT" -ge 1 ]; then
+            QUERY_TEXT=$(echo "$RESPONSE" | jq -r '.data.long_running_queries[0].query')
+            echo "Correct: $LRQ_COUNT langlopende query gedetecteerd"
+            echo "Query: $QUERY_TEXT"
+            if echo "$QUERY_TEXT" | grep -qi "pg_sleep"; then
+              echo "Correct: pg_sleep query gedetecteerd"
+            else
+              echo "::warning::Query bevat geen pg_sleep: $QUERY_TEXT"
+            fi
+          else
+            echo "::error::Geen langlopende query gedetecteerd met threshold van 1s"
+            echo "Response: $(echo "$RESPONSE" | jq '.data.long_running_queries')"
+            exit 1
+          fi
+
+          # Stop test server and restart original
+          kill -9 $(cat api.pid) 2>/dev/null || true
+          for i in {1..10}; do
+            if ! lsof -i:${{ env.API_PORT }} > /dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          ./zwfm-aerontoolbox -config=test_config.json -port=${{ env.API_PORT }} > /tmp/api_output.log 2>&1 &
+          echo $! > api.pid
+          for i in {1..30}; do
+            curl -sf http://localhost:${{ env.API_PORT }}/api/health > /dev/null 2>&1 && break
+            sleep 1
+          done
+
+      - name: "Maintenance: Removed endpoints return 404"
+        if: matrix.suite == 'maintenance'
+        run: |
+          echo "Checking removed endpoints return 404"
+          for ENDPOINT in "/api/db/maintenance/vacuum" "/api/db/maintenance/analyze" "/api/db/maintenance/status"; do
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+              -H "X-API-Key: ${{ env.API_KEY }}" \
+              http://localhost:${{ env.API_PORT }}$ENDPOINT)
+            if [ "$HTTP_CODE" = "404" ]; then
+              echo "Correct: $ENDPOINT geeft 404"
+            else
+              echo "::error::$ENDPOINT geeft $HTTP_CODE in plaats van 404"
+              exit 1
+            fi
           done
 
       - name: "Maintenance: Scheduler starts correctly"
         if: matrix.suite == 'maintenance'
         run: |
-          echo "Testing maintenance scheduler startup..."
+          echo "Testing health check scheduler startup..."
           # Stop current API server and wait for port to be free
           kill -9 $(cat api.pid) 2>/dev/null || true
           for i in {1..10}; do
@@ -879,7 +879,7 @@ jobs:
             sleep 1
           done
 
-          # Create config with maintenance scheduler enabled
+          # Create config with health check scheduler enabled
           cat > test_scheduler.json << 'EOF'
           {
             "database": { "host": "localhost", "port": "5433", "name": "aeron_db", "user": "aeron", "password": "aeron123", "schema": "aeron", "sslmode": "disable" },
@@ -906,15 +906,15 @@ jobs:
           SUCCESS=$(echo "$RESPONSE" | jq -r '.success')
 
           # Check logs for scheduler started message
-          if grep -q "Scheduler started" /tmp/scheduler_output.log && grep -q "maintenance" /tmp/scheduler_output.log; then
-            echo "Correct: scheduler gestart met maintenance job"
+          if grep -q "Scheduler started" /tmp/scheduler_output.log && grep -q "health-check" /tmp/scheduler_output.log; then
+            echo "Correct: scheduler gestart met health-check job"
           else
             echo "::warning::Scheduler log bericht niet gevonden"
             cat /tmp/scheduler_output.log
           fi
 
           if [ "$SUCCESS" = "true" ]; then
-            echo "Correct: applicatie draait met maintenance scheduler"
+            echo "Correct: applicatie draait met health check scheduler"
           else
             echo "::error::Applicatie start niet correct met scheduler"
             exit 1
