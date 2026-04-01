@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -10,7 +9,6 @@ import (
 	cron "github.com/netresearch/go-cron"
 
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/config"
-	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
 )
 
 // Scheduler manages cron-based scheduled jobs for the application.
@@ -47,9 +45,9 @@ func NewScheduler(ctx context.Context, svc *AeronService) (*Scheduler, error) {
 		}
 	}
 
-	// Register maintenance job if enabled
+	// Register health check job if enabled
 	if cfg.Maintenance.Scheduler.Enabled {
-		if err := s.addJob(cfg.Maintenance.Scheduler, "maintenance", s.runMaintenance); err != nil {
+		if err := s.addJob(cfg.Maintenance.Scheduler, "health-check", s.runHealthCheck); err != nil {
 			return nil, err
 		}
 	}
@@ -123,21 +121,8 @@ func (s *Scheduler) runFileMonitor(_ context.Context) {
 	s.service.FileMonitor.Run()
 }
 
-// runMaintenance performs scheduled VACUUM ANALYZE on tables that need it.
-// The context parameter is available for future use when maintenance operations
-// support context-based cancellation.
-func (s *Scheduler) runMaintenance(_ context.Context) {
-	slog.Info("Scheduled maintenance started")
-
-	if err := s.service.Maintenance.StartVacuum(VacuumOptions{Analyze: true}); err != nil {
-		var conflictErr *types.ConflictError
-		if errors.As(err, &conflictErr) {
-			slog.Info("Scheduled maintenance skipped (already running)")
-		} else {
-			slog.Error("Scheduled maintenance failed to start", "error", err)
-		}
-		return
-	}
-
-	slog.Info("Scheduled maintenance running in background")
+// runHealthCheck performs a scheduled database health check and sends alerts if issues are detected.
+func (s *Scheduler) runHealthCheck(ctx context.Context) {
+	slog.Info("Scheduled health check started")
+	s.service.Maintenance.CheckHealthAndAlert(ctx)
 }

@@ -31,7 +31,8 @@
     "toast_size_warning_bytes": 524288000,
     "stale_stats_threshold_pct": 10,
     "seq_scan_ratio_threshold": 10.0,
-    "timeout_minutes": 30,
+    "connection_usage_threshold_pct": 80,
+    "long_query_threshold_seconds": 10,
     "scheduler": {
       "enabled": false,
       "schedule": "0 4 * * 0"

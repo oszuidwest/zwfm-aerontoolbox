@@ -48,17 +48,18 @@ type APIConfig struct {
 	RequestTimeoutSeconds int      `json:"request_timeout_seconds" validate:"gte=0"`
 }
 
-// MaintenanceConfig contains thresholds and settings for database maintenance operations.
+// MaintenanceConfig contains thresholds and settings for database health monitoring.
 type MaintenanceConfig struct {
-	BloatThreshold           float64         `json:"bloat_threshold" validate:"gte=0,lte=100"`
-	DeadTupleThreshold       int64           `json:"dead_tuple_threshold" validate:"gte=0"`
-	VacuumStalenessDays      int             `json:"vacuum_staleness_days" validate:"gte=0"`
-	MinRowsForRecommendation int64           `json:"min_rows_for_recommendation" validate:"gte=0"`
-	ToastSizeWarningBytes    int64           `json:"toast_size_warning_bytes" validate:"gte=0"`
-	StaleStatsThresholdPct   int             `json:"stale_stats_threshold_pct" validate:"gte=0,lte=100"`
-	SeqScanRatioThreshold    float64         `json:"seq_scan_ratio_threshold" validate:"gte=0"`
-	TimeoutMinutes           int             `json:"timeout_minutes" validate:"gte=0"`
-	Scheduler                SchedulerConfig `json:"scheduler"`
+	BloatThreshold              float64         `json:"bloat_threshold" validate:"gte=0,lte=100"`
+	DeadTupleThreshold          int64           `json:"dead_tuple_threshold" validate:"gte=0"`
+	VacuumStalenessDays         int             `json:"vacuum_staleness_days" validate:"gte=0"`
+	MinRowsForRecommendation    int64           `json:"min_rows_for_recommendation" validate:"gte=0"`
+	ToastSizeWarningBytes       int64           `json:"toast_size_warning_bytes" validate:"gte=0"`
+	StaleStatsThresholdPct      int             `json:"stale_stats_threshold_pct" validate:"gte=0,lte=100"`
+	SeqScanRatioThreshold       float64         `json:"seq_scan_ratio_threshold" validate:"gte=0"`
+	ConnectionUsageThresholdPct int             `json:"connection_usage_threshold_pct" validate:"gte=0,lte=100"`
+	LongQueryThresholdSeconds   int             `json:"long_query_threshold_seconds" validate:"gte=0"`
+	Scheduler                   SchedulerConfig `json:"scheduler"`
 }
 
 // SchedulerConfig contains settings for individual scheduled operations.
@@ -162,24 +163,25 @@ type Config struct {
 }
 
 const (
-	DefaultMaxOpenConnections        = 25
-	DefaultMaxIdleConnections        = 5
-	DefaultConnMaxLifetimeMinutes    = 5
-	DefaultMaxImageDownloadSizeBytes = 50 * 1024 * 1024
-	DefaultRequestTimeoutSeconds     = 30
-	DefaultBloatThreshold            = 10.0
-	DefaultDeadTupleThreshold        = 10000
-	DefaultVacuumStalenessDays       = 7
-	DefaultMinRowsForRecommendation  = 1000
-	DefaultToastSizeWarningBytes     = 500 * 1024 * 1024
-	DefaultStaleStatsThresholdPct    = 10
-	DefaultSeqScanRatioThreshold     = 10.0
-	DefaultMaintenanceTimeoutMinutes = 30
-	DefaultBackupRetentionDays       = 30
-	DefaultBackupMaxBackups          = 10
-	DefaultBackupCompression         = 9
-	DefaultBackupPath                = "./backups"
-	DefaultBackupTimeoutMinutes      = 30
+	DefaultMaxOpenConnections          = 25
+	DefaultMaxIdleConnections          = 5
+	DefaultConnMaxLifetimeMinutes      = 5
+	DefaultMaxImageDownloadSizeBytes   = 50 * 1024 * 1024
+	DefaultRequestTimeoutSeconds       = 30
+	DefaultBloatThreshold              = 10.0
+	DefaultDeadTupleThreshold          = 10000
+	DefaultVacuumStalenessDays         = 7
+	DefaultMinRowsForRecommendation    = 1000
+	DefaultToastSizeWarningBytes       = 500 * 1024 * 1024
+	DefaultStaleStatsThresholdPct      = 10
+	DefaultSeqScanRatioThreshold       = 10.0
+	DefaultConnectionUsageThresholdPct = 80
+	DefaultLongQueryThresholdSeconds   = 10
+	DefaultBackupRetentionDays         = 30
+	DefaultBackupMaxBackups            = 10
+	DefaultBackupCompression           = 9
+	DefaultBackupPath                  = "./backups"
+	DefaultBackupTimeoutMinutes        = 30
 )
 
 // GetMaxDownloadBytes returns the maximum allowed image download size in bytes.
@@ -247,9 +249,14 @@ func (c *MaintenanceConfig) GetSeqScanRatioThreshold() float64 {
 	return cmp.Or(c.SeqScanRatioThreshold, DefaultSeqScanRatioThreshold)
 }
 
-// GetTimeout returns the maximum duration for maintenance operations.
-func (c *MaintenanceConfig) GetTimeout() time.Duration {
-	return time.Duration(cmp.Or(c.TimeoutMinutes, DefaultMaintenanceTimeoutMinutes)) * time.Minute
+// GetConnectionUsageThreshold returns the connection usage percentage that triggers alerts.
+func (c *MaintenanceConfig) GetConnectionUsageThreshold() int {
+	return cmp.Or(c.ConnectionUsageThresholdPct, DefaultConnectionUsageThresholdPct)
+}
+
+// GetLongQueryThresholdSeconds returns the duration in seconds after which a query is considered long-running.
+func (c *MaintenanceConfig) GetLongQueryThresholdSeconds() int {
+	return cmp.Or(c.LongQueryThresholdSeconds, DefaultLongQueryThresholdSeconds)
 }
 
 // GetPath returns the directory path where backup files are stored.
