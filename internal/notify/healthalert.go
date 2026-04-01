@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
 )
 
 // HealthAlertResult contains the information needed to send a health check notification.
@@ -12,16 +14,8 @@ type HealthAlertResult struct {
 	ActiveConnections  int
 	MaxConnections     int
 	ConnectionUsagePct float64
-	LongRunningQueries []LongRunningQueryAlert
+	LongRunningQueries []types.LongRunningQuery
 	CheckedAt          time.Time
-}
-
-// LongRunningQueryAlert contains information about a single long-running query.
-type LongRunningQueryAlert struct {
-	PID      int
-	Duration string
-	Query    string
-	State    string
 }
 
 // HasIssues returns true if the health check found any problems.
@@ -45,7 +39,7 @@ func (s *NotificationService) NotifyHealthCheckError(err error) {
 	var b strings.Builder
 	b.WriteString("Database health check mislukt\n\n")
 	b.WriteString("De health check kon niet worden uitgevoerd. Controleer de databaseverbinding.\n\n")
-	fmt.Fprintf(&b, "Tijdstip:  %s\n", time.Now().Format("2006-01-02 15:04:05"))
+	fmt.Fprintf(&b, "Tijdstip:  %s\n", time.Now().Format(timeFormat))
 	fmt.Fprintf(&b, "Fout:      %s\n", err.Error())
 
 	s.sendAsync(subject, b.String())
@@ -88,7 +82,7 @@ func formatHealthAlert(r *HealthAlertResult) (subject, body string) {
 
 	var b strings.Builder
 	b.WriteString("Database health check meldt problemen\n\n")
-	fmt.Fprintf(&b, "Tijdstip:     %s\n", r.CheckedAt.Format("2006-01-02 15:04:05"))
+	fmt.Fprintf(&b, "Tijdstip:     %s\n", r.CheckedAt.Format(timeFormat))
 	fmt.Fprintf(&b, "Connecties:   %d / %d (%.0f%%)\n\n", r.ActiveConnections, r.MaxConnections, r.ConnectionUsagePct) //nolint:misspell // Dutch word
 
 	if len(r.LongRunningQueries) > 0 {
@@ -118,7 +112,7 @@ func formatHealthRecovery(r *HealthAlertResult) (subject, body string) {
 	var b strings.Builder
 	b.WriteString("Database health check hersteld\n\n")
 	b.WriteString("Alle eerder gemelde problemen zijn opgelost.\n\n")
-	fmt.Fprintf(&b, "Tijdstip:     %s\n", r.CheckedAt.Format("2006-01-02 15:04:05"))
+	fmt.Fprintf(&b, "Tijdstip:     %s\n", r.CheckedAt.Format(timeFormat))
 	fmt.Fprintf(&b, "Connecties:   %d / %d (%.0f%%)\n", r.ActiveConnections, r.MaxConnections, r.ConnectionUsagePct) //nolint:misspell // Dutch word
 
 	return subject, b.String()

@@ -12,6 +12,9 @@ import (
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/config"
 )
 
+// timeFormat is the standard timestamp format for notification emails.
+const timeFormat = "2006-01-02 15:04:05"
+
 // Input types for notification methods (avoids circular dependency with service package).
 
 // BackupResult contains the information needed to send a backup notification.
@@ -169,7 +172,7 @@ func (s *NotificationService) SendTestEmail(ctx context.Context) error {
 	recipients := ParseRecipients(s.config.Notifications.Email.Recipients)
 	subject := "[TEST] Aeron Toolbox - E-mailnotificatie test"
 	body := fmt.Sprintf("Dit is een test-e-mail van Aeron Toolbox.\n\nTijdstip: %s\n\nAls u deze e-mail ontvangt, zijn de notificatie-instellingen correct geconfigureerd.",
-		time.Now().Format("2006-01-02 15:04:05"))
+		time.Now().Format(timeFormat))
 
 	return client.SendMail(ctx, recipients, subject, body)
 }
@@ -252,7 +255,7 @@ func (s *NotificationService) formatBackupFailure(r *BackupResult) (subject, bod
 	var b strings.Builder
 	b.WriteString("Backup mislukt\n\n")
 	if r.StartedAt != nil {
-		fmt.Fprintf(&b, "Tijdstip:       %s\n", r.StartedAt.Format("2006-01-02 15:04:05"))
+		fmt.Fprintf(&b, "Tijdstip:       %s\n", r.StartedAt.Format(timeFormat))
 	}
 	if r.StartedAt != nil && r.EndedAt != nil {
 		fmt.Fprintf(&b, "Duur:           %s\n", r.EndedAt.Sub(*r.StartedAt).Round(time.Second))
@@ -274,7 +277,7 @@ func (s *NotificationService) formatBackupRecovery(r *BackupResult) (subject, bo
 	b.WriteString("Backup hersteld\n\n")
 	b.WriteString("De backup is weer succesvol na een eerdere fout.\n\n")
 	if r.StartedAt != nil {
-		fmt.Fprintf(&b, "Tijdstip:       %s\n", r.StartedAt.Format("2006-01-02 15:04:05"))
+		fmt.Fprintf(&b, "Tijdstip:       %s\n", r.StartedAt.Format(timeFormat))
 	}
 	if r.StartedAt != nil && r.EndedAt != nil {
 		fmt.Fprintf(&b, "Duur:           %s\n", r.EndedAt.Sub(*r.StartedAt).Round(time.Second))
@@ -291,7 +294,7 @@ func (s *NotificationService) formatS3Failure(filename string, r *S3SyncResult) 
 
 	var b strings.Builder
 	b.WriteString("S3-synchronisatie mislukt\n\n")
-	fmt.Fprintf(&b, "Tijdstip:       %s\n", time.Now().Format("2006-01-02 15:04:05"))
+	fmt.Fprintf(&b, "Tijdstip:       %s\n", time.Now().Format(timeFormat))
 	if filename != "" {
 		fmt.Fprintf(&b, "Bestandsnaam:   %s\n", filename)
 	}
@@ -308,7 +311,7 @@ func (s *NotificationService) formatS3Recovery(filename string) (subject, body s
 	var b strings.Builder
 	b.WriteString("S3-synchronisatie hersteld\n\n")
 	b.WriteString("De S3-synchronisatie is weer succesvol na een eerdere fout.\n\n")
-	fmt.Fprintf(&b, "Tijdstip:       %s\n", time.Now().Format("2006-01-02 15:04:05"))
+	fmt.Fprintf(&b, "Tijdstip:       %s\n", time.Now().Format(timeFormat))
 	if filename != "" {
 		fmt.Fprintf(&b, "Bestandsnaam:   %s\n", filename)
 	}

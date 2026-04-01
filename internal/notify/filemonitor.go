@@ -47,7 +47,7 @@ func formatFileAlerts(alerts []FileAlertResult) (subject, body string) {
 
 	var b strings.Builder
 	b.WriteString("Bestandscontrole mislukt\n\n")
-	fmt.Fprintf(&b, "Tijdstip:  %s\n", alerts[0].CheckedAt.Format("2006-01-02 15:04:05"))
+	fmt.Fprintf(&b, "Tijdstip:  %s\n", alerts[0].CheckedAt.Format(timeFormat))
 	fmt.Fprintf(&b, "Aantal:    %d\n\n", len(alerts))
 
 	for i := range alerts {
@@ -78,7 +78,7 @@ func formatFileRecoveries(recoveries []FileAlertResult) (subject, body string) {
 
 	var b strings.Builder
 	b.WriteString("Bestandscontrole hersteld\n\n")
-	fmt.Fprintf(&b, "Tijdstip:  %s\n", recoveries[0].CheckedAt.Format("2006-01-02 15:04:05"))
+	fmt.Fprintf(&b, "Tijdstip:  %s\n", recoveries[0].CheckedAt.Format(timeFormat))
 	fmt.Fprintf(&b, "Aantal:    %d\n\n", len(recoveries))
 
 	for i := range recoveries {

@@ -36,7 +36,7 @@ type HealthResponse struct {
 	Version        string              `json:"version"`
 	Database       string              `json:"database"`
 	DatabaseStatus string              `json:"database_status"`
-	Notifications  *NotificationHealth `json:"notifications,omitempty"`
+	Notifications  *NotificationHealth `json:"notifications"`
 	FileMonitor    *FileMonitorHealth  `json:"file_monitor,omitempty"`
 }
 

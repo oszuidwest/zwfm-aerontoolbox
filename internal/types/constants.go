@@ -22,6 +22,14 @@ const (
 	TableTrack Table = "track"
 )
 
+// LongRunningQuery represents a query that has been running longer than the configured threshold.
+type LongRunningQuery struct {
+	PID      int    `json:"pid"`
+	Duration string `json:"duration"`
+	Query    string `json:"query"`
+	State    string `json:"state"`
+}
+
 // VoicetrackUserID is the UUID used in Aeron to identify voice tracks.
 const VoicetrackUserID = "021F097E-B504-49BB-9B89-16B64D2E8422"
 

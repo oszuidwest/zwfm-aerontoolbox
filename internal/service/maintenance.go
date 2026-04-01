@@ -30,23 +30,27 @@ func newMaintenanceService(repo *database.Repository, cfg *config.Config, notify
 	}
 }
 
+// noIssuesDetected is a placeholder recommendation inserted for the API response when no problems
+// are found. It is stripped before passing results to the notification system.
+const noIssuesDetected = "No issues detected"
+
 // Health types.
 
 // DatabaseHealth represents the overall health status of the database.
 type DatabaseHealth struct {
-	DatabaseName       string             `json:"database_name"`
-	DatabaseVersion    string             `json:"database_version"`
-	DatabaseSize       string             `json:"database_size"`
-	DatabaseSizeRaw    int64              `json:"database_size_bytes"`
-	SchemaName         string             `json:"schema_name"`
-	ActiveConnections  int                `json:"active_connections"`
-	MaxConnections     int                `json:"max_connections"`
-	ConnectionUsagePct float64            `json:"connection_usage_pct"`
-	Tables             []TableHealth      `json:"tables"`
-	LongRunningQueries []LongRunningQuery `json:"long_running_queries"`
-	NeedsMaintenance   bool               `json:"needs_maintenance"`
-	Recommendations    []string           `json:"recommendations"`
-	CheckedAt          time.Time          `json:"checked_at"`
+	DatabaseName       string                   `json:"database_name"`
+	DatabaseVersion    string                   `json:"database_version"`
+	DatabaseSize       string                   `json:"database_size"`
+	DatabaseSizeRaw    int64                    `json:"database_size_bytes"`
+	SchemaName         string                   `json:"schema_name"`
+	ActiveConnections  int                      `json:"active_connections"`
+	MaxConnections     int                      `json:"max_connections"`
+	ConnectionUsagePct float64                  `json:"connection_usage_pct"`
+	Tables             []TableHealth            `json:"tables"`
+	LongRunningQueries []types.LongRunningQuery `json:"long_running_queries"`
+	NeedsMaintenance   bool                     `json:"needs_maintenance"`
+	Recommendations    []string                 `json:"recommendations"`
+	CheckedAt          time.Time                `json:"checked_at"`
 }
 
 // TableHealth represents health statistics for a single table.
@@ -74,14 +78,6 @@ type TableHealth struct {
 	NeedsAnalyze    bool       `json:"needs_analyze"`
 }
 
-// LongRunningQuery represents a query that has been running longer than the configured threshold.
-type LongRunningQuery struct {
-	PID      int    `json:"pid"`
-	Duration string `json:"duration"`
-	Query    string `json:"query"`
-	State    string `json:"state"`
-}
-
 // tableHealthRow contains health statistics and size information for a database table.
 type tableHealthRow struct {
 	TableName       string     `db:"table_name"`
@@ -101,6 +97,7 @@ type tableHealthRow struct {
 }
 
 // longRunningQueryRow is the database scan target for long-running query detection.
+// Fields must match types.LongRunningQuery exactly (direct type conversion is used).
 type longRunningQueryRow struct {
 	PID      int    `db:"pid"`
 	Duration string `db:"duration"`
@@ -152,6 +149,9 @@ func (s *MaintenanceService) GetHealth(ctx context.Context) (*DatabaseHealth, er
 	health.LongRunningQueries = queries
 
 	health.Recommendations = s.generateRecommendations(health)
+	if len(health.Recommendations) == 0 {
+		health.Recommendations = []string{noIssuesDetected}
+	}
 
 	for i := range tables {
 		if tables[i].NeedsVacuum || tables[i].NeedsAnalyze {
@@ -173,33 +173,19 @@ func (s *MaintenanceService) CheckHealthAndAlert(ctx context.Context) {
 		return
 	}
 
-	cfg := s.config.Maintenance
+	// Strip the API placeholder so the notifier sees an empty slice for "no issues".
+	recs := health.Recommendations
+	if len(recs) == 1 && recs[0] == noIssuesDetected {
+		recs = nil
+	}
+
 	result := &notify.HealthAlertResult{
-		Recommendations:    health.Recommendations,
+		Recommendations:    recs,
 		ActiveConnections:  health.ActiveConnections,
 		MaxConnections:     health.MaxConnections,
 		ConnectionUsagePct: health.ConnectionUsagePct,
+		LongRunningQueries: health.LongRunningQueries,
 		CheckedAt:          health.CheckedAt,
-	}
-
-	// Filter out the "No issues detected" placeholder from recommendations.
-	if len(result.Recommendations) == 1 && result.Recommendations[0] == "No issues detected" {
-		result.Recommendations = nil
-	}
-
-	// Add connection usage as a recommendation if above threshold.
-	if int(health.ConnectionUsagePct) >= cfg.GetConnectionUsageThreshold() {
-		result.Recommendations = append(result.Recommendations,
-			fmt.Sprintf("Connection usage is high: %d/%d (%.0f%%)", health.ActiveConnections, health.MaxConnections, health.ConnectionUsagePct))
-	}
-
-	for _, q := range health.LongRunningQueries {
-		result.LongRunningQueries = append(result.LongRunningQueries, notify.LongRunningQueryAlert{
-			PID:      q.PID,
-			Duration: q.Duration,
-			Query:    q.Query,
-			State:    q.State,
-		})
 	}
 
 	s.notify.NotifyHealthAlert(result)
@@ -240,7 +226,7 @@ func (s *MaintenanceService) getConnectionUsage(ctx context.Context) (active, ma
 }
 
 // getLongRunningQueries returns queries running longer than the configured threshold.
-func (s *MaintenanceService) getLongRunningQueries(ctx context.Context) ([]LongRunningQuery, error) {
+func (s *MaintenanceService) getLongRunningQueries(ctx context.Context) ([]types.LongRunningQuery, error) {
 	threshold := s.config.Maintenance.GetLongQueryThresholdSeconds()
 
 	query := `
@@ -263,9 +249,9 @@ func (s *MaintenanceService) getLongRunningQueries(ctx context.Context) ([]LongR
 		return nil, err
 	}
 
-	queries := make([]LongRunningQuery, 0, len(rows))
+	queries := make([]types.LongRunningQuery, 0, len(rows))
 	for _, row := range rows {
-		queries = append(queries, LongRunningQuery(row))
+		queries = append(queries, types.LongRunningQuery(row))
 	}
 
 	return queries, nil
@@ -364,9 +350,6 @@ func (s *MaintenanceService) generateRecommendations(health *DatabaseHealth) []s
 		recs = append(recs, fmt.Sprintf("Long-running query detected (PID %d, running for %s)", q.PID, q.Duration))
 	}
 
-	if len(recs) == 0 {
-		return []string{"No issues detected"}
-	}
 	return recs
 }
 
