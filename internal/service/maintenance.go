@@ -30,6 +30,9 @@ func newMaintenanceService(repo *database.Repository, cfg *config.Config, notify
 	}
 }
 
+// noIssuesDetected is the placeholder recommendation shown in the API when no problems are found.
+const noIssuesDetected = "No issues detected"
+
 // Health types.
 
 // DatabaseHealth represents the overall health status of the database.
@@ -43,7 +46,7 @@ type DatabaseHealth struct {
 	MaxConnections     int                `json:"max_connections"`
 	ConnectionUsagePct float64            `json:"connection_usage_pct"`
 	Tables             []TableHealth      `json:"tables"`
-	LongRunningQueries []LongRunningQuery `json:"long_running_queries"`
+	LongRunningQueries []types.LongRunningQuery `json:"long_running_queries"`
 	NeedsMaintenance   bool               `json:"needs_maintenance"`
 	Recommendations    []string           `json:"recommendations"`
 	CheckedAt          time.Time          `json:"checked_at"`
@@ -72,14 +75,6 @@ type TableHealth struct {
 	IdxScans        int64      `json:"idx_scans"`
 	NeedsVacuum     bool       `json:"needs_vacuum"`
 	NeedsAnalyze    bool       `json:"needs_analyze"`
-}
-
-// LongRunningQuery represents a query that has been running longer than the configured threshold.
-type LongRunningQuery struct {
-	PID      int    `json:"pid"`
-	Duration string `json:"duration"`
-	Query    string `json:"query"`
-	State    string `json:"state"`
 }
 
 // tableHealthRow contains health statistics and size information for a database table.
@@ -152,6 +147,9 @@ func (s *MaintenanceService) GetHealth(ctx context.Context) (*DatabaseHealth, er
 	health.LongRunningQueries = queries
 
 	health.Recommendations = s.generateRecommendations(health)
+	if len(health.Recommendations) == 0 {
+		health.Recommendations = []string{noIssuesDetected}
+	}
 
 	for i := range tables {
 		if tables[i].NeedsVacuum || tables[i].NeedsAnalyze {
@@ -173,33 +171,19 @@ func (s *MaintenanceService) CheckHealthAndAlert(ctx context.Context) {
 		return
 	}
 
-	cfg := s.config.Maintenance
+	// Strip the API placeholder so the notifier sees an empty slice for "no issues".
+	recs := health.Recommendations
+	if len(recs) == 1 && recs[0] == noIssuesDetected {
+		recs = nil
+	}
+
 	result := &notify.HealthAlertResult{
-		Recommendations:    health.Recommendations,
+		Recommendations:    recs,
 		ActiveConnections:  health.ActiveConnections,
 		MaxConnections:     health.MaxConnections,
 		ConnectionUsagePct: health.ConnectionUsagePct,
+		LongRunningQueries: health.LongRunningQueries,
 		CheckedAt:          health.CheckedAt,
-	}
-
-	// Filter out the "No issues detected" placeholder from recommendations.
-	if len(result.Recommendations) == 1 && result.Recommendations[0] == "No issues detected" {
-		result.Recommendations = nil
-	}
-
-	// Add connection usage as a recommendation if above threshold.
-	if int(health.ConnectionUsagePct) >= cfg.GetConnectionUsageThreshold() {
-		result.Recommendations = append(result.Recommendations,
-			fmt.Sprintf("Connection usage is high: %d/%d (%.0f%%)", health.ActiveConnections, health.MaxConnections, health.ConnectionUsagePct))
-	}
-
-	for _, q := range health.LongRunningQueries {
-		result.LongRunningQueries = append(result.LongRunningQueries, notify.LongRunningQueryAlert{
-			PID:      q.PID,
-			Duration: q.Duration,
-			Query:    q.Query,
-			State:    q.State,
-		})
 	}
 
 	s.notify.NotifyHealthAlert(result)
@@ -240,7 +224,7 @@ func (s *MaintenanceService) getConnectionUsage(ctx context.Context) (active, ma
 }
 
 // getLongRunningQueries returns queries running longer than the configured threshold.
-func (s *MaintenanceService) getLongRunningQueries(ctx context.Context) ([]LongRunningQuery, error) {
+func (s *MaintenanceService) getLongRunningQueries(ctx context.Context) ([]types.LongRunningQuery, error) {
 	threshold := s.config.Maintenance.GetLongQueryThresholdSeconds()
 
 	query := `
@@ -263,9 +247,9 @@ func (s *MaintenanceService) getLongRunningQueries(ctx context.Context) ([]LongR
 		return nil, err
 	}
 
-	queries := make([]LongRunningQuery, 0, len(rows))
+	queries := make([]types.LongRunningQuery, 0, len(rows))
 	for _, row := range rows {
-		queries = append(queries, LongRunningQuery(row))
+		queries = append(queries, types.LongRunningQuery(row))
 	}
 
 	return queries, nil
@@ -364,9 +348,6 @@ func (s *MaintenanceService) generateRecommendations(health *DatabaseHealth) []s
 		recs = append(recs, fmt.Sprintf("Long-running query detected (PID %d, running for %s)", q.PID, q.Duration))
 	}
 
-	if len(recs) == 0 {
-		return []string{"No issues detected"}
-	}
 	return recs
 }
 

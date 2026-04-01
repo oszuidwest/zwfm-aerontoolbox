@@ -15,6 +15,7 @@
   - [Database onderhoud](#database-onderhoud)
   - [Backup-endpoints](#backup-endpoints)
   - [Bestandscontrole](#bestandscontrole)
+  - [Notificaties](#notificaties)
 - [Codevoorbeelden](#codevoorbeelden)
 - [Configuratie](#configuratie)
 
@@ -58,6 +59,8 @@ De Aeron Toolbox API biedt RESTful-endpoints voor het Aeron-radioautomatiserings
 | `/api/db/backups/{filename}` | GET | Specifieke backup downloaden | Ja |
 | `/api/db/backups/{filename}/validate` | GET | Backup integriteit valideren | Ja |
 | `/api/db/backups/{filename}` | DELETE | Backup verwijderen | Ja |
+| **Notificaties** |
+| `/api/notifications/test-email` | POST | Test e-mail versturen | Ja |
 
 ## Authenticatie
 
@@ -135,10 +138,29 @@ Controleer de status van de API.
     "status": "healthy",
     "version": "dev",
     "database": "aeron",
-    "database_status": "connected"
+    "database_status": "connected",
+    "notifications": {
+      "configured": true,
+      "secret_expiry": {
+        "expires_at": "2026-12-01T00:00:00Z",
+        "expires_soon": false,
+        "days_left": 245
+      }
+    }
   }
 }
 ```
+
+Het `notifications`-veld is altijd aanwezig en toont:
+- `configured`: Of de e-mailnotificatie is geconfigureerd
+- `last_error` / `last_error_at`: Laatste fout bij het versturen van e-mail (alleen bij fouten)
+- `secret_expiry`: Verloopinformatie van het Azure AD client secret (alleen indien geconfigureerd)
+  - `expires_at`: Vervaldatum
+  - `expires_soon`: `true` wanneer het secret binnen 30 dagen verloopt
+  - `days_left`: Aantal resterende dagen
+  - `error`: Foutmelding bij ophalen (bijv. onvoldoende rechten)
+
+Wanneer `expires_soon` `true` is, wordt de overall status `"degraded"`.
 
 ---
 
@@ -1075,7 +1097,7 @@ De volgende voorbeelden tonen individuele items uit de `checks`-array voor speci
 > [!NOTE]
 > Het veld `file_exists` is nullable: `true` = bestand bestaat, `false` = bestand niet gevonden, `null` = onbekend (bijv. bij een permissiefout). Controleer het `error`-veld voor details wanneer `file_exists` `null` is.
 
-### Integratie met health-endpoint
+### Integratie met health-endpoint (bestandscontrole)
 
 Wanneer de bestandscontrole is ingeschakeld, toont het health-endpoint (`GET /api/health`) een extra `file_monitor`-veld:
 
@@ -1094,6 +1116,47 @@ Wanneer de bestandscontrole is ingeschakeld, toont het health-endpoint (`GET /ap
 ```
 
 De overall status wordt `"degraded"` wanneer een of meer bestanden verouderd zijn.
+
+---
+
+## Notificaties
+
+### Test e-mail versturen
+
+Verstuurt een test e-mail om de notificatieconfiguratie te valideren. Controleert achtereenvolgens of de configuratie geldig is, of authenticatie bij Microsoft Graph slaagt, en verstuurt vervolgens een testbericht.
+
+**Endpoint:** `POST /api/notifications/test-email`
+**Authenticatie:** Vereist
+
+**Response:** `200 OK`
+```json
+{
+  "message": "Test e-mail succesvol verzonden"
+}
+```
+
+**Foutresponses:**
+
+`400 Bad Request` - Configuratie ongeldig:
+```json
+{
+  "error": "Notification configuration invalid: ..."
+}
+```
+
+`502 Bad Gateway` - Authenticatie mislukt:
+```json
+{
+  "error": "Authentication failed: ..."
+}
+```
+
+`502 Bad Gateway` - Verzenden mislukt:
+```json
+{
+  "error": "Failed to send test email: ..."
+}
+```
 
 ---
 
