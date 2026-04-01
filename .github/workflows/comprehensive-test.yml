@@ -205,12 +205,27 @@ jobs:
 
       - name: Start API server
         run: |
-          ./zwfm-aerontoolbox -config=test_config.json -port=${{ env.API_PORT }} &
+          ./zwfm-aerontoolbox -config=test_config.json -port=${{ env.API_PORT }} > /tmp/api_startup.log 2>&1 &
           echo $! > api.pid
+          STARTED=false
           for i in {1..30}; do
-            curl -sf http://localhost:${{ env.API_PORT }}/api/health > /dev/null 2>&1 && break
+            if curl -sf http://localhost:${{ env.API_PORT }}/api/health > /dev/null 2>&1; then
+              STARTED=true
+              break
+            fi
+            # Check if process is still alive
+            if ! kill -0 $(cat api.pid) 2>/dev/null; then
+              echo "::error::API server process died during startup"
+              cat /tmp/api_startup.log
+              exit 1
+            fi
             sleep 1
           done
+          if [ "$STARTED" = "false" ]; then
+            echo "::error::API server did not become ready within 30 seconds"
+            cat /tmp/api_startup.log
+            exit 1
+          fi
           echo "API server gestart op poort ${{ env.API_PORT }}"
 
       # ==================== DATABASE TESTS ====================
