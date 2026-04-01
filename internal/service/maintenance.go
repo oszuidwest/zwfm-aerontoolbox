@@ -38,19 +38,19 @@ const noIssuesDetected = "No issues detected"
 
 // DatabaseHealth represents the overall health status of the database.
 type DatabaseHealth struct {
-	DatabaseName       string             `json:"database_name"`
-	DatabaseVersion    string             `json:"database_version"`
-	DatabaseSize       string             `json:"database_size"`
-	DatabaseSizeRaw    int64              `json:"database_size_bytes"`
-	SchemaName         string             `json:"schema_name"`
-	ActiveConnections  int                `json:"active_connections"`
-	MaxConnections     int                `json:"max_connections"`
-	ConnectionUsagePct float64            `json:"connection_usage_pct"`
-	Tables             []TableHealth      `json:"tables"`
+	DatabaseName       string                   `json:"database_name"`
+	DatabaseVersion    string                   `json:"database_version"`
+	DatabaseSize       string                   `json:"database_size"`
+	DatabaseSizeRaw    int64                    `json:"database_size_bytes"`
+	SchemaName         string                   `json:"schema_name"`
+	ActiveConnections  int                      `json:"active_connections"`
+	MaxConnections     int                      `json:"max_connections"`
+	ConnectionUsagePct float64                  `json:"connection_usage_pct"`
+	Tables             []TableHealth            `json:"tables"`
 	LongRunningQueries []types.LongRunningQuery `json:"long_running_queries"`
-	NeedsMaintenance   bool               `json:"needs_maintenance"`
-	Recommendations    []string           `json:"recommendations"`
-	CheckedAt          time.Time          `json:"checked_at"`
+	NeedsMaintenance   bool                     `json:"needs_maintenance"`
+	Recommendations    []string                 `json:"recommendations"`
+	CheckedAt          time.Time                `json:"checked_at"`
 }
 
 // TableHealth represents health statistics for a single table.
