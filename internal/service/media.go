@@ -151,22 +151,15 @@ func (s *MediaService) GetStatistics(ctx context.Context, entityType types.Entit
 		return nil, err
 	}
 
-	table := types.Table(entityType)
-
-	withImages, err := s.repo.CountWithImages(ctx, table)
-	if err != nil {
-		return nil, err
-	}
-
-	withoutImages, err := s.repo.CountWithoutImages(ctx, table)
+	counts, err := s.repo.CountImages(ctx, types.Table(entityType))
 	if err != nil {
 		return nil, err
 	}
 
 	return &ImageStats{
-		Total:         withImages + withoutImages,
-		WithImages:    withImages,
-		WithoutImages: withoutImages,
+		Total:         counts.Total,
+		WithImages:    counts.WithImages,
+		WithoutImages: counts.Total - counts.WithImages,
 	}, nil
 }
 
@@ -203,41 +196,17 @@ func (s *MediaService) DeleteAllImages(ctx context.Context, entityType types.Ent
 
 // Playlist operations.
 
-// PlaylistOptions configures playlist queries with filtering and pagination.
-type PlaylistOptions struct {
-	BlockID     string
-	Date        string
-	ExportTypes []int
-	Limit       int
-	Offset      int
-	SortBy      string
-	SortDesc    bool
-	TrackImage  *bool
-	ArtistImage *bool
-}
-
 // DefaultPlaylistOptions returns playlist query options with sensible defaults.
-func DefaultPlaylistOptions() PlaylistOptions {
-	return PlaylistOptions{
+func DefaultPlaylistOptions() database.PlaylistOptions {
+	return database.PlaylistOptions{
 		ExportTypes: []int{},
 		SortBy:      "starttime",
 	}
 }
 
 // GetPlaylist retrieves played tracks for a date or block with filtering and pagination.
-func (s *MediaService) GetPlaylist(ctx context.Context, opts *PlaylistOptions) ([]database.PlaylistItem, error) {
-	dbOpts := &database.PlaylistOptions{
-		BlockID:     opts.BlockID,
-		Date:        opts.Date,
-		ExportTypes: opts.ExportTypes,
-		Limit:       opts.Limit,
-		Offset:      opts.Offset,
-		SortBy:      opts.SortBy,
-		SortDesc:    opts.SortDesc,
-		TrackImage:  opts.TrackImage,
-		ArtistImage: opts.ArtistImage,
-	}
-	return s.repo.GetPlaylist(ctx, dbOpts)
+func (s *MediaService) GetPlaylist(ctx context.Context, opts *database.PlaylistOptions) ([]database.PlaylistItem, error) {
+	return s.repo.GetPlaylist(ctx, opts)
 }
 
 // PlaylistBlockWithTracks represents a playlist block with its associated tracks.

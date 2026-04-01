@@ -64,12 +64,8 @@ func getImageInfo(data []byte) (format string, width, height int, err error) {
 }
 
 // OptimizeImage processes and optimizes image data according to the configured settings.
-func (o *Optimizer) OptimizeImage(data []byte) (optimized []byte, format, encoder string, err error) {
-	_, format, err = image.DecodeConfig(bytes.NewReader(data))
-	if err != nil {
-		return nil, "", "", err
-	}
-
+// The format parameter is the already-detected image format (e.g. "jpeg", "png").
+func (o *Optimizer) OptimizeImage(data []byte, format string) (optimized []byte, outFormat, encoder string, err error) {
 	switch format {
 	case "jpeg", "jpg":
 		return o.optimizeJPEG(data)
@@ -220,7 +216,7 @@ func createSkippedResult(imageData []byte, originalInfo *Info) *ProcessingResult
 // optimizeImageData runs the optimization pipeline and returns processing results.
 func optimizeImageData(imageData []byte, originalInfo *Info, config Config) (*ProcessingResult, error) {
 	optimizer := NewOptimizer(config)
-	optimizedData, optFormat, optEncoder, err := optimizer.OptimizeImage(imageData)
+	optimizedData, optFormat, optEncoder, err := optimizer.OptimizeImage(imageData, originalInfo.Format)
 	if err != nil {
 		return nil, types.NewValidationError("image", fmt.Sprintf("optimization failed: %v", err))
 	}

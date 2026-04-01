@@ -34,8 +34,9 @@ type S3SyncResult struct {
 
 // NotificationService handles email notifications for backup, health check, and S3 sync events.
 type NotificationService struct {
-	config *config.Config
-	runner *async.Runner
+	config     *config.Config
+	runner     *async.Runner
+	recipients []string // parsed once at construction
 
 	// Lazy Graph client (cached by config key)
 	client    *GraphClient
@@ -59,12 +60,13 @@ type NotificationService struct {
 
 // New creates a new NotificationService.
 func New(cfg *config.Config) *NotificationService {
+	emailCfg := &cfg.Notifications.Email
 	svc := &NotificationService{
-		config: cfg,
-		runner: async.New(),
+		config:     cfg,
+		runner:     async.New(),
+		recipients: ParseRecipients(emailCfg.Recipients),
 	}
 
-	emailCfg := &cfg.Notifications.Email
 	if IsConfigured(emailCfg) {
 		svc.expiryChecker = NewSecretExpiryChecker(emailCfg)
 		slog.Info("E-mailnotificaties geconfigureerd")
@@ -75,29 +77,33 @@ func New(cfg *config.Config) *NotificationService {
 	return svc
 }
 
-// NotifyBackupResult sends a failure or recovery email based on the backup result.
-func (s *NotificationService) NotifyBackupResult(r *BackupResult) {
-	if !IsConfigured(&s.config.Notifications.Email) || r == nil {
+// notifyOnTransition sends a failure email on first failure, and a recovery email on first success
+// after a failure. The prevFailed pointer tracks the state for this notification type.
+func (s *NotificationService) notifyOnTransition(
+	prevFailed *bool,
+	isFailing bool,
+	formatFail func() (string, string),
+	formatRecover func() (string, string),
+) {
+	if !IsConfigured(&s.config.Notifications.Email) {
 		return
 	}
 
 	s.stateMu.Lock()
-	prevFailed := s.prevBackupFailed
+	prev := *prevFailed
 
-	if !r.Success {
-		s.prevBackupFailed = true
+	if isFailing {
+		*prevFailed = true
 		s.stateMu.Unlock()
-
-		subject, body := s.formatBackupFailure(r)
+		subject, body := formatFail()
 		s.sendAsync(subject, body)
 		return
 	}
 
-	if prevFailed {
-		s.prevBackupFailed = false
+	if prev {
+		*prevFailed = false
 		s.stateMu.Unlock()
-
-		subject, body := s.formatBackupRecovery(r)
+		subject, body := formatRecover()
 		s.sendAsync(subject, body)
 		return
 	}
@@ -105,34 +111,26 @@ func (s *NotificationService) NotifyBackupResult(r *BackupResult) {
 	s.stateMu.Unlock()
 }
 
+// NotifyBackupResult sends a failure or recovery email based on the backup result.
+func (s *NotificationService) NotifyBackupResult(r *BackupResult) {
+	if r == nil {
+		return
+	}
+	s.notifyOnTransition(&s.prevBackupFailed, !r.Success,
+		func() (string, string) { return s.formatBackupFailure(r) },
+		func() (string, string) { return s.formatBackupRecovery(r) },
+	)
+}
+
 // NotifyS3SyncResult sends a failure or recovery email based on the S3 sync result.
 func (s *NotificationService) NotifyS3SyncResult(filename string, r *S3SyncResult) {
-	if !IsConfigured(&s.config.Notifications.Email) || r == nil {
+	if r == nil {
 		return
 	}
-
-	s.stateMu.Lock()
-	prevFailed := s.prevS3Failed
-
-	if !r.Synced {
-		s.prevS3Failed = true
-		s.stateMu.Unlock()
-
-		subject, body := s.formatS3Failure(filename, r)
-		s.sendAsync(subject, body)
-		return
-	}
-
-	if prevFailed {
-		s.prevS3Failed = false
-		s.stateMu.Unlock()
-
-		subject, body := s.formatS3Recovery(filename)
-		s.sendAsync(subject, body)
-		return
-	}
-
-	s.stateMu.Unlock()
+	s.notifyOnTransition(&s.prevS3Failed, !r.Synced,
+		func() (string, string) { return s.formatS3Failure(filename, r) },
+		func() (string, string) { return s.formatS3Recovery(filename) },
+	)
 }
 
 // LastError returns the last notification send error and when it occurred.
@@ -161,6 +159,15 @@ func (s *NotificationService) StartExpiryChecker() {
 	}
 }
 
+// ValidateAuth verifies that the notification credentials are valid.
+func (s *NotificationService) ValidateAuth() error {
+	client, err := s.getOrCreateClient()
+	if err != nil {
+		return fmt.Errorf("client init: %w", err)
+	}
+	return client.ValidateAuth()
+}
+
 // SendTestEmail sends a synchronous test email to validate the notification setup.
 // The context controls cancellation of the request.
 func (s *NotificationService) SendTestEmail(ctx context.Context) error {
@@ -169,12 +176,11 @@ func (s *NotificationService) SendTestEmail(ctx context.Context) error {
 		return fmt.Errorf("client init: %w", err)
 	}
 
-	recipients := ParseRecipients(s.config.Notifications.Email.Recipients)
 	subject := "[TEST] Aeron Toolbox - E-mailnotificatie test"
 	body := fmt.Sprintf("Dit is een test-e-mail van Aeron Toolbox.\n\nTijdstip: %s\n\nAls u deze e-mail ontvangt, zijn de notificatie-instellingen correct geconfigureerd.",
 		time.Now().Format(timeFormat))
 
-	return client.SendMail(ctx, recipients, subject, body)
+	return client.SendMail(ctx, s.recipients, subject, body)
 }
 
 // Close stops the notification service runner.
@@ -228,8 +234,7 @@ func (s *NotificationService) send(subject, body string) {
 	ctx, cancel := context.WithTimeout(context.Background(), sendTimeout)
 	defer cancel()
 
-	recipients := ParseRecipients(s.config.Notifications.Email.Recipients)
-	if err := client.SendMail(ctx, recipients, subject, body); err != nil {
+	if err := client.SendMail(ctx, s.recipients, subject, body); err != nil {
 		slog.Error("Notificatie e-mail verzenden mislukt", "error", err, "subject", subject)
 		s.trackError(err)
 		return
