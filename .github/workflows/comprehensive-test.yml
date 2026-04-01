@@ -717,6 +717,122 @@ jobs:
             exit 1
           fi
 
+      - name: "Maintenance: Long-running query detection"
+        if: matrix.suite == 'maintenance'
+        run: |
+          echo "Testing long-running query detection via pg_sleep"
+          # Start a long-running query in the background (sleeps 30 seconds)
+          PGPASSWORD=aeron123 psql -h localhost -p 5433 -U aeron -d aeron_db -c "SELECT pg_sleep(30);" &
+          SLEEP_PID=$!
+
+          # Give it a moment to register in pg_stat_activity
+          sleep 2
+
+          # Query health endpoint (default threshold is 10s, but query just started ~2s ago)
+          # Use a config with a very low threshold to ensure detection
+          RESPONSE=$(curl -s -H "X-API-Key: ${{ env.API_KEY }}" http://localhost:${{ env.API_PORT }}/api/db/maintenance/health)
+          LRQ_COUNT=$(echo "$RESPONSE" | jq '.data.long_running_queries | length')
+
+          # Clean up the background query
+          kill $SLEEP_PID 2>/dev/null || true
+          wait $SLEEP_PID 2>/dev/null || true
+
+          # The query ran for ~2s which is under the default 10s threshold,
+          # so we mainly verify the field is a valid array. For actual detection
+          # we would need to wait 10+ seconds, but we can verify the structure.
+          if [ "$LRQ_COUNT" -ge 0 ]; then
+            echo "Long-running queries field OK (count: $LRQ_COUNT)"
+            # If it was detected (threshold might be low), verify structure
+            if [ "$LRQ_COUNT" -gt 0 ]; then
+              FIRST=$(echo "$RESPONSE" | jq '.data.long_running_queries[0]')
+              HAS_PID=$(echo "$FIRST" | jq 'has("pid")')
+              HAS_DUR=$(echo "$FIRST" | jq 'has("duration")')
+              HAS_QRY=$(echo "$FIRST" | jq 'has("query")')
+              HAS_STATE=$(echo "$FIRST" | jq 'has("state")')
+              if [ "$HAS_PID" = "true" ] && [ "$HAS_DUR" = "true" ] && [ "$HAS_QRY" = "true" ] && [ "$HAS_STATE" = "true" ]; then
+                echo "Long-running query structure OK"
+              else
+                echo "::error::Long-running query velden ontbreken"
+                echo "First: $FIRST"
+                exit 1
+              fi
+            fi
+          else
+            echo "::error::long_running_queries is geen array"
+            echo "Response: $RESPONSE"
+            exit 1
+          fi
+
+      - name: "Maintenance: Long-running query detected with low threshold"
+        if: matrix.suite == 'maintenance'
+        run: |
+          echo "Testing detection with 1 second threshold"
+          # Stop current API server
+          kill -9 $(cat api.pid) 2>/dev/null || true
+          for i in {1..10}; do
+            if ! lsof -i:${{ env.API_PORT }} > /dev/null 2>&1; then break; fi
+            sleep 1
+          done
+
+          # Create config with 1 second threshold
+          cat > test_lrq.json << 'EOF'
+          {
+            "database": { "host": "localhost", "port": "5433", "name": "aeron_db", "user": "aeron", "password": "aeron123", "schema": "aeron", "sslmode": "disable" },
+            "image": { "target_width": 1280, "target_height": 1280, "quality": 90, "reject_smaller": true },
+            "api": { "enabled": true, "keys": ["test-api-key-12345"] },
+            "maintenance": { "long_query_threshold_seconds": 1 }
+          }
+          EOF
+
+          # Restart with low threshold
+          ./zwfm-aerontoolbox -config=test_lrq.json -port=${{ env.API_PORT }} > /tmp/lrq_output.log 2>&1 &
+          echo $! > api.pid
+          for i in {1..30}; do
+            curl -sf http://localhost:${{ env.API_PORT }}/api/health > /dev/null 2>&1 && break
+            sleep 1
+          done
+
+          # Start a query that sleeps 30 seconds
+          PGPASSWORD=aeron123 psql -h localhost -p 5433 -U aeron -d aeron_db -c "SELECT pg_sleep(30);" &
+          SLEEP_PID=$!
+          sleep 3
+
+          # Now the query has been running ~3s, threshold is 1s, should be detected
+          RESPONSE=$(curl -s -H "X-API-Key: ${{ env.API_KEY }}" http://localhost:${{ env.API_PORT }}/api/db/maintenance/health)
+          LRQ_COUNT=$(echo "$RESPONSE" | jq '.data.long_running_queries | length')
+
+          # Clean up
+          kill $SLEEP_PID 2>/dev/null || true
+          wait $SLEEP_PID 2>/dev/null || true
+
+          if [ "$LRQ_COUNT" -ge 1 ]; then
+            QUERY_TEXT=$(echo "$RESPONSE" | jq -r '.data.long_running_queries[0].query')
+            echo "Correct: $LRQ_COUNT langlopende query gedetecteerd"
+            echo "Query: $QUERY_TEXT"
+            if echo "$QUERY_TEXT" | grep -qi "pg_sleep"; then
+              echo "Correct: pg_sleep query gedetecteerd"
+            else
+              echo "::warning::Query bevat geen pg_sleep: $QUERY_TEXT"
+            fi
+          else
+            echo "::error::Geen langlopende query gedetecteerd met threshold van 1s"
+            echo "Response: $(echo "$RESPONSE" | jq '.data.long_running_queries')"
+            exit 1
+          fi
+
+          # Stop test server and restart original
+          kill -9 $(cat api.pid) 2>/dev/null || true
+          for i in {1..10}; do
+            if ! lsof -i:${{ env.API_PORT }} > /dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          ./zwfm-aerontoolbox -config=${{ env.CONFIG_FILE }} -port=${{ env.API_PORT }} > /tmp/api_output.log 2>&1 &
+          echo $! > api.pid
+          for i in {1..30}; do
+            curl -sf http://localhost:${{ env.API_PORT }}/api/health > /dev/null 2>&1 && break
+            sleep 1
+          done
+
       - name: "Maintenance: Removed endpoints return 404"
         if: matrix.suite == 'maintenance'
         run: |
