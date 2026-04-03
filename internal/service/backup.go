@@ -130,6 +130,11 @@ type BackupListResponse struct {
 
 // Helpers.
 
+const (
+	backupPrefix = "aeron-backup-"
+	backupSuffix = ".dump"
+)
+
 var safeBackupFilenamePattern = regexp.MustCompile(`^[a-zA-Z0-9_\-.]+$`)
 
 // resolveToolPath returns the absolute path to an external tool, checking custom paths first.
@@ -161,7 +166,7 @@ func validateBackupFilename(filename string) error {
 	if !safeBackupFilenamePattern.MatchString(filename) {
 		return types.NewValidationError("filename", "invalid filename")
 	}
-	if !strings.HasPrefix(filename, "aeron-backup-") || !strings.HasSuffix(filename, ".dump") {
+	if !strings.HasPrefix(filename, backupPrefix) || !strings.HasSuffix(filename, backupSuffix) {
 		return types.NewValidationError("filename", "not a valid backup file")
 	}
 	return nil
@@ -210,7 +215,7 @@ func (s *BackupService) validateBackupFile(ctx context.Context, filePath string)
 // generateBackupFilename creates a timestamped filename with .dump extension.
 func generateBackupFilename() string {
 	timestamp := time.Now().Format("2006-01-02-150405")
-	return fmt.Sprintf("aeron-backup-%s.dump", timestamp)
+	return fmt.Sprintf("%s%s%s", backupPrefix, timestamp, backupSuffix)
 }
 
 // executePgDump runs pg_dump and returns file info on success, cleaning up on failure.
@@ -465,7 +470,7 @@ func (s *BackupService) List() (*BackupListResponse, error) {
 		}
 
 		name := entry.Name()
-		if !strings.HasPrefix(name, "aeron-backup-") || !strings.HasSuffix(name, ".dump") {
+		if !strings.HasPrefix(name, backupPrefix) || !strings.HasSuffix(name, backupSuffix) {
 			continue
 		}
 

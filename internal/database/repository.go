@@ -39,6 +39,15 @@ func (r *Repository) Ping(ctx context.Context) error {
 	return r.db.PingContext(ctx)
 }
 
+// resolveTable returns the qualified table name, label, and ID column for the given table.
+func (r *Repository) resolveTable(table types.Table) (qualifiedName, label, idCol string, err error) {
+	qualifiedName, err = types.QualifiedTable(r.schema, table)
+	if err != nil {
+		return "", "", "", types.NewValidationError("table", fmt.Sprintf("invalid table configuration: %v", err))
+	}
+	return qualifiedName, string(table), types.IDColumnForTable(table), nil
+}
+
 // Artist operations.
 
 // GetArtist retrieves complete artist details by UUID.
@@ -61,12 +70,10 @@ func (r *Repository) GetTrack(ctx context.Context, id string) (*TrackDetails, er
 
 // GetImage retrieves the image for an entity.
 func (r *Repository) GetImage(ctx context.Context, table types.Table, id string) ([]byte, error) {
-	qualifiedTableName, err := types.QualifiedTable(r.schema, table)
+	qualifiedTableName, label, idCol, err := r.resolveTable(table)
 	if err != nil {
-		return nil, types.NewValidationError("table", fmt.Sprintf("invalid table configuration: %v", err))
+		return nil, err
 	}
-	label := string(table)
-	idCol := types.IDColumnForTable(table)
 
 	query := fmt.Sprintf("SELECT picture FROM %s WHERE %s = $1", qualifiedTableName, idCol)
 
@@ -88,12 +95,10 @@ func (r *Repository) GetImage(ctx context.Context, table types.Table, id string)
 
 // UpdateImage stores new image data for the specified entity.
 func (r *Repository) UpdateImage(ctx context.Context, table types.Table, id string, imageData []byte) error {
-	qualifiedTableName, err := types.QualifiedTable(r.schema, table)
+	qualifiedTableName, label, idCol, err := r.resolveTable(table)
 	if err != nil {
-		return types.NewValidationError("table", fmt.Sprintf("invalid table configuration: %v", err))
+		return err
 	}
-	label := string(table)
-	idCol := types.IDColumnForTable(table)
 
 	query := fmt.Sprintf("UPDATE %s SET picture = $1 WHERE %s = $2", qualifiedTableName, idCol)
 
@@ -106,12 +111,10 @@ func (r *Repository) UpdateImage(ctx context.Context, table types.Table, id stri
 
 // DeleteImage removes the image for an entity.
 func (r *Repository) DeleteImage(ctx context.Context, table types.Table, id string) error {
-	qualifiedTableName, err := types.QualifiedTable(r.schema, table)
+	qualifiedTableName, label, idCol, err := r.resolveTable(table)
 	if err != nil {
-		return types.NewValidationError("table", fmt.Sprintf("invalid table configuration: %v", err))
+		return err
 	}
-	label := string(table)
-	idCol := types.IDColumnForTable(table)
 
 	query := fmt.Sprintf("UPDATE %s SET picture = NULL WHERE %s = $1", qualifiedTableName, idCol)
 
@@ -134,14 +137,30 @@ func (r *Repository) DeleteImage(ctx context.Context, table types.Table, id stri
 
 // Count operations.
 
+// ImageCounts contains total and with-image counts for a table.
+type ImageCounts struct {
+	Total      int `db:"total"`
+	WithImages int `db:"with_images"`
+}
+
+// CountImages returns total entity count and count with images in a single query.
+func (r *Repository) CountImages(ctx context.Context, table types.Table) (*ImageCounts, error) {
+	qualifiedTableName, label, _, err := r.resolveTable(table)
+	if err != nil {
+		return nil, err
+	}
+	query := fmt.Sprintf("SELECT COUNT(*) AS total, COUNT(picture) AS with_images FROM %s", qualifiedTableName)
+
+	var counts ImageCounts
+	if err := r.db.GetContext(ctx, &counts, query); err != nil {
+		return nil, types.NewOperationError(fmt.Sprintf("count %s", label), err)
+	}
+	return &counts, nil
+}
+
 // CountWithImages counts entities that have images.
 func (r *Repository) CountWithImages(ctx context.Context, table types.Table) (int, error) {
 	return r.countItems(ctx, table, true)
-}
-
-// CountWithoutImages counts entities that don't have images.
-func (r *Repository) CountWithoutImages(ctx context.Context, table types.Table) (int, error) {
-	return r.countItems(ctx, table, false)
 }
 
 func (r *Repository) countItems(ctx context.Context, table types.Table, hasImage bool) (int, error) {
@@ -150,16 +169,16 @@ func (r *Repository) countItems(ctx context.Context, table types.Table, hasImage
 		condition = "IS NOT NULL"
 	}
 
-	qualifiedTableName, err := types.QualifiedTable(r.schema, table)
+	qualifiedTableName, label, _, err := r.resolveTable(table)
 	if err != nil {
-		return 0, types.NewValidationError("table", fmt.Sprintf("invalid table configuration: %v", err))
+		return 0, err
 	}
 	query := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE picture %s", qualifiedTableName, condition)
 
 	var count int
 	err = r.db.GetContext(ctx, &count, query)
 	if err != nil {
-		return 0, types.NewOperationError(fmt.Sprintf("count %s", table), err)
+		return 0, types.NewOperationError(fmt.Sprintf("count %s", label), err)
 	}
 
 	return count, nil
@@ -167,16 +186,15 @@ func (r *Repository) countItems(ctx context.Context, table types.Table, hasImage
 
 // DeleteAllImages removes all images for entities in the specified table.
 func (r *Repository) DeleteAllImages(ctx context.Context, table types.Table) (int64, error) {
-	qualifiedTableName, err := types.QualifiedTable(r.schema, table)
+	qualifiedTableName, label, _, err := r.resolveTable(table)
 	if err != nil {
-		return 0, types.NewValidationError("table", fmt.Sprintf("invalid table configuration: %v", err))
+		return 0, err
 	}
 
 	query := fmt.Sprintf("UPDATE %s SET picture = NULL WHERE picture IS NOT NULL", qualifiedTableName)
 
 	result, err := r.db.ExecContext(ctx, query)
 	if err != nil {
-		label := string(table)
 		return 0, types.NewOperationError(fmt.Sprintf("delete %s images", label), err)
 	}
 

@@ -96,15 +96,6 @@ type tableHealthRow struct {
 	ToastSize       int64      `db:"toast_size"`
 }
 
-// longRunningQueryRow is the database scan target for long-running query detection.
-// Fields must match types.LongRunningQuery exactly (direct type conversion is used).
-type longRunningQueryRow struct {
-	PID      int    `db:"pid"`
-	Duration string `db:"duration"`
-	Query    string `db:"query"`
-	State    string `db:"state"`
-}
-
 // Health operations.
 
 // GetHealth retrieves comprehensive database health information.
@@ -244,14 +235,9 @@ func (s *MaintenanceService) getLongRunningQueries(ctx context.Context) ([]types
 		ORDER BY query_start ASC
 	`
 
-	var rows []longRunningQueryRow
-	if err := s.repo.DB().SelectContext(ctx, &rows, query, threshold); err != nil {
+	var queries []types.LongRunningQuery
+	if err := s.repo.DB().SelectContext(ctx, &queries, query, threshold); err != nil {
 		return nil, err
-	}
-
-	queries := make([]types.LongRunningQuery, 0, len(rows))
-	for _, row := range rows {
-		queries = append(queries, types.LongRunningQuery(row))
 	}
 
 	return queries, nil

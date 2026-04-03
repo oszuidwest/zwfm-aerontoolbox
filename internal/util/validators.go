@@ -39,11 +39,11 @@ func ValidateEntityID(id, entityLabel string) error {
 	return nil
 }
 
-// newSafeHTTPClient creates an HTTP client with SSRF protection.
-func newSafeHTTPClient() *safeurl.WrappedClient {
-	config := safeurl.GetConfigBuilder().Build()
-	return safeurl.Client(config)
-}
+// safeHTTPClient returns a reusable HTTP client with SSRF protection.
+var safeHTTPClient = sync.OnceValue(func() *safeurl.WrappedClient {
+	cfg := safeurl.GetConfigBuilder().Build()
+	return safeurl.Client(cfg)
+})
 
 // ValidateURL validates a URL for allowed schemes and hostname presence.
 func ValidateURL(urlString string) error {
@@ -103,7 +103,7 @@ func ValidateAndDownloadImage(urlString string, maxSize int64) ([]byte, error) {
 		return nil, err
 	}
 
-	client := newSafeHTTPClient()
+	client := safeHTTPClient()
 
 	resp, err := client.Get(urlString)
 	if err != nil {

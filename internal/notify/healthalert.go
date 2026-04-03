@@ -47,34 +47,13 @@ func (s *NotificationService) NotifyHealthCheckError(err error) {
 
 // NotifyHealthAlert sends a failure or recovery email based on the health check result.
 func (s *NotificationService) NotifyHealthAlert(r *HealthAlertResult) {
-	if !IsConfigured(&s.config.Notifications.Email) || r == nil {
+	if r == nil {
 		return
 	}
-
-	hasIssues := r.HasIssues()
-
-	s.stateMu.Lock()
-	prevActive := s.prevHealthAlertActive
-
-	if hasIssues {
-		s.prevHealthAlertActive = true
-		s.stateMu.Unlock()
-
-		subject, body := formatHealthAlert(r)
-		s.sendAsync(subject, body)
-		return
-	}
-
-	if prevActive {
-		s.prevHealthAlertActive = false
-		s.stateMu.Unlock()
-
-		subject, body := formatHealthRecovery(r)
-		s.sendAsync(subject, body)
-		return
-	}
-
-	s.stateMu.Unlock()
+	s.notifyOnTransition(&s.prevHealthAlertActive, r.HasIssues(),
+		func() (string, string) { return formatHealthAlert(r) },
+		func() (string, string) { return formatHealthRecovery(r) },
+	)
 }
 
 func formatHealthAlert(r *HealthAlertResult) (subject, body string) {

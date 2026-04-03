@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/oszuidwest/zwfm-aerontoolbox/internal/database"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/notify"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/service"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
@@ -315,7 +316,7 @@ func (s *Server) handleDeleteImage(entityType types.EntityType) http.HandlerFunc
 	}
 }
 
-func parsePlaylistOptions(query url.Values) service.PlaylistOptions {
+func parsePlaylistOptions(query url.Values) database.PlaylistOptions {
 	opts := service.DefaultPlaylistOptions()
 	opts.BlockID = query.Get("block_id")
 
@@ -382,13 +383,7 @@ func (s *Server) handleTestEmail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client, err := notify.NewGraphClient(emailCfg)
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to create Graph client: %v", err))
-		return
-	}
-
-	if err := client.ValidateAuth(); err != nil {
+	if err := s.service.Notify.ValidateAuth(); err != nil {
 		respondError(w, http.StatusBadGateway, fmt.Sprintf("Authentication failed: %v", err))
 		return
 	}
