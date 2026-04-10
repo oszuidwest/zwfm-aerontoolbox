@@ -3,7 +3,7 @@
 Het radioautomatiseringssysteem Aeron mist tooling voor beheer en onderhoud. Aeron Toolbox vult dat gat: een toolkit waarmee je via HTTP afbeeldingen beheert, media doorzoekt, de database onderhoudt, backups maakt en bestanden bewaakt.
 
 > [!WARNING]
-> Dit is een **onofficiële** tool, niet ontwikkeld door of in samenwerking met Cellnex Broadcast Partners. Gebruik op eigen risico. Maak altijd een backup voordat je begint.
+> Dit is een **onofficiële** tool, niet ontwikkeld door of in samenwerking met Nextwave Broadcast. Gebruik op eigen risico. Maak altijd een backup voordat je begint.
 
 ## Wat kan het?
 
