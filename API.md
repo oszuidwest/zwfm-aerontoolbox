@@ -1113,12 +1113,16 @@ Wanneer de bestandscontrole is ingeschakeld, toont het health-endpoint (`GET /ap
   "file_monitor": {
     "enabled": true,
     "checks_total": 2,
-    "checks_stale": 1
+    "checks_stale": 1,
+    "checks_alerting": 1
   }
 }
 ```
 
-De overall status wordt `"degraded"` wanneer een of meer bestanden verouderd zijn.
+- `checks_stale`: ruwe telling van bestanden die te oud of onbereikbaar zijn (inclusief bestanden buiten hun `active_window`).
+- `checks_alerting`: window-bewuste telling — sluit bestanden uit die buiten hun `active_window` vallen. Dit veld stuurt de overall `"degraded"`-status aan.
+
+De overall status wordt `"degraded"` zodra `checks_alerting > 0` is. Een bestand dat 's nachts veroudert maar pas overdag wordt vernieuwd, zet `/api/health` dus niet op `degraded` zolang het buiten zijn venster valt.
 
 ---
 
@@ -1394,7 +1398,8 @@ Het gedrag van de API kan worden geconfigureerd via `config.json`:
       {
         "name": "Nieuws bulletin",
         "path": "/data/news.mp3",
-        "max_age_minutes": 30
+        "max_age_minutes": 30,
+        "active_window": "06:00-22:00"
       },
       {
         "name": "Weer",
@@ -1417,8 +1422,13 @@ Het gedrag van de API kan worden geconfigureerd via `config.json`:
   - `name`: Optionele weergavenaam voor meldingen
   - `path`: Absoluut pad naar het bestand
   - `max_age_minutes`: Maximale leeftijd in minuten (minimaal 1)
+  - `stat_timeout_seconds`: Maximale tijd in seconden voor `os.Stat` (standaard 5; `0` of weglaten = default). Beschermt tegen bevroren NFS/SMB-mounts.
+  - `active_window`: Optioneel tijdvenster `"HH:MM-HH:MM"` waarin alerts en `/health degraded` actief zijn. Buiten het venster blijft `is_stale` zichtbaar in `/status`, maar wordt geen alert/recovery-mail verstuurd en blijft `/health` healthy. Een eindtijd vóór de starttijd betekent dat het venster over middernacht heen loopt (bijv. `"22:00-06:00"` is actief van 22:00 tot 06:00 's ochtends). Gelijke start- en eindtijd is ongeldig — laat het veld weg voor altijd-actief.
 
 Het controle-interval staat los van `max_age_minutes` en is via `interval_seconds` configureerbaar (standaard 60 s).
+
+> [!IMPORTANT]
+> `active_window` wordt geïnterpreteerd in de lokale tijdzone die door de `TZ` environment variable wordt gestuurd. Stel `TZ` consistent in op productie zodat het venster doet wat de operator verwacht.
 
 Zie [config.example.json](config.example.json) voor alle beschikbare opties.
 

@@ -69,7 +69,8 @@
       {
         "name": "Nieuws bulletin",
         "path": "/data/news.mp3",
-        "max_age_minutes": 30
+        "max_age_minutes": 30,
+        "active_window": "06:00-22:00"
       },
       {
         "name": "Weer",

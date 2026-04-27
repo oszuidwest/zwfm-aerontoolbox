@@ -21,6 +21,12 @@ import (
 // hangs or controlled errors without touching the real file system.
 var osStat = os.Stat
 
+// nowFunc returns the current time. Wrapped here so windowing tests can pin
+// a deterministic clock without depending on time-of-day at run time.
+// ActiveWindow comparisons use the location of the returned time, matching
+// how operators configure local-time windows (TZ env, see scheduler.go).
+var nowFunc = time.Now
+
 // statCheckParallelism caps how many files are stat'd concurrently per Run().
 // A radio config typically lists a handful of files, so 8 is plenty.
 const statCheckParallelism = 8
@@ -46,6 +52,13 @@ type statInFlight struct {
 type FileMonitorService struct {
 	config *config.Config
 	notify *notify.NotificationService
+
+	// Parsed ActiveWindow per check path. Populated once in
+	// newFileMonitorService and never mutated afterwards, so reads from Run()
+	// require no synchronisation. An entry missing or zero-valued means
+	// "always active". Pre-parsing here keeps the hot path lock-free and lets
+	// the constructor reject invalid windows up-front (see PR4 plan §9).
+	windows map[string]config.TimeWindow
 
 	// Per-file alert state: path → currently in alert.
 	alertState   map[string]bool
@@ -116,14 +129,23 @@ type FileCheckResult struct {
 	ErrorKind      string     `json:"error_kind,omitempty"`
 }
 
-func newFileMonitorService(cfg *config.Config, notifySvc *notify.NotificationService) *FileMonitorService {
+func newFileMonitorService(cfg *config.Config, notifySvc *notify.NotificationService) (*FileMonitorService, error) {
+	windows := make(map[string]config.TimeWindow, len(cfg.FileMonitor.Checks))
+	for _, c := range cfg.FileMonitor.Checks {
+		w, err := config.ParseTimeWindow(c.ActiveWindow)
+		if err != nil {
+			return nil, fmt.Errorf("file monitor: check %q: %w", c.DisplayName(), err)
+		}
+		windows[c.Path] = w
+	}
 	return &FileMonitorService{
 		config:     cfg,
 		notify:     notifySvc,
+		windows:    windows,
 		alertState: make(map[string]bool),
 		inflight:   make(map[string]*statInFlight),
 		runner:     async.New(),
-	}
+	}, nil
 }
 
 // Run checks all configured files, sends alert/recovery notifications, and
@@ -141,7 +163,7 @@ func (s *FileMonitorService) Run() {
 // publishing it. Separated from Run() so the trigger path can publish the
 // result together with run-state under a single lock.
 func (s *FileMonitorService) executeRun() *FileMonitorStatus {
-	now := time.Now()
+	now := nowFunc()
 	checks := s.config.FileMonitor.Checks
 
 	// Stat each file with a per-flight timeout in parallel. Single-flight
@@ -168,6 +190,16 @@ func (s *FileMonitorService) executeRun() *FileMonitorStatus {
 		if isGraceRun {
 			// Grace run: observe only — don't update alert state or send notifications.
 			// This avoids false alerts immediately after a restart.
+			continue
+		}
+
+		// Outside an active window the result still reflects raw staleness
+		// (transparent in /status) but does not flip alert state, send mail,
+		// or trigger a recovery. Suppressing recovery is essential — without
+		// it a midnight refresh would mail "[OK] hersteld" for an alert the
+		// operator never received.
+		if !s.windows[check.Path].Active(now) {
+			results[i].InAlert = false
 			continue
 		}
 
@@ -257,7 +289,9 @@ func (s *FileMonitorService) Status() *FileMonitorStatus {
 	return snap
 }
 
-// StaleCount returns the number of files that were stale in the most recent check.
+// StaleCount returns the raw number of files that were stale in the most
+// recent check, regardless of any configured ActiveWindow. Use AlertingCount
+// for the window-aware count that drives /health degraded.
 func (s *FileMonitorService) StaleCount() int {
 	s.publishedMu.RLock()
 	defer s.publishedMu.RUnlock()
@@ -266,6 +300,27 @@ func (s *FileMonitorService) StaleCount() int {
 		return 0
 	}
 	return s.lastCheck.staleCount
+}
+
+// AlertingCount returns the number of checks currently in alert (InAlert==true)
+// in the most recent run. Stale-but-outside-window checks are excluded by
+// construction — Run() never flips InAlert for them — so this is the right
+// signal for /health degraded. Reads under publishedMu so it pairs
+// consistently with the Checks slice published by the same run.
+func (s *FileMonitorService) AlertingCount() int {
+	s.publishedMu.RLock()
+	defer s.publishedMu.RUnlock()
+
+	if s.lastCheck == nil {
+		return 0
+	}
+	n := 0
+	for _, c := range s.lastCheck.Checks {
+		if c.InAlert {
+			n++
+		}
+	}
+	return n
 }
 
 // Close waits for any running TriggerCheck() invocation to finish.

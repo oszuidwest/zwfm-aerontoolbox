@@ -121,6 +121,7 @@ type FileMonitorCheckConfig struct {
 	Path           string `json:"path" validate:"required,absolute_path"`
 	MaxAgeMinutes  int    `json:"max_age_minutes" validate:"required,gte=1"`
 	StatTimeoutSec int    `json:"stat_timeout_seconds" validate:"gte=0"`
+	ActiveWindow   string `json:"active_window" validate:"omitempty,time_window"`
 }
 
 // DisplayName returns the check name if set, otherwise the file path.
@@ -376,6 +377,15 @@ func newConfigValidator() *validator.Validate {
 		return filepath.IsAbs(fl.Field().String())
 	})
 
+	_ = v.RegisterValidation("time_window", func(fl validator.FieldLevel) bool {
+		s := fl.Field().String()
+		if s == "" {
+			return true
+		}
+		_, err := ParseTimeWindow(s)
+		return err == nil
+	})
+
 	v.RegisterStructValidation(validateS3Config, S3Config{})
 	v.RegisterStructValidation(validateFileMonitorConfig, FileMonitorConfig{})
 
@@ -466,6 +476,8 @@ func tagMessage(tag, param string) string {
 		return "contains invalid characters (only letters, numbers and underscores allowed)"
 	case "guid":
 		return "must be a valid GUID (e.g., 12345678-1234-1234-1234-123456789abc)"
+	case "time_window":
+		return "must be HH:MM-HH:MM (omit for always-active)"
 	default:
 		return fmt.Sprintf("is invalid (%s)", tag)
 	}
