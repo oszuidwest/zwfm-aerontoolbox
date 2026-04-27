@@ -33,11 +33,15 @@ var nowFunc = time.Now
 // A radio config typically lists a handful of files, so 8 is plenty.
 const statCheckParallelism = 8
 
+// FileCheckErrorKind categorises why a file check failed.
+type FileCheckErrorKind string
+
 const (
-	fileCheckErrorKindNotFound    = "not_found"
-	fileCheckErrorKindPermission  = "permission_denied"
-	fileCheckErrorKindStatError   = "stat_error"
-	fileCheckErrorKindStatTimeout = "stat_timeout"
+	FileCheckErrorKindNone        FileCheckErrorKind = ""
+	FileCheckErrorKindNotFound    FileCheckErrorKind = "not_found"
+	FileCheckErrorKindPermission  FileCheckErrorKind = "permission_denied"
+	FileCheckErrorKindStatError   FileCheckErrorKind = "stat_error"
+	FileCheckErrorKindStatTimeout FileCheckErrorKind = "stat_timeout"
 )
 
 type fileMonitorNotifier interface {
@@ -139,16 +143,16 @@ type FileMonitorStatus struct {
 // ErrorKind classifies the failure mode for downstream consumers:
 // "" (success), "not_found", "permission_denied", "stat_timeout", "stat_error".
 type FileCheckResult struct {
-	Name           string     `json:"name,omitempty"`
-	Path           string     `json:"path"`
-	MaxAgeMinutes  int        `json:"max_age_minutes"`
-	FileExists     *bool      `json:"file_exists"`
-	FileAgeMinutes *float64   `json:"file_age_minutes,omitempty"`
-	LastModified   *time.Time `json:"last_modified,omitempty"`
-	IsStale        bool       `json:"is_stale"`
-	InAlert        bool       `json:"in_alert"`
-	Error          string     `json:"error,omitempty"`
-	ErrorKind      string     `json:"error_kind,omitempty"`
+	Name           string             `json:"name,omitempty"`
+	Path           string             `json:"path"`
+	MaxAgeMinutes  int                `json:"max_age_minutes"`
+	FileExists     *bool              `json:"file_exists"`
+	FileAgeMinutes *float64           `json:"file_age_minutes,omitempty"`
+	LastModified   *time.Time         `json:"last_modified,omitempty"`
+	IsStale        bool               `json:"is_stale"`
+	InAlert        bool               `json:"in_alert"`
+	Error          string             `json:"error,omitempty"`
+	ErrorKind      FileCheckErrorKind `json:"error_kind,omitempty"`
 }
 
 func newFileMonitorService(cfg *config.Config, notifySvc *notify.NotificationService) (*FileMonitorService, error) {
@@ -486,7 +490,7 @@ func (s *FileMonitorService) timeoutResult(check config.FileMonitorCheckConfig, 
 		Path:          check.Path,
 		MaxAgeMinutes: check.MaxAgeMinutes,
 		IsStale:       true,
-		ErrorKind:     fileCheckErrorKindStatTimeout,
+		ErrorKind:     FileCheckErrorKindStatTimeout,
 		Error:         fmt.Sprintf("stat timeout after %s", timeout),
 	}
 }
@@ -507,16 +511,19 @@ func (s *FileMonitorService) buildResult(check config.FileMonitorCheckConfig, in
 		case errors.Is(err, os.ErrNotExist):
 			exists := false
 			result.FileExists = &exists
-			result.ErrorKind = fileCheckErrorKindNotFound
+			result.ErrorKind = FileCheckErrorKindNotFound
+			// Error intentionally left empty: FileExists=false already encodes the
+			// absence, and the path itself identifies the missing file. The other
+			// branches set Error because the file may exist but be unreadable.
 			slog.Warn("File monitor: file not found", "name", label, "path", check.Path)
 		case errors.Is(err, os.ErrPermission):
 			result.Error = err.Error()
-			result.ErrorKind = fileCheckErrorKindPermission
+			result.ErrorKind = FileCheckErrorKindPermission
 			slog.Warn("File monitor: permission denied", "name", label, "path", check.Path, "error", err)
 		default:
 			// FileExists stays nil — we cannot determine existence.
 			result.Error = err.Error()
-			result.ErrorKind = fileCheckErrorKindStatError
+			result.ErrorKind = FileCheckErrorKindStatError
 			slog.Warn("File monitor: file stat error", "name", label, "path", check.Path, "error", err)
 		}
 		return result

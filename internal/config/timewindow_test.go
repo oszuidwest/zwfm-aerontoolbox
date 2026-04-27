@@ -8,18 +8,32 @@ import (
 
 func TestParseTimeWindow_Cases(t *testing.T) {
 	tests := []struct {
-		name      string
-		input     string
-		wantErr   bool
-		wantStart int
-		wantEnd   int
-		wantConf  bool
+		name    string
+		input   string
+		wantErr bool
+		// checks are spot-checked Active() boundaries for valid windows.
+		checks []struct {
+			hh, mm int
+			want   bool
+		}
 	}{
-		{name: "empty is unconfigured", input: "", wantConf: false},
-		{name: "normal day window", input: "06:00-22:00", wantStart: 6 * 60, wantEnd: 22 * 60, wantConf: true},
-		{name: "wraparound night window", input: "22:00-06:00", wantStart: 22 * 60, wantEnd: 6 * 60, wantConf: true},
-		{name: "minute precision", input: "06:30-22:45", wantStart: 6*60 + 30, wantEnd: 22*60 + 45, wantConf: true},
-		{name: "leading whitespace tolerated", input: " 06:00 - 22:00 ", wantStart: 6 * 60, wantEnd: 22 * 60, wantConf: true},
+		{name: "empty is unconfigured", input: ""},
+		{name: "normal day window", input: "06:00-22:00", checks: []struct {
+			hh, mm int
+			want   bool
+		}{{5, 59, false}, {6, 0, true}, {22, 0, false}}},
+		{name: "wraparound night window", input: "22:00-06:00", checks: []struct {
+			hh, mm int
+			want   bool
+		}{{21, 59, false}, {22, 0, true}, {0, 0, true}, {5, 59, true}, {6, 0, false}}},
+		{name: "minute precision", input: "06:30-22:45", checks: []struct {
+			hh, mm int
+			want   bool
+		}{{6, 29, false}, {6, 30, true}, {22, 44, true}, {22, 45, false}}},
+		{name: "leading whitespace tolerated", input: " 06:00 - 22:00 ", checks: []struct {
+			hh, mm int
+			want   bool
+		}{{5, 59, false}, {6, 0, true}, {22, 0, false}}},
 		{name: "missing dash", input: "06:00", wantErr: true},
 		{name: "extra dash", input: "06:00-12:00-18:00", wantErr: true},
 		{name: "non-numeric hour", input: "ab:00-22:00", wantErr: true},
@@ -44,11 +58,24 @@ func TestParseTimeWindow_Cases(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ParseTimeWindow(%q) unexpected error: %v", tc.input, err)
 			}
-			if w.Configured != tc.wantConf {
-				t.Errorf("Configured = %v, want %v", w.Configured, tc.wantConf)
+			if tc.input == "" {
+				if w.IsConfigured() {
+					t.Error("expected IsConfigured()=false for empty input")
+				}
+				ts := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+				if !w.Active(ts) {
+					t.Error("unconfigured window should be active at any time")
+				}
+				return
 			}
-			if w.Configured && (w.StartMin != tc.wantStart || w.EndMin != tc.wantEnd) {
-				t.Errorf("Start/End = %d/%d, want %d/%d", w.StartMin, w.EndMin, tc.wantStart, tc.wantEnd)
+			if !w.IsConfigured() {
+				t.Error("expected IsConfigured()=true for non-empty valid input")
+			}
+			for _, c := range tc.checks {
+				ts := time.Date(2026, 1, 1, c.hh, c.mm, 0, 0, time.UTC)
+				if got := w.Active(ts); got != c.want {
+					t.Errorf("Active(%02d:%02d) = %v, want %v", c.hh, c.mm, got, c.want)
+				}
 			}
 		})
 	}
@@ -82,11 +109,14 @@ func TestTimeWindow_Active_Wraparound(t *testing.T) {
 }
 
 func TestTimeWindow_UnconfiguredIsAlwaysActive(t *testing.T) {
-	var w TimeWindow // zero value: Configured=false
+	var w TimeWindow // zero value: unconfigured
+	if w.IsConfigured() {
+		t.Error("zero-value TimeWindow should be unconfigured")
+	}
 	for _, hh := range []int{0, 6, 12, 22, 23} {
 		ts := time.Date(2026, 1, 1, hh, 0, 0, 0, time.UTC)
 		if !w.Active(ts) {
-			t.Errorf("zero-value TimeWindow should be active at %02d:00", hh)
+			t.Errorf("unconfigured window should be active at %02d:00", hh)
 		}
 	}
 }

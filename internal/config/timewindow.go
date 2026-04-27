@@ -9,15 +9,15 @@ import (
 
 // TimeWindow represents a HH:MM-HH:MM window in local time.
 //
-// A window with EndMin < StartMin wraps around midnight (e.g. 22:00-06:00
-// is active from 22:00 until 06:00 the next morning). Configured == false
-// distinguishes the zero value ("no window set, always active") from a
-// parsed window — StartMin == EndMin would otherwise be ambiguous, so it
-// is rejected at parse time and operators must omit the field for
-// always-active behaviour.
+// A window whose end is earlier than its start wraps around midnight (e.g.
+// 22:00-06:00 is active from 22:00 until 06:00 the next morning). An
+// unconfigured window (zero value) is always active; this is distinct from a
+// parsed window — equal start and end would otherwise be ambiguous, so it is
+// rejected at parse time and operators must omit the field for always-active
+// behaviour.
 type TimeWindow struct {
-	StartMin, EndMin int
-	Configured       bool
+	startMin, endMin int
+	configured       bool
 }
 
 // ParseTimeWindow parses "HH:MM-HH:MM". An empty string returns an
@@ -43,7 +43,7 @@ func ParseTimeWindow(s string) (TimeWindow, error) {
 	if start == end {
 		return TimeWindow{}, fmt.Errorf("invalid window %q: start and end are equal; omit the field for always-active", s)
 	}
-	return TimeWindow{StartMin: start, EndMin: end, Configured: true}, nil
+	return TimeWindow{startMin: start, endMin: end, configured: true}, nil
 }
 
 func parseHHMM(s string) (int, error) {
@@ -68,12 +68,18 @@ func parseHHMM(s string) (int, error) {
 // Active reports whether t (in its own location) falls inside the window.
 // An unconfigured window is treated as always-active.
 func (w TimeWindow) Active(t time.Time) bool {
-	if !w.Configured {
+	if !w.configured {
 		return true
 	}
 	cur := t.Hour()*60 + t.Minute()
-	if w.StartMin < w.EndMin {
-		return cur >= w.StartMin && cur < w.EndMin
+	if w.startMin < w.endMin {
+		return cur >= w.startMin && cur < w.endMin
 	}
-	return cur >= w.StartMin || cur < w.EndMin
+	return cur >= w.startMin || cur < w.endMin
+}
+
+// IsConfigured reports whether this time window was explicitly parsed from a
+// non-empty string. An unconfigured window is treated as always-active.
+func (w TimeWindow) IsConfigured() bool {
+	return w.configured
 }
