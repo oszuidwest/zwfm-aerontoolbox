@@ -52,6 +52,7 @@ De Aeron Toolbox API biedt RESTful-endpoints voor het Aeron-radioautomatiserings
 | `/api/db/maintenance/health` | GET | Database health en statistieken | Ja |
 | **Bestandscontrole** |
 | `/api/file-monitor/status` | GET | Status bestandscontrole | Ja |
+| `/api/file-monitor/check` | POST | Handmatige bestandscontrole starten | Ja |
 | **Backups** |
 | `/api/db/backup` | POST | Nieuwe backup aanmaken | Ja |
 | `/api/db/backup/status` | GET | Backup status opvragen | Ja |
@@ -72,7 +73,7 @@ Wanneer authenticatie is ingeschakeld in de configuratie, vereisen alle endpoint
 ```json
 {
   "success": false,
-  "error": "unauthorized: invalid or missing API key"
+  "error": "Unauthorized: invalid or missing API key"
 }
 ```
 
@@ -146,6 +147,12 @@ Controleer de status van de API.
         "expires_soon": false,
         "days_left": 245
       }
+    },
+    "file_monitor": {
+      "enabled": true,
+      "checks_total": 2,
+      "checks_stale": 0,
+      "checks_alerting": 0
     }
   }
 }
@@ -160,7 +167,14 @@ Het `notifications`-veld is altijd aanwezig en toont:
   - `days_left`: Aantal resterende dagen
   - `error`: Foutmelding bij ophalen (bijv. onvoldoende rechten)
 
+Het `file_monitor`-veld is alleen aanwezig wanneer de bestandscontrole is ingeschakeld en toont:
+- `enabled`: Of de bestandscontrole is geconfigureerd
+- `checks_total`: Totaal aantal geconfigureerde checks
+- `checks_stale`: Ruwe telling van bestanden die te oud zijn of niet bereikbaar zijn (inclusief buiten `active_window`)
+- `checks_alerting`: Window-aware telling; bestanden buiten hun `active_window` tellen hier niet mee
+
 Wanneer `expires_soon` `true` is, wordt de overall status `"degraded"`.
+Wanneer `checks_alerting` groter dan `0` is, wordt de overall status eveneens `"degraded"`.
 
 ---
 
@@ -281,7 +295,7 @@ Het verwijderen van een artiestafbeelding.
 **Response:** `200 OK`
 ```json
 {
-  "message": "image deleted",
+  "message": "artist image deleted successfully",
   "artist_id": "123e4567-e89b-12d3-a456-426614174000"
 }
 ```
@@ -301,7 +315,7 @@ Het verwijderen van alle artiestafbeeldingen uit de database.
 **Authenticatie:** Vereist
 
 **Vereiste header:**
-- `X-Confirm-Bulk-Delete: VERWIJDER ALLES`
+- `X-Confirm-Bulk-Delete: DELETE ALL`
 
 **Response:** `200 OK`
 ```json
@@ -457,7 +471,7 @@ Het verwijderen van de albumhoes van een track.
 **Response:** `200 OK`
 ```json
 {
-  "message": "image deleted",
+  "message": "track image deleted successfully",
   "track_id": "456e7890-e89b-12d3-a456-426614174000"
 }
 ```
@@ -477,7 +491,7 @@ Het verwijderen van alle trackafbeeldingen uit de database.
 **Authenticatie:** Vereist
 
 **Vereiste header:**
-- `X-Confirm-Bulk-Delete: VERWIJDER ALLES`
+- `X-Confirm-Bulk-Delete: DELETE ALL`
 
 **Response:** `200 OK`
 ```json
@@ -788,7 +802,7 @@ Een nieuwe databasebackup starten op de achtergrond.
 **Response:** `202 Accepted`
 ```json
 {
-  "message": "backup started",
+  "message": "Backup started in background",
   "check": "/api/db/backup/status"
 }
 ```
@@ -803,7 +817,7 @@ De backup wordt asynchroon uitgevoerd. Controleer `GET /api/db/backup/status` vo
 `400 Bad Request` - Backup niet ingeschakeld:
 ```json
 {
-  "error": "backup functionaliteit is niet ingeschakeld"
+  "error": "backup functionality is not enabled"
 }
 ```
 
@@ -960,7 +974,7 @@ Een specifiek backupbestand verwijderen.
 **Response:** `200 OK`
 ```json
 {
-  "message": "backup deleted",
+  "message": "Backup deleted successfully",
   "filename": "aeron-backup-2025-12-21T14-30-00.dump"
 }
 ```
@@ -1150,7 +1164,7 @@ Start een bestandscontrole op de achtergrond. Handig tijdens configuratie of sto
 **Response:** `202 Accepted`
 ```json
 {
-  "message": "Bestandscontrole gestart",
+  "message": "File monitor check started",
   "run_id": 43,
   "check": "/api/file-monitor/status"
 }
@@ -1211,7 +1225,7 @@ Verstuurt een test e-mail om de notificatieconfiguratie te valideren. Controleer
 **Response:** `200 OK`
 ```json
 {
-  "message": "Test e-mail succesvol verzonden"
+  "message": "Test email sent successfully"
 }
 ```
 
@@ -1320,7 +1334,7 @@ curl -X GET "http://localhost:8080/api/tracks/456e7890-e89b-12d3-a456-4266141740
 ```bash
 curl -X DELETE "http://localhost:8080/api/artists/bulk-delete" \
   -H "X-API-Key: jouw-api-sleutel" \
-  -H "X-Confirm-Bulk-Delete: VERWIJDER ALLES"
+  -H "X-Confirm-Bulk-Delete: DELETE ALL"
 ```
 
 **Playlist voor vandaag ophalen:**
@@ -1434,7 +1448,6 @@ Het gedrag van de API kan worden geconfigureerd via `config.json`:
   "maintenance": {
     "bloat_threshold": 10.0,
     "dead_tuple_threshold": 10000,
-    "timeout_minutes": 30,
     "scheduler": {
       "enabled": false,
       "schedule": "0 4 * * 0"
@@ -1472,14 +1485,25 @@ Het gedrag van de API kan worden geconfigureerd via `config.json`:
         "name": "Nieuws bulletin",
         "path": "/data/news.mp3",
         "max_age_minutes": 30,
+        "stat_timeout_seconds": 5,
         "active_window": "06:00-22:00"
       },
       {
         "name": "Weer",
         "path": "/data/weather.mp3",
-        "max_age_minutes": 60
+        "max_age_minutes": 60,
+        "stat_timeout_seconds": 5
       }
     ]
+  },
+  "notifications": {
+    "email": {
+      "tenant_id": "",
+      "client_id": "",
+      "client_secret": "",
+      "from_address": "",
+      "recipients": ""
+    }
   },
   "log": {
     "level": "info",

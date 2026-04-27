@@ -156,11 +156,26 @@ jobs:
           echo "Wachten op database..."
           for i in {1..30}; do
             if docker exec aeron-test-db pg_isready -U aeron 2>/dev/null; then
-              sleep 2
+              sleep 3
               break
             fi
             sleep 1
           done
+
+          # Verify database is fully ready from host side (not just inside container)
+          # to avoid race condition where port mapping isn't stable yet.
+          # Skip for system-validation suite which does not install postgresql-client.
+          if [ "${{ matrix.suite }}" != "system-validation" ]; then
+            for i in {1..30}; do
+              if PGPASSWORD=aeron123 psql -h localhost -p 5433 -U aeron -d aeron_db -c "SELECT 1;" > /dev/null 2>&1; then
+                echo "Host-side database connection verified"
+                break
+              fi
+              echo "Waiting for host-side database connection... ($i/30)"
+              sleep 1
+            done
+          fi
+
           ARTIST_COUNT=$(docker exec aeron-test-db psql -U aeron -d aeron_db -t -c "SELECT COUNT(*) FROM aeron.artist;" 2>/dev/null | tr -d ' ')
           echo "Database klaar - $ARTIST_COUNT artiesten geladen"
           [ -n "$ARTIST_COUNT" ] && [ "$ARTIST_COUNT" -gt 0 ]

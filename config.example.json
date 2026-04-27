@@ -70,12 +70,14 @@
         "name": "Nieuws bulletin",
         "path": "/data/news.mp3",
         "max_age_minutes": 30,
+        "stat_timeout_seconds": 5,
         "active_window": "06:00-22:00"
       },
       {
         "name": "Weer",
         "path": "/data/weather.mp3",
-        "max_age_minutes": 60
+        "max_age_minutes": 60,
+        "stat_timeout_seconds": 5
       }
     ]
   },
