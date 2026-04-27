@@ -532,7 +532,7 @@ func (s *BackupService) Delete(filename string) error {
 				slog.Warn("Failed to delete S3 backup", "filename", filename, "error", err)
 			}
 		}) {
-			slog.Warn("S3 verwijdering overgeslagen: backup service is afgesloten", "filename", filename)
+			slog.Warn("S3 deletion skipped: backup service is closed", "filename", filename)
 		}
 	}
 

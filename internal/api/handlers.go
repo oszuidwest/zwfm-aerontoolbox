@@ -401,6 +401,6 @@ func (s *Server) handleTestEmail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusOK, map[string]string{
-		"message": "Test e-mail succesvol verzonden",
+		"message": "Test email sent successfully",
 	})
 }

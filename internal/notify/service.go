@@ -69,9 +69,9 @@ func New(cfg *config.Config) *NotificationService {
 
 	if IsConfigured(emailCfg) {
 		svc.expiryChecker = NewSecretExpiryChecker(emailCfg)
-		slog.Info("E-mailnotificaties geconfigureerd")
+		slog.Info("Email notifications configured")
 	} else {
-		slog.Warn("E-mailnotificaties niet geconfigureerd - failures worden niet gemeld per e-mail")
+		slog.Warn("Email notifications not configured - failures will not be reported by email")
 	}
 
 	return svc
@@ -220,7 +220,7 @@ func (s *NotificationService) sendAsync(subject, body string) {
 	if !s.runner.TryGoBackground(func() {
 		s.send(subject, body)
 	}) {
-		slog.Warn("Notificatie e-mail niet verstuurd: service is afgesloten", "subject", subject)
+		slog.Warn("Notification email not sent: service is closed", "subject", subject)
 	}
 }
 
@@ -231,7 +231,7 @@ const sendTimeout = 2 * time.Minute
 func (s *NotificationService) send(subject, body string) {
 	client, err := s.getOrCreateClient()
 	if err != nil {
-		slog.Error("Notificatie client aanmaken mislukt", "error", err)
+		slog.Error("Notification client creation failed", "error", err)
 		s.trackError(err)
 		return
 	}
@@ -240,12 +240,12 @@ func (s *NotificationService) send(subject, body string) {
 	defer cancel()
 
 	if err := client.SendMail(ctx, s.recipients, subject, body); err != nil {
-		slog.Error("Notificatie e-mail verzenden mislukt", "error", err, "subject", subject)
+		slog.Error("Notification email sending failed", "error", err, "subject", subject)
 		s.trackError(err)
 		return
 	}
 
-	slog.Info("Notificatie e-mail verzonden", "subject", subject)
+	slog.Info("Notification email sent", "subject", subject)
 }
 
 // trackError records the last notification error for the health endpoint.
