@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestFileMonitorValidation_EnabledWithEmptyChecks(t *testing.T) {
@@ -73,42 +74,26 @@ func TestFileMonitorValidation_MissingPath(t *testing.T) {
 	}
 }
 
-func TestFileMonitorCheckIntervalMinutes(t *testing.T) {
-	tests := []struct {
-		name     string
-		checks   []FileMonitorCheckConfig
-		expected int
-	}{
-		{
-			name:     "empty checks",
-			checks:   nil,
-			expected: 0,
-		},
-		{
-			name: "single check",
-			checks: []FileMonitorCheckConfig{
-				{Path: "/a", MaxAgeMinutes: 30},
-			},
-			expected: 30,
-		},
-		{
-			name: "multiple checks returns minimum",
-			checks: []FileMonitorCheckConfig{
-				{Path: "/a", MaxAgeMinutes: 60},
-				{Path: "/b", MaxAgeMinutes: 10},
-				{Path: "/c", MaxAgeMinutes: 30},
-			},
-			expected: 10,
-		},
+func TestInterval_DefaultIsSixtySeconds(t *testing.T) {
+	cfg := &FileMonitorConfig{}
+	if got, want := cfg.Interval(), 60*time.Second; got != want {
+		t.Errorf("Interval() = %s, want %s", got, want)
 	}
+}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := &FileMonitorConfig{Checks: tt.checks}
-			if got := cfg.CheckIntervalMinutes(); got != tt.expected {
-				t.Errorf("CheckIntervalMinutes() = %d, want %d", got, tt.expected)
-			}
-		})
+func TestInterval_RespectsConfig(t *testing.T) {
+	cfg := &FileMonitorConfig{IntervalSeconds: 90}
+	if got, want := cfg.Interval(), 90*time.Second; got != want {
+		t.Errorf("Interval() = %s, want %s", got, want)
+	}
+}
+
+func TestInterval_ZeroFallsBackToDefault(t *testing.T) {
+	for _, n := range []int{0, -5} {
+		cfg := &FileMonitorConfig{IntervalSeconds: n}
+		if got, want := cfg.Interval(), 60*time.Second; got != want {
+			t.Errorf("Interval() with IntervalSeconds=%d = %s, want %s", n, got, want)
+		}
 	}
 }
 
