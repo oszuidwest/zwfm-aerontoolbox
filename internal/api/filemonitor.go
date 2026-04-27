@@ -31,7 +31,7 @@ func (s *Server) handleFileMonitorCheck(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	respondJSON(w, http.StatusAccepted, FileMonitorCheckResponse{
-		Message: "File monitor check started",
+		Message: "Bestandscontrole gestart",
 		RunID:   runID,
 		Check:   "/api/file-monitor/status",
 	})

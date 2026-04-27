@@ -17,8 +17,9 @@ import (
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
 )
 
-// osStat is the file-system probe used by Run(). Tests override it to inject
-// hangs or controlled errors without touching the real file system.
+// osStat is the file-system probe invoked by startOrJoinFlight. Tests
+// override it to inject hangs or controlled errors without touching the real
+// file system.
 var osStat = os.Stat
 
 // nowFunc returns the current time. Wrapped here so windowing tests can pin
@@ -30,6 +31,18 @@ var nowFunc = time.Now
 // statCheckParallelism caps how many files are stat'd concurrently per Run().
 // A radio config typically lists a handful of files, so 8 is plenty.
 const statCheckParallelism = 8
+
+const (
+	fileCheckErrorKindNotFound    = "not_found"
+	fileCheckErrorKindPermission  = "permission_denied"
+	fileCheckErrorKindStatError   = "stat_error"
+	fileCheckErrorKindStatTimeout = "stat_timeout"
+)
+
+type fileMonitorNotifier interface {
+	SendFileAlerts([]notify.FileAlertResult)
+	SendFileRecoveries([]notify.FileAlertResult)
+}
 
 // statResult holds the outcome of a single os.Stat invocation.
 type statResult struct {
@@ -51,13 +64,13 @@ type statInFlight struct {
 // FileMonitorService monitors files on disk for staleness based on modification time.
 type FileMonitorService struct {
 	config *config.Config
-	notify *notify.NotificationService
+	notify fileMonitorNotifier
 
 	// Parsed ActiveWindow per check path. Populated once in
 	// newFileMonitorService and never mutated afterwards, so reads from Run()
 	// require no synchronisation. An entry missing or zero-valued means
 	// "always active". Pre-parsing here keeps the hot path lock-free and lets
-	// the constructor reject invalid windows up-front (see PR4 plan §9).
+	// the constructor reject invalid windows up-front.
 	windows map[string]config.TimeWindow
 
 	// Per-file alert state: path → currently in alert.
@@ -104,18 +117,19 @@ type FileMonitorStatus struct {
 	LastCheckAt     *time.Time        `json:"last_check_at,omitempty"`
 	IntervalSeconds int               `json:"interval_seconds"`
 	Checks          []FileCheckResult `json:"checks"`
-	staleCount      int
 }
 
 // FileCheckResult contains the result of checking a single file.
 //
-// Three valid state profiles exist:
-//   - File exists:  FileExists=true,  FileAgeMinutes/LastModified set, Error empty
-//   - File missing: FileExists=false, FileAgeMinutes/LastModified nil,  Error empty
-//   - Stat error:   FileExists=nil,   FileAgeMinutes/LastModified nil,  Error set
+// Five valid state profiles exist:
+//   - File exists:        FileExists=true,  FileAgeMinutes/LastModified set, Error empty
+//   - File missing:       FileExists=false, FileAgeMinutes/LastModified nil,  Error empty, ErrorKind="not_found"
+//   - Permission denied:  FileExists=nil,   FileAgeMinutes/LastModified nil,  Error set, ErrorKind="permission_denied"
+//   - Stat timeout:       FileExists=nil,   FileAgeMinutes/LastModified nil,  Error set, ErrorKind="stat_timeout"
+//   - Stat error:         FileExists=nil,   FileAgeMinutes/LastModified nil,  Error set, ErrorKind="stat_error"
 //
 // ErrorKind classifies the failure mode for downstream consumers:
-// "" (success), "not_found", "stat_timeout", "stat_error".
+// "" (success), "not_found", "permission_denied", "stat_timeout", "stat_error".
 type FileCheckResult struct {
 	Name           string     `json:"name,omitempty"`
 	Path           string     `json:"path"`
@@ -177,6 +191,7 @@ func (s *FileMonitorService) executeRun() *FileMonitorStatus {
 			return nil
 		})
 	}
+	// Always nil: goroutines embed errors in FileCheckResult and never return them.
 	_ = g.Wait()
 
 	var newAlerts []notify.FileAlertResult
@@ -230,9 +245,11 @@ func (s *FileMonitorService) executeRun() *FileMonitorStatus {
 
 	// Send batched notifications outside the lock.
 	if len(newAlerts) > 0 {
+		slog.Info("File monitor alert dispatch started", "count", len(newAlerts), "paths", alertPaths(newAlerts))
 		s.notify.SendFileAlerts(newAlerts)
 	}
 	if len(newRecoveries) > 0 {
+		slog.Info("File monitor recovery dispatch started", "count", len(newRecoveries), "paths", alertPaths(newRecoveries))
 		s.notify.SendFileRecoveries(newRecoveries)
 	}
 
@@ -246,10 +263,8 @@ func (s *FileMonitorService) executeRun() *FileMonitorStatus {
 	slog.Info("File monitor check completed", "total", len(results), "stale", staleCount)
 
 	return &FileMonitorStatus{
-		LastCheckAt:     &now,
-		IntervalSeconds: int(s.config.FileMonitor.Interval().Seconds()),
-		Checks:          results,
-		staleCount:      staleCount,
+		LastCheckAt: &now,
+		Checks:      results,
 	}
 }
 
@@ -284,7 +299,6 @@ func (s *FileMonitorService) Status() *FileMonitorStatus {
 	if s.lastCheck != nil {
 		snap.LastCheckAt = s.lastCheck.LastCheckAt
 		snap.Checks = s.lastCheck.Checks
-		snap.staleCount = s.lastCheck.staleCount
 	}
 	return snap
 }
@@ -295,11 +309,7 @@ func (s *FileMonitorService) Status() *FileMonitorStatus {
 func (s *FileMonitorService) StaleCount() int {
 	s.publishedMu.RLock()
 	defer s.publishedMu.RUnlock()
-
-	if s.lastCheck == nil {
-		return 0
-	}
-	return s.lastCheck.staleCount
+	return s.countChecksLocked(func(c FileCheckResult) bool { return c.IsStale })
 }
 
 // AlertingCount returns the number of checks currently in alert (InAlert==true)
@@ -310,13 +320,17 @@ func (s *FileMonitorService) StaleCount() int {
 func (s *FileMonitorService) AlertingCount() int {
 	s.publishedMu.RLock()
 	defer s.publishedMu.RUnlock()
+	return s.countChecksLocked(func(c FileCheckResult) bool { return c.InAlert })
+}
 
+// countChecksLocked counts results satisfying pred. Caller must hold publishedMu for reading.
+func (s *FileMonitorService) countChecksLocked(pred func(FileCheckResult) bool) int {
 	if s.lastCheck == nil {
 		return 0
 	}
 	n := 0
 	for _, c := range s.lastCheck.Checks {
-		if c.InAlert {
+		if pred(c) {
 			n++
 		}
 	}
@@ -350,7 +364,7 @@ func (s *FileMonitorService) startNewRun() uint64 {
 	s.publishedMu.Lock()
 	defer s.publishedMu.Unlock()
 	s.runID++
-	now := time.Now()
+	now := nowFunc()
 	s.startedAt = &now
 	return s.runID
 }
@@ -389,10 +403,13 @@ func (s *FileMonitorService) checkFileWithTimeout(check config.FileMonitorCheckC
 		remaining = timeout
 	}
 
+	timer := time.NewTimer(remaining)
+	defer timer.Stop()
+
 	select {
 	case <-flight.done:
 		return s.buildResult(check, flight.result.info, flight.result.err, now)
-	case <-time.After(remaining):
+	case <-timer.C:
 		return s.timeoutResult(check, flight, timeout)
 	}
 }
@@ -412,9 +429,12 @@ func (s *FileMonitorService) startOrJoinFlight(path string, now time.Time) (*sta
 
 	flight := &statInFlight{started: now, done: make(chan struct{})}
 	s.inflight[path] = flight
+	// Snapshot the probe before spawning so tests can restore osStat in
+	// t.Cleanup without racing a goroutine that has not started executing yet.
+	statFn := osStat
 
 	go func() {
-		info, err := osStat(path)
+		info, err := statFn(path)
 		flight.result = statResult{info: info, err: err}
 		close(flight.done) // happens-before vs. <-flight.done in readers
 
@@ -440,7 +460,7 @@ func (s *FileMonitorService) timeoutResult(check config.FileMonitorCheckConfig, 
 		Path:          check.Path,
 		MaxAgeMinutes: check.MaxAgeMinutes,
 		IsStale:       true,
-		ErrorKind:     "stat_timeout",
+		ErrorKind:     fileCheckErrorKindStatTimeout,
 		Error:         fmt.Sprintf("stat timeout after %s", timeout),
 	}
 }
@@ -457,15 +477,20 @@ func (s *FileMonitorService) buildResult(check config.FileMonitorCheckConfig, in
 		result.IsStale = true
 		label := check.DisplayName()
 
-		if errors.Is(err, os.ErrNotExist) {
+		switch {
+		case errors.Is(err, os.ErrNotExist):
 			exists := false
 			result.FileExists = &exists
-			result.ErrorKind = "not_found"
+			result.ErrorKind = fileCheckErrorKindNotFound
 			slog.Warn("File monitor: file not found", "name", label, "path", check.Path)
-		} else {
+		case errors.Is(err, os.ErrPermission):
+			result.Error = err.Error()
+			result.ErrorKind = fileCheckErrorKindPermission
+			slog.Warn("File monitor: permission denied", "name", label, "path", check.Path, "error", err)
+		default:
 			// FileExists stays nil — we cannot determine existence.
 			result.Error = err.Error()
-			result.ErrorKind = "stat_error"
+			result.ErrorKind = fileCheckErrorKindStatError
 			slog.Warn("File monitor: file stat error", "name", label, "path", check.Path, "error", err)
 		}
 		return result
@@ -509,4 +534,12 @@ func toAlertResult(check config.FileMonitorCheckConfig, result *FileCheckResult,
 		alert.ActualAge = time.Duration(*result.FileAgeMinutes * float64(time.Minute))
 	}
 	return alert
+}
+
+func alertPaths(results []notify.FileAlertResult) []string {
+	paths := make([]string, 0, len(results))
+	for _, result := range results {
+		paths = append(paths, result.Path)
+	}
+	return paths
 }

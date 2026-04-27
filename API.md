@@ -1010,18 +1010,18 @@ Validatie gebeurt via `pg_restore --list` die de TOC en interne checksums contro
 
 ---
 
-## File monitor
+## Bestandscontrole
 
-The file monitor watches files on disk and signals when they are older than a configured maximum age. This is useful for detecting failing downloads or updates from external processes (e.g. news bulletins, weather MP3s).
+De bestandscontrole bewaakt bestanden op schijf en signaleert wanneer ze ouder zijn dan een geconfigureerde maximale leeftijd. Dit is handig om mislukte downloads of updates vanuit externe processen te detecteren, zoals nieuwsbulletins of weerberichten.
 
-Checks run automatically at a fixed interval. The default is 60 seconds; tune via `file_monitor.interval_seconds`. After a restart the first check is treated as a "grace run": results are observed but no notifications are sent, which avoids false alarms.
+Controles draaien automatisch met een vast interval. Standaard is dat 60 seconden; dit is aan te passen via `file_monitor.interval_seconds`. Na een herstart geldt de eerste controle als een "grace run": de resultaten worden wel gemeten, maar er worden nog geen notificaties verstuurd. Zo voorkom je valse alarmen.
 
 > [!IMPORTANT]
-> **Breaking change:** the `interval_minutes` field in the status response has been replaced by `interval_seconds`. External consumers must use the new field name.
+> **Breaking change:** het veld `interval_minutes` in de statusresponse is vervangen door `interval_seconds`. Externe afnemers moeten de nieuwe veldnaam gebruiken.
 
-### File monitor status
+### Status van de bestandscontrole
 
-Shows the results of the most recent file monitor run, plus the current run state.
+Toont de resultaten van de meest recente bestandscontrole, plus de huidige runstatus.
 
 **Endpoint:** `GET /api/file-monitor/status`
 **Authentication:** Required
@@ -1060,9 +1060,9 @@ Shows the results of the most recent file monitor run, plus the current run stat
 }
 ```
 
-The following examples show individual entries from the `checks` array for specific situations:
+De volgende voorbeelden tonen losse items uit de `checks`-array voor specifieke situaties:
 
-**Check item for a missing file:**
+**Check-item voor een ontbrekend bestand:**
 ```json
 {
   "name": "Nieuws bulletin",
@@ -1075,7 +1075,7 @@ The following examples show individual entries from the `checks` array for speci
 }
 ```
 
-**Check item on a stat error (e.g. no permission):**
+**Check-item bij een stat-fout (bijvoorbeeld geen rechten):**
 ```json
 {
   "name": "Nieuws bulletin",
@@ -1085,11 +1085,25 @@ The following examples show individual entries from the `checks` array for speci
   "is_stale": true,
   "in_alert": true,
   "error": "stat /data/news.mp3: permission denied",
+  "error_kind": "permission_denied"
+}
+```
+
+**Check-item bij een algemene stat-fout (bijvoorbeeld een I/O-fout):**
+```json
+{
+  "name": "Nieuws bulletin",
+  "path": "/data/news.mp3",
+  "max_age_minutes": 10,
+  "file_exists": null,
+  "is_stale": true,
+  "in_alert": true,
+  "error": "stat /data/news.mp3: input/output error",
   "error_kind": "stat_error"
 }
 ```
 
-**Check item on a stat timeout (e.g. frozen NFS mount):**
+**Check-item bij een stat-time-out (bijvoorbeeld een vastgelopen NFS-mount):**
 ```json
 {
   "name": "Nieuws bulletin",
@@ -1102,33 +1116,33 @@ The following examples show individual entries from the `checks` array for speci
 }
 ```
 
-**Top-level fields:**
-- `running`: Whether a run is currently in progress.
-- `run_id`: Monotone server-side identifier of the current or most recently started run (`0` if the service has never run).
-- `completed_run_id`: Identifier of the run whose results are reflected in the visible `checks` and `last_check_at`. See the polling recipe below.
-- `started_at`: Start time of the current or most recent run.
-- `last_check_at`: Completion time of the most recent run.
-- `interval_seconds`: Configured polling cadence in seconds (default 60).
-- `checks`: Array of per-file results.
+**Velden op topniveau:**
+- `running`: Of er op dit moment een run bezig is.
+- `run_id`: Monotone server-side identifier van de huidige of meest recent gestarte run (`0` als de service nog nooit heeft gedraaid).
+- `completed_run_id`: Identifier van de run waarvan de resultaten zichtbaar zijn in `checks` en `last_check_at`. Zie het pollingrecept hieronder.
+- `started_at`: Starttijd van de huidige of meest recente run.
+- `last_check_at`: Eindtijd van de meest recente run.
+- `interval_seconds`: Geconfigureerd pollinginterval in seconden (standaard 60).
+- `checks`: Array met resultaten per bestand.
 
-**Per-check fields:**
-- `name`: Optional display name (from configuration).
-- `path`: File path on disk.
-- `max_age_minutes`: Maximum allowed age.
-- `file_exists`: Whether the file exists (`true`, `false`, or `null` on errors).
-- `file_age_minutes`: Age in minutes (omitted when the file is missing or unreachable).
-- `last_modified`: Last modification time (omitted when the file is missing or unreachable).
-- `is_stale`: Whether the file is too old or unreachable.
-- `in_alert`: Whether an alert is currently active for this file. Always `false` outside the configured `active_window`, even if `is_stale` is `true`.
-- `error`: Human-readable error message on access problems (omitted on normal operation).
-- `error_kind`: Failure-mode classifier — one of `""` (success), `not_found`, `stat_timeout`, `stat_error`.
+**Velden per check:**
+- `name`: Optionele weergavenaam uit de configuratie.
+- `path`: Bestandspad op schijf.
+- `max_age_minutes`: Maximaal toegestane leeftijd.
+- `file_exists`: Of het bestand bestaat (`true`, `false`, of `null` bij fouten).
+- `file_age_minutes`: Leeftijd in minuten (ontbreekt als het bestand ontbreekt of niet bereikbaar is).
+- `last_modified`: Laatste wijzigingstijd (ontbreekt als het bestand ontbreekt of niet bereikbaar is).
+- `is_stale`: Of het bestand te oud is of niet bereikbaar is.
+- `in_alert`: Of voor dit bestand momenteel een alert actief is. Buiten de geconfigureerde `active_window` is dit altijd `false`, ook als `is_stale` `true` is.
+- `error`: Leesbare foutmelding bij toegangsproblemen (ontbreekt bij normaal gebruik).
+- `error_kind`: Classificatie van het fouttype: `""` (succes), `not_found`, `permission_denied`, `stat_timeout` of `stat_error`.
 
 > [!NOTE]
-> The `file_exists` field is nullable: `true` = file exists, `false` = file not found, `null` = unknown (e.g. on a permission error). Inspect the `error` field for details when `file_exists` is `null`.
+> Het veld `file_exists` is nullable: `true` = bestand bestaat, `false` = bestand niet gevonden, `null` = onbekend (bijvoorbeeld bij een permissiefout). Gebruik het veld `error` voor details als `file_exists` `null` is.
 
-### Trigger a manual file monitor run
+### Handmatig een bestandscontrole starten
 
-Starts a file monitor run in the background. Useful during setup or troubleshooting so operators do not have to wait for the next scheduled tick.
+Start een bestandscontrole op de achtergrond. Handig tijdens configuratie of storingsonderzoek, zodat operators niet hoeven te wachten op de volgende geplande tick.
 
 **Endpoint:** `POST /api/file-monitor/check`
 **Authentication:** Required
@@ -1136,7 +1150,7 @@ Starts a file monitor run in the background. Useful during setup or troubleshoot
 **Response:** `202 Accepted`
 ```json
 {
-  "message": "File monitor check started",
+  "message": "Bestandscontrole gestart",
   "run_id": 43,
   "check": "/api/file-monitor/status"
 }
@@ -1149,19 +1163,19 @@ Starts a file monitor run in the background. Useful during setup or troubleshoot
 }
 ```
 
-The trigger and the cron job share the same single-flight gate, so a manual call returns `409` while a scheduled run is still in progress (and vice versa) — duplicate alert/recovery emails cannot be produced.
+De handmatige trigger en de cronjob gebruiken dezelfde single-flight gate. Daardoor geeft een handmatige call `409` terug zolang een geplande run nog bezig is, en andersom. Dubbele alert- of herstelmails kunnen dus niet ontstaan.
 
-**Polling recipe (server-side correlation, no clock dependency):**
+**Pollingrecept (server-side correlatie, zonder afhankelijkheid van systeemtijd):**
 
-1. Read `run_id` from the `POST /check` response → call this `myRunID`.
+1. Lees `run_id` uit de response van `POST /check` en noem die waarde `myRunID`.
 2. Poll `GET /api/file-monitor/status`.
-3. The run is complete **and the visible checks were produced by your run** when `completed_run_id >= myRunID && running == false`.
+3. De run is klaar **en de zichtbare checks zijn door jouw run geproduceerd** zodra `completed_run_id >= myRunID && running == false`.
 
-Strict equality (`completed_run_id == myRunID`) confirms the visible `checks` were produced by your specific run. A larger value means a later run (e.g. a cron tick) overtook yours, which is fine for "is the system healthy now" but loses exact correlation. For exact troubleshooting use the strict comparison and accept that a race may occur.
+Strikte gelijkheid (`completed_run_id == myRunID`) bevestigt dat de zichtbare `checks` exact door jouw run zijn geproduceerd. Een hogere waarde betekent dat een latere run, bijvoorbeeld via cron, jouw run heeft ingehaald. Dat is prima voor de vraag "is het systeem nu gezond?", maar verliest de exacte correlatie. Gebruik voor nauwkeurige troubleshooting daarom de strikte vergelijking en houd rekening met een mogelijke race.
 
-### Integration with the health endpoint (file monitor)
+### Integratie met de health-endpoint (bestandscontrole)
 
-When the file monitor is enabled, the health endpoint (`GET /api/health`) exposes an extra `file_monitor` block:
+Als de bestandscontrole is ingeschakeld, geeft de health-endpoint (`GET /api/health`) een extra `file_monitor`-blok terug:
 
 ```json
 {
@@ -1178,10 +1192,10 @@ When the file monitor is enabled, the health endpoint (`GET /api/health`) expose
 }
 ```
 
-- `checks_stale`: raw count of files that are too old or unreachable (includes files outside their `active_window`).
-- `checks_alerting`: window-aware count — excludes files that fall outside their `active_window`. This field drives the overall `"degraded"` status.
+- `checks_stale`: ruwe telling van bestanden die te oud zijn of niet bereikbaar zijn, inclusief bestanden buiten hun `active_window`.
+- `checks_alerting`: window-aware telling; bestanden buiten hun `active_window` tellen hier niet mee. Dit veld bepaalt de algemene status `"degraded"`.
 
-The overall status flips to `"degraded"` as soon as `checks_alerting > 0`. A file that goes stale at night but is only refreshed during the day therefore does not push `/api/health` to `degraded` while it is outside its window.
+De algemene status wordt `"degraded"` zodra `checks_alerting > 0`. Een bestand dat 's nachts verouderd raakt maar alleen overdag wordt ververst, zet `/api/health` dus niet op `degraded` zolang het buiten zijn venster valt.
 
 ---
 
@@ -1474,20 +1488,20 @@ Het gedrag van de API kan worden geconfigureerd via `config.json`:
 }
 ```
 
-**File monitor settings:**
-- `file_monitor.enabled`: Enable the file monitor.
-- `file_monitor.interval_seconds`: Polling cadence in seconds (default 60; `0` or omit = default).
-- `file_monitor.checks`: Array of files to watch (at least one entry required when enabled).
-  - `name`: Optional display name used in notifications.
-  - `path`: Absolute path to the file.
-  - `max_age_minutes`: Maximum allowed age in minutes (minimum 1).
-  - `stat_timeout_seconds`: Maximum time in seconds for `os.Stat` (default 5; `0` or omit = default). Guards against frozen NFS/SMB mounts.
-  - `active_window`: Optional time window `"HH:MM-HH:MM"` in which alerts and `/health degraded` are active. Outside the window `is_stale` remains visible in `/status`, but no alert or recovery email is sent and `/health` stays healthy. An end time before the start time means the window wraps across midnight (e.g. `"22:00-06:00"` is active from 22:00 until 06:00 the next morning). Equal start and end times are invalid — omit the field for always-active.
+**Instellingen voor bestandscontrole:**
+- `file_monitor.enabled`: Schakel de bestandscontrole in.
+- `file_monitor.interval_seconds`: Pollinginterval in seconden (standaard 60; `0` of weglaten = standaard).
+- `file_monitor.checks`: Array met te bewaken bestanden (minimaal 1 item vereist wanneer ingeschakeld).
+  - `name`: Optionele weergavenaam voor notificaties.
+  - `path`: Absoluut pad naar het bestand.
+  - `max_age_minutes`: Maximaal toegestane leeftijd in minuten (minimaal 1).
+  - `stat_timeout_seconds`: Maximale tijd in seconden voor `os.Stat` (standaard 5; `0` of weglaten = standaard). Beschermt tegen vastgelopen NFS- of SMB-mounts.
+  - `active_window`: Optioneel tijdvenster `"HH:MM-HH:MM"` waarin alerts en `/health degraded` actief zijn. Buiten dit venster blijft `is_stale` zichtbaar in `/status`, maar wordt er geen alert- of herstelmail verstuurd en blijft `/health` gezond. Een eindtijd vóór de starttijd betekent dat het venster over middernacht heen loopt, bijvoorbeeld `"22:00-06:00"`. Gelijke start- en eindtijd zijn ongeldig; laat het veld weg voor altijd actief.
 
-The check interval is independent of `max_age_minutes` and is configured via `interval_seconds` (default 60 s).
+Het controle-interval staat los van `max_age_minutes` en wordt geconfigureerd via `interval_seconds` (standaard 60 s).
 
 > [!IMPORTANT]
-> `active_window` is interpreted in the local time zone driven by the `TZ` environment variable. Set `TZ` consistently in production so the window behaves as the operator expects.
+> `active_window` wordt geïnterpreteerd in de lokale tijdzone die wordt bepaald door de `TZ`-omgevingsvariabele. Stel `TZ` in productie consequent in, zodat het venster werkt zoals de operator verwacht.
 
 Zie [config.example.json](config.example.json) voor alle beschikbare opties.
 
