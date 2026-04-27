@@ -56,15 +56,20 @@ type FileMonitorService struct {
 	inflightMu sync.Mutex
 	inflight   map[string]*statInFlight
 
-	// Published state: lastCheck + run-state live under one lock so a Status()
+	// Published state: lastCheck + run IDs live under one lock so a Status()
 	// snapshot is internally consistent. Writing lastCheck without also bumping
 	// completedRunID (or vice versa) would let a client observe checks from
 	// run N+1 paired with completed_run_id=N — which would falsify the
 	// documented exact-correlation contract.
+	//
+	// Status().Running comes from runner.IsRunning() (atomic) rather than a
+	// mirrored field. The runner is the actual single-flight gate: clearing a
+	// mirrored s.running inside fn() would flip Running=false before the
+	// runner's deferred Store(false) opens the gate, so a client could see
+	// "idle" but still get a 409 from the next TriggerCheck.
 	runner         *async.Runner
 	publishedMu    sync.RWMutex
 	lastCheck      *FileMonitorStatus
-	running        bool
 	startedAt      *time.Time
 	runID          uint64
 	completedRunID uint64
@@ -218,11 +223,14 @@ func (s *FileMonitorService) executeRun() *FileMonitorStatus {
 
 // Status returns a fresh snapshot of run-state and the most recent Checks.
 //
-// Single-lock read: lastCheck and run-state (running/runID/completedRunID)
-// are written together under publishedMu by publishCompleted, so a snapshot
-// observed here is internally consistent. Concretely, completed_run_id
-// always names the run that produced the visible Checks — clients can rely
-// on the documented `completed_run_id == myRunID` exact-correlation contract.
+// Single-lock read: lastCheck and run IDs are written together under
+// publishedMu by publishCompleted, so a snapshot observed here is internally
+// consistent. Concretely, completed_run_id always names the run that
+// produced the visible Checks — clients can rely on the documented
+// `completed_run_id == myRunID` exact-correlation contract.
+//
+// Running is read from the runner's atomic gate, not a mirrored field, so
+// `running == false` always implies the next TriggerCheck() will succeed.
 //
 // lastCheck.Checks is safe to share because executeRun() builds a fresh
 // slice each call and never mutates a previously published one.
@@ -231,7 +239,7 @@ func (s *FileMonitorService) Status() *FileMonitorStatus {
 	defer s.publishedMu.RUnlock()
 
 	snap := &FileMonitorStatus{
-		Running:         s.running,
+		Running:         s.runner.IsRunning(),
 		RunID:           s.runID,
 		CompletedRunID:  s.completedRunID,
 		IntervalSeconds: int(s.config.FileMonitor.Interval().Seconds()),
@@ -281,28 +289,26 @@ func (s *FileMonitorService) TriggerCheck() (uint64, error) {
 	return runID, nil
 }
 
-// startNewRun increments the run counter, marks the service running, and
-// records the start time. Returns the new run ID.
+// startNewRun increments the run counter and records the start time.
+// Returns the new run ID. The "running" state itself is owned by the runner.
 func (s *FileMonitorService) startNewRun() uint64 {
 	s.publishedMu.Lock()
 	defer s.publishedMu.Unlock()
 	s.runID++
-	s.running = true
 	now := time.Now()
 	s.startedAt = &now
 	return s.runID
 }
 
-// publishCompleted atomically publishes the run's result and clears the
-// running flag under a single lock. Pairing lastCheck with completedRunID in
-// one critical section is what makes the polling contract
+// publishCompleted atomically publishes the run's result and bumps
+// completedRunID under a single lock. Pairing lastCheck with completedRunID
+// in one critical section is what makes the polling contract
 // `completed_run_id == myRunID` an exact-correlation guarantee — a Status()
 // reader can never see lastCheck from run N+1 alongside completedRunID=N.
 func (s *FileMonitorService) publishCompleted(status *FileMonitorStatus, runID uint64) {
 	s.publishedMu.Lock()
 	defer s.publishedMu.Unlock()
 	s.lastCheck = status
-	s.running = false
 	s.completedRunID = runID
 }
 

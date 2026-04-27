@@ -688,6 +688,36 @@ func TestScheduler_RunFileMonitor_SkipsWhenAlreadyActive(t *testing.T) {
 	fmSvc.Close()
 }
 
+func TestTriggerCheck_NoConflictAfterStatusReportsIdle(t *testing.T) {
+	// Status().Running must agree with the runner's single-flight gate: once
+	// a client observes Running == false, the next TriggerCheck() must
+	// succeed without 409. Earlier the published "running" was cleared in
+	// publishCompleted (inside fn), but the runner's own Store(false) only
+	// fires in a defer after fn returns — so a brief window let the API
+	// report idle while TryStart() still rejected.
+	path := filepath.Join(t.TempDir(), "news.mp3")
+	touchFile(t, path)
+
+	svc := newTestService([]config.FileMonitorCheckConfig{
+		{Name: "News", Path: path, MaxAgeMinutes: 60},
+	})
+	defer svc.Close()
+
+	// 200 back-to-back triggers; if Status().Running could ever lead the
+	// runner gate, one of these waitForCompleted → TriggerCheck pairs would
+	// hit a 409. Reproducer at -count=50 originally failed ~5/50.
+	for i := 0; i < 200; i++ {
+		runID, err := svc.TriggerCheck()
+		if err != nil {
+			t.Fatalf("TriggerCheck #%d (after %d successful back-to-backs): %v", i, i, err)
+		}
+		waitForCompleted(t, svc, runID)
+		if svc.Status().Running {
+			t.Fatalf("iter %d: waitForCompleted returned but Status().Running == true", i)
+		}
+	}
+}
+
 func TestStatus_NoTornSnapshotUnderConcurrentReads(t *testing.T) {
 	// Real interleaving test for the torn-snapshot bug. Concurrent readers
 	// snapshot Status() while a writer triggers many runs back-to-back. The
