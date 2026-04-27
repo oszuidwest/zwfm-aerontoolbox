@@ -110,15 +110,22 @@ type GraphConfig struct {
 
 // FileMonitorConfig contains settings for monitoring file freshness on disk.
 type FileMonitorConfig struct {
-	Enabled bool                     `json:"enabled"`
-	Checks  []FileMonitorCheckConfig `json:"checks" validate:"required_if=Enabled true,dive"`
+	Enabled         bool                     `json:"enabled"`
+	IntervalSeconds int                      `json:"interval_seconds" validate:"gte=0"`
+	Checks          []FileMonitorCheckConfig `json:"checks" validate:"required_if=Enabled true,dive"`
 }
 
 // FileMonitorCheckConfig defines a single file to monitor for staleness.
+//
+// ActiveWindow is validated by validateFileMonitorConfig (struct-level) so the
+// parser's specific reason — equal start/end, range, format — survives into
+// the error message instead of collapsing to a generic tag string.
 type FileMonitorCheckConfig struct {
-	Name          string `json:"name"`
-	Path          string `json:"path" validate:"required,absolute_path"`
-	MaxAgeMinutes int    `json:"max_age_minutes" validate:"required,gte=1"`
+	Name           string `json:"name"`
+	Path           string `json:"path" validate:"required,absolute_path"`
+	MaxAgeMinutes  int    `json:"max_age_minutes" validate:"required,gte=1"`
+	StatTimeoutSec int    `json:"stat_timeout_seconds" validate:"gte=0"`
+	ActiveWindow   string `json:"active_window"`
 }
 
 // DisplayName returns the check name if set, otherwise the file path.
@@ -129,19 +136,28 @@ func (c *FileMonitorCheckConfig) DisplayName() string {
 	return c.Path
 }
 
-// CheckIntervalMinutes returns the smallest max_age_minutes across all checks.
-// This is used as the scheduler interval so the most urgent file is checked on time.
-func (c *FileMonitorConfig) CheckIntervalMinutes() int {
-	if len(c.Checks) == 0 {
-		return 0
+// DefaultFileMonitorIntervalSeconds is the default polling cadence when interval_seconds is unset.
+const DefaultFileMonitorIntervalSeconds = 60
+
+// DefaultFileMonitorStatTimeoutSeconds is the default stat-timeout per check when stat_timeout_seconds is unset.
+const DefaultFileMonitorStatTimeoutSeconds = 5
+
+// StatTimeout returns the per-check stat timeout. Falls back to
+// DefaultFileMonitorStatTimeoutSeconds when StatTimeoutSec is zero or negative.
+func (c *FileMonitorCheckConfig) StatTimeout() time.Duration {
+	if c.StatTimeoutSec <= 0 {
+		return DefaultFileMonitorStatTimeoutSeconds * time.Second
 	}
-	m := c.Checks[0].MaxAgeMinutes
-	for _, check := range c.Checks[1:] {
-		if check.MaxAgeMinutes < m {
-			m = check.MaxAgeMinutes
-		}
+	return time.Duration(c.StatTimeoutSec) * time.Second
+}
+
+// Interval returns the polling cadence for the file monitor scheduler.
+// When IntervalSeconds is unset (0) or negative, it falls back to DefaultFileMonitorIntervalSeconds.
+func (c *FileMonitorConfig) Interval() time.Duration {
+	if c.IntervalSeconds <= 0 {
+		return DefaultFileMonitorIntervalSeconds * time.Second
 	}
-	return m
+	return time.Duration(c.IntervalSeconds) * time.Second
 }
 
 // LogConfig contains logging configuration.
@@ -382,10 +398,34 @@ func validateS3Config(sl validator.StructLevel) {
 	}
 }
 
-// validateFileMonitorConfig checks that at least one check is configured when file monitor
-// is enabled, and that no two checks share the same path.
+// validateFileMonitorConfig checks that at least one check is configured when
+// file monitor is enabled, that no two checks share the same path, and that
+// each ActiveWindow parses cleanly. The window check runs even when the
+// monitor is disabled so format/range typos surface during config load
+// rather than only after the operator flips the feature on. The parser
+// error string is forwarded verbatim via the tag param so the user sees the
+// concrete reason (e.g. "start and end are equal") instead of a generic
+// "must be HH:MM-HH:MM".
 func validateFileMonitorConfig(sl validator.StructLevel) {
 	fm := sl.Current().Interface().(FileMonitorConfig)
+
+	// Encode the slice index in the reported field name (e.g.
+	// "checks[1].active_window") so multiple bad windows produce distinct,
+	// locatable error labels. ReportError otherwise registers at the parent
+	// struct level — every bad check would collapse onto a single
+	// "filemonitor.active_window" key, defeating the point of telling the
+	// operator which entry to fix.
+	for i, c := range fm.Checks {
+		if c.ActiveWindow == "" {
+			continue
+		}
+		if _, err := ParseTimeWindow(c.ActiveWindow); err != nil {
+			fieldName := fmt.Sprintf("checks[%d].active_window", i)
+			structFieldName := fmt.Sprintf("Checks[%d].ActiveWindow", i)
+			sl.ReportError(fm.Checks[i].ActiveWindow, fieldName, structFieldName, "invalid_time_window", err.Error())
+		}
+	}
+
 	if !fm.Enabled {
 		return
 	}
@@ -455,6 +495,8 @@ func tagMessage(tag, param string) string {
 		return "contains invalid characters (only letters, numbers and underscores allowed)"
 	case "guid":
 		return "must be a valid GUID (e.g., 12345678-1234-1234-1234-123456789abc)"
+	case "invalid_time_window":
+		return param
 	default:
 		return fmt.Sprintf("is invalid (%s)", tag)
 	}

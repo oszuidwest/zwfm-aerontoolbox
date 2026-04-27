@@ -34,11 +34,16 @@ func New(db *sqlx.DB, cfg *config.Config) (*AeronService, error) {
 		return nil, err
 	}
 
+	fileMonitorSvc, err := newFileMonitorService(cfg, notifySvc)
+	if err != nil {
+		return nil, err
+	}
+
 	return &AeronService{
 		Media:       newMediaService(repo, cfg),
 		Backup:      backupSvc,
 		Maintenance: newMaintenanceService(repo, cfg, notifySvc),
-		FileMonitor: newFileMonitorService(cfg, notifySvc),
+		FileMonitor: fileMonitorSvc,
 		Notify:      notifySvc,
 		repo:        repo,
 		config:      cfg,

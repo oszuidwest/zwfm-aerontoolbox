@@ -1012,13 +1012,16 @@ Validatie gebeurt via `pg_restore --list` die de TOC en interne checksums contro
 
 ## Bestandscontrole
 
-De bestandscontrole (file monitor) bewaakt bestanden op schijf en signaleert wanneer ze ouder zijn dan een geconfigureerde maximumleeftijd. Dit is nuttig voor het detecteren van falende downloads of updates van externe processen (bijv. nieuwsbulletins, weerbericht-MP3's).
+De bestandscontrole bewaakt bestanden op schijf en signaleert wanneer ze ouder zijn dan een geconfigureerde maximale leeftijd. Dit is handig om mislukte downloads of updates vanuit externe processen te detecteren, zoals nieuwsbulletins of weerberichten.
 
-De controle draait automatisch op een interval dat is afgeleid van de kleinste `max_age_minutes` uit alle geconfigureerde checks. Na een herstart wordt de eerste controle als "grace run" beschouwd: resultaten worden geobserveerd maar er worden geen meldingen verstuurd, om valse alarmen te voorkomen.
+Controles draaien automatisch met een vast interval. Standaard is dat 60 seconden; dit is aan te passen via `file_monitor.interval_seconds`. Na een herstart geldt de eerste controle als een "grace run": de resultaten worden wel gemeten, maar er worden nog geen notificaties verstuurd. Zo voorkom je valse alarmen.
 
-### Status bestandscontrole
+> [!IMPORTANT]
+> **Breaking change:** het veld `interval_minutes` in de statusresponse is vervangen door `interval_seconds`. Externe afnemers moeten de nieuwe veldnaam gebruiken.
 
-Toont de resultaten van de meest recente bestandscontrole.
+### Status van de bestandscontrole
+
+Toont de resultaten van de meest recente bestandscontrole, plus de huidige runstatus.
 
 **Endpoint:** `GET /api/file-monitor/status`
 **Authenticatie:** Vereist
@@ -1026,8 +1029,12 @@ Toont de resultaten van de meest recente bestandscontrole.
 **Response:** `200 OK`
 ```json
 {
+  "running": false,
+  "run_id": 42,
+  "completed_run_id": 42,
+  "started_at": "2024-01-15T10:29:55Z",
   "last_check_at": "2024-01-15T10:30:00Z",
-  "interval_minutes": 10,
+  "interval_seconds": 60,
   "checks": [
     {
       "name": "Nieuws bulletin",
@@ -1053,9 +1060,9 @@ Toont de resultaten van de meest recente bestandscontrole.
 }
 ```
 
-De volgende voorbeelden tonen individuele items uit de `checks`-array voor specifieke situaties:
+De volgende voorbeelden tonen losse items uit de `checks`-array voor specifieke situaties:
 
-**Check-item bij ontbrekend bestand:**
+**Check-item voor een ontbrekend bestand:**
 ```json
 {
   "name": "Nieuws bulletin",
@@ -1063,11 +1070,12 @@ De volgende voorbeelden tonen individuele items uit de `checks`-array voor speci
   "max_age_minutes": 10,
   "file_exists": false,
   "is_stale": true,
-  "in_alert": true
+  "in_alert": true,
+  "error_kind": "not_found"
 }
 ```
 
-**Check-item bij fout (bijv. geen toegang):**
+**Check-item bij een stat-fout (bijvoorbeeld geen rechten):**
 ```json
 {
   "name": "Nieuws bulletin",
@@ -1076,30 +1084,98 @@ De volgende voorbeelden tonen individuele items uit de `checks`-array voor speci
   "file_exists": null,
   "is_stale": true,
   "in_alert": true,
-  "error": "stat /data/news.mp3: permission denied"
+  "error": "stat /data/news.mp3: permission denied",
+  "error_kind": "permission_denied"
 }
 ```
 
-**Velden:**
-- `last_check_at`: Tijdstip van de laatste controle
-- `interval_minutes`: Automatisch berekend controle-interval (kleinste `max_age_minutes`)
-- `checks`: Array met resultaten per bestand
-  - `name`: Optionele weergavenaam (uit configuratie)
-  - `path`: Bestandspad op schijf
-  - `max_age_minutes`: Maximaal toegestane leeftijd
-  - `file_exists`: Of het bestand bestaat (`true`, `false`, of `null` bij fouten)
-  - `file_age_minutes`: Leeftijd in minuten (afwezig als bestand niet bestaat of niet bereikbaar is)
-  - `last_modified`: Laatste wijzigingstijd (afwezig als bestand niet bestaat of niet bereikbaar is)
-  - `is_stale`: Of het bestand te oud of onbereikbaar is
-  - `in_alert`: Of er momenteel een alert actief is voor dit bestand
-  - `error`: Foutmelding bij toegangsproblemen (afwezig bij normaal gebruik)
+**Check-item bij een algemene stat-fout (bijvoorbeeld een I/O-fout):**
+```json
+{
+  "name": "Nieuws bulletin",
+  "path": "/data/news.mp3",
+  "max_age_minutes": 10,
+  "file_exists": null,
+  "is_stale": true,
+  "in_alert": true,
+  "error": "stat /data/news.mp3: input/output error",
+  "error_kind": "stat_error"
+}
+```
+
+**Check-item bij een stat-time-out (bijvoorbeeld een vastgelopen NFS-mount):**
+```json
+{
+  "name": "Nieuws bulletin",
+  "path": "/data/news.mp3",
+  "max_age_minutes": 10,
+  "is_stale": true,
+  "in_alert": true,
+  "error": "stat timeout after 5s",
+  "error_kind": "stat_timeout"
+}
+```
+
+**Velden op topniveau:**
+- `running`: Of er op dit moment een run bezig is.
+- `run_id`: Monotone server-side identifier van de huidige of meest recent gestarte run (`0` als de service nog nooit heeft gedraaid).
+- `completed_run_id`: Identifier van de run waarvan de resultaten zichtbaar zijn in `checks` en `last_check_at`. Zie het pollingrecept hieronder.
+- `started_at`: Starttijd van de huidige of meest recente run.
+- `last_check_at`: Eindtijd van de meest recente run.
+- `interval_seconds`: Geconfigureerd pollinginterval in seconden (standaard 60).
+- `checks`: Array met resultaten per bestand.
+
+**Velden per check:**
+- `name`: Optionele weergavenaam uit de configuratie.
+- `path`: Bestandspad op schijf.
+- `max_age_minutes`: Maximaal toegestane leeftijd.
+- `file_exists`: Of het bestand bestaat (`true`, `false`, of `null` bij fouten).
+- `file_age_minutes`: Leeftijd in minuten (ontbreekt als het bestand ontbreekt of niet bereikbaar is).
+- `last_modified`: Laatste wijzigingstijd (ontbreekt als het bestand ontbreekt of niet bereikbaar is).
+- `is_stale`: Of het bestand te oud is of niet bereikbaar is.
+- `in_alert`: Of voor dit bestand momenteel een alert actief is. Buiten de geconfigureerde `active_window` is dit altijd `false`, ook als `is_stale` `true` is.
+- `error`: Leesbare foutmelding bij toegangsproblemen (ontbreekt bij normaal gebruik).
+- `error_kind`: Classificatie van het fouttype: `""` (succes), `not_found`, `permission_denied`, `stat_timeout` of `stat_error`.
 
 > [!NOTE]
-> Het veld `file_exists` is nullable: `true` = bestand bestaat, `false` = bestand niet gevonden, `null` = onbekend (bijv. bij een permissiefout). Controleer het `error`-veld voor details wanneer `file_exists` `null` is.
+> Het veld `file_exists` is nullable: `true` = bestand bestaat, `false` = bestand niet gevonden, `null` = onbekend (bijvoorbeeld bij een permissiefout). Gebruik het veld `error` voor details als `file_exists` `null` is.
 
-### Integratie met health-endpoint (bestandscontrole)
+### Handmatig een bestandscontrole starten
 
-Wanneer de bestandscontrole is ingeschakeld, toont het health-endpoint (`GET /api/health`) een extra `file_monitor`-veld:
+Start een bestandscontrole op de achtergrond. Handig tijdens configuratie of storingsonderzoek, zodat operators niet hoeven te wachten op de volgende geplande tick.
+
+**Endpoint:** `POST /api/file-monitor/check`
+**Authenticatie:** Vereist
+
+**Response:** `202 Accepted`
+```json
+{
+  "message": "Bestandscontrole gestart",
+  "run_id": 43,
+  "check": "/api/file-monitor/status"
+}
+```
+
+**Error response:** `409 Conflict`
+```json
+{
+  "error": "file monitor check already running"
+}
+```
+
+De handmatige trigger en de cronjob gebruiken dezelfde single-flight gate. Daardoor geeft een handmatige call `409` terug zolang een geplande run nog bezig is, en andersom. Dubbele alert- of herstelmails kunnen dus niet ontstaan.
+
+**Pollingrecept (server-side correlatie, zonder afhankelijkheid van systeemtijd):**
+
+1. Lees `run_id` uit de response van `POST /check` en noem die waarde `myRunID`.
+2. Poll `GET /api/file-monitor/status`.
+3. De run is klaar **en de zichtbare checks zijn door jouw run geproduceerd** zodra `completed_run_id >= myRunID && running == false`.
+
+Strikte gelijkheid (`completed_run_id == myRunID`) bevestigt dat de zichtbare `checks` exact door jouw run zijn geproduceerd. Een hogere waarde betekent dat een latere run, bijvoorbeeld via cron, jouw run heeft ingehaald. Dat is prima voor de vraag "is het systeem nu gezond?", maar verliest de exacte correlatie. Gebruik voor nauwkeurige troubleshooting daarom de strikte vergelijking en houd rekening met een mogelijke race.
+
+### Integratie met de health-endpoint (bestandscontrole)
+
+Als de bestandscontrole is ingeschakeld, geeft de health-endpoint (`GET /api/health`) een extra `file_monitor`-blok terug:
 
 ```json
 {
@@ -1110,12 +1186,16 @@ Wanneer de bestandscontrole is ingeschakeld, toont het health-endpoint (`GET /ap
   "file_monitor": {
     "enabled": true,
     "checks_total": 2,
-    "checks_stale": 1
+    "checks_stale": 1,
+    "checks_alerting": 1
   }
 }
 ```
 
-De overall status wordt `"degraded"` wanneer een of meer bestanden verouderd zijn.
+- `checks_stale`: ruwe telling van bestanden die te oud zijn of niet bereikbaar zijn, inclusief bestanden buiten hun `active_window`.
+- `checks_alerting`: window-aware telling; bestanden buiten hun `active_window` tellen hier niet mee. Dit veld bepaalt de algemene status `"degraded"`.
+
+De algemene status wordt `"degraded"` zodra `checks_alerting > 0`. Een bestand dat 's nachts verouderd raakt maar alleen overdag wordt ververst, zet `/api/health` dus niet op `degraded` zolang het buiten zijn venster valt.
 
 ---
 
@@ -1386,11 +1466,13 @@ Het gedrag van de API kan worden geconfigureerd via `config.json`:
   },
   "file_monitor": {
     "enabled": false,
+    "interval_seconds": 60,
     "checks": [
       {
         "name": "Nieuws bulletin",
         "path": "/data/news.mp3",
-        "max_age_minutes": 30
+        "max_age_minutes": 30,
+        "active_window": "06:00-22:00"
       },
       {
         "name": "Weer",
@@ -1406,14 +1488,20 @@ Het gedrag van de API kan worden geconfigureerd via `config.json`:
 }
 ```
 
-**Bestandscontrole-instellingen:**
-- `file_monitor.enabled`: Schakel de bestandscontrole in
-- `file_monitor.checks`: Array van te bewaken bestanden (minstens 1 vereist wanneer ingeschakeld)
-  - `name`: Optionele weergavenaam voor meldingen
-  - `path`: Absoluut pad naar het bestand
-  - `max_age_minutes`: Maximale leeftijd in minuten (minimaal 1)
+**Instellingen voor bestandscontrole:**
+- `file_monitor.enabled`: Schakel de bestandscontrole in.
+- `file_monitor.interval_seconds`: Pollinginterval in seconden (standaard 60; `0` of weglaten = standaard).
+- `file_monitor.checks`: Array met te bewaken bestanden (minimaal 1 item vereist wanneer ingeschakeld).
+  - `name`: Optionele weergavenaam voor notificaties.
+  - `path`: Absoluut pad naar het bestand.
+  - `max_age_minutes`: Maximaal toegestane leeftijd in minuten (minimaal 1).
+  - `stat_timeout_seconds`: Maximale tijd in seconden voor `os.Stat` (standaard 5; `0` of weglaten = standaard). Beschermt tegen vastgelopen NFS- of SMB-mounts.
+  - `active_window`: Optioneel tijdvenster `"HH:MM-HH:MM"` waarin alerts en `/health degraded` actief zijn. Buiten dit venster blijft `is_stale` zichtbaar in `/status`, maar wordt er geen alert- of herstelmail verstuurd en blijft `/health` gezond. Een eindtijd vóór de starttijd betekent dat het venster over middernacht heen loopt, bijvoorbeeld `"22:00-06:00"`. Gelijke start- en eindtijd zijn ongeldig; laat het veld weg voor altijd actief.
 
-Het controle-interval wordt automatisch afgeleid van de kleinste `max_age_minutes` waarde. Er is geen apart schedule nodig.
+Het controle-interval staat los van `max_age_minutes` en wordt geconfigureerd via `interval_seconds` (standaard 60 s).
+
+> [!IMPORTANT]
+> `active_window` wordt geïnterpreteerd in de lokale tijdzone die wordt bepaald door de `TZ`-omgevingsvariabele. Stel `TZ` in productie consequent in, zodat het venster werkt zoals de operator verwacht.
 
 Zie [config.example.json](config.example.json) voor alle beschikbare opties.
 

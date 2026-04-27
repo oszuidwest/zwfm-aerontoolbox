@@ -42,10 +42,16 @@ type HealthResponse struct {
 }
 
 // FileMonitorHealth represents file monitor status in the health response.
+//
+// ChecksStale is the raw count from the most recent run (includes stale
+// files outside their configured ActiveWindow) and is preserved for
+// transparency. ChecksAlerting is window-aware — outside-window stales are
+// excluded — and is what drives the overall degraded status.
 type FileMonitorHealth struct {
-	Enabled     bool `json:"enabled"`
-	ChecksTotal int  `json:"checks_total"`
-	ChecksStale int  `json:"checks_stale"`
+	Enabled        bool `json:"enabled"`
+	ChecksTotal    int  `json:"checks_total"`
+	ChecksStale    int  `json:"checks_stale"`
+	ChecksAlerting int  `json:"checks_alerting"`
 }
 
 // NotificationHealth represents notification system status in the health response.
@@ -126,11 +132,12 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	fmCfg := s.service.Config().FileMonitor
 	if fmCfg.Enabled {
 		fmh := &FileMonitorHealth{
-			Enabled:     true,
-			ChecksTotal: len(fmCfg.Checks),
-			ChecksStale: s.service.FileMonitor.StaleCount(),
+			Enabled:        true,
+			ChecksTotal:    len(fmCfg.Checks),
+			ChecksStale:    s.service.FileMonitor.StaleCount(),
+			ChecksAlerting: s.service.FileMonitor.AlertingCount(),
 		}
-		if fmh.ChecksStale > 0 {
+		if fmh.ChecksAlerting > 0 {
 			overallStatus = "degraded"
 		}
 		resp.FileMonitor = fmh

@@ -2,13 +2,14 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
 	cron "github.com/netresearch/go-cron"
 
-	"github.com/oszuidwest/zwfm-aerontoolbox/internal/config"
+	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
 )
 
 // Scheduler manages cron-based scheduled jobs for the application.
@@ -40,23 +41,21 @@ func NewScheduler(ctx context.Context, svc *AeronService) (*Scheduler, error) {
 
 	// Register backup job if enabled
 	if cfg.Backup.Enabled && cfg.Backup.Scheduler.Enabled {
-		if err := s.addJob(cfg.Backup.Scheduler, "backup", s.runBackup); err != nil {
+		if err := s.addJob(cfg.Backup.Scheduler.Schedule, "backup", s.runBackup); err != nil {
 			return nil, err
 		}
 	}
 
 	// Register health check job if enabled
 	if cfg.Maintenance.Scheduler.Enabled {
-		if err := s.addJob(cfg.Maintenance.Scheduler, "health-check", s.runHealthCheck); err != nil {
+		if err := s.addJob(cfg.Maintenance.Scheduler.Schedule, "health-check", s.runHealthCheck); err != nil {
 			return nil, err
 		}
 	}
 
-	// Register file monitor job if enabled (interval auto-derived from checks)
+	// Register file monitor job if enabled (cadence from FileMonitor.Interval()).
 	if cfg.FileMonitor.Enabled {
-		interval := cfg.FileMonitor.CheckIntervalMinutes()
-		schedule := fmt.Sprintf("@every %dm", interval)
-		if err := s.addJob(config.SchedulerConfig{Enabled: true, Schedule: schedule}, "file-monitor", s.runFileMonitor); err != nil {
+		if err := s.addJob(fmt.Sprintf("@every %s", cfg.FileMonitor.Interval()), "file-monitor", s.runFileMonitor); err != nil {
 			return nil, err
 		}
 	}
@@ -67,13 +66,13 @@ func NewScheduler(ctx context.Context, svc *AeronService) (*Scheduler, error) {
 // addJob registers a context-aware scheduled job with a name for observability.
 // The context passed to the job function is derived from the cron's base context,
 // enabling graceful shutdown propagation to running jobs.
-func (s *Scheduler) addJob(cfg config.SchedulerConfig, name string, job func(context.Context)) error {
-	if _, err := s.cron.AddJob(cfg.Schedule, cron.FuncJobWithContext(job), cron.WithName(name)); err != nil {
+func (s *Scheduler) addJob(schedule, name string, job func(context.Context)) error {
+	if _, err := s.cron.AddJob(schedule, cron.FuncJobWithContext(job), cron.WithName(name)); err != nil {
 		return err
 	}
 
 	s.jobs = append(s.jobs, name)
-	slog.Info("Scheduled job registered", "job", name, "schedule", cfg.Schedule)
+	slog.Info("Scheduled job registered", "job", name, "schedule", schedule)
 	return nil
 }
 
@@ -115,10 +114,20 @@ func (s *Scheduler) runBackup(ctx context.Context) {
 	}
 }
 
-// runFileMonitor checks all monitored files for staleness.
+// runFileMonitor checks all monitored files for staleness. It funnels the
+// scheduled run through TriggerCheck so a manual API trigger and a cron tick
+// cannot overlap (which would otherwise duplicate alert/recovery emails).
 func (s *Scheduler) runFileMonitor(_ context.Context) {
+	if _, err := s.service.FileMonitor.TriggerCheck(); err != nil {
+		var conflict *types.ConflictError
+		if errors.As(err, &conflict) {
+			slog.Info("Scheduled file monitor skipped (already running)")
+			return
+		}
+		slog.Error("Scheduled file monitor failed to start", "error", err)
+		return
+	}
 	slog.Info("Scheduled file monitor check started")
-	s.service.FileMonitor.Run()
 }
 
 // healthCheckTimeout is the maximum time allowed for a scheduled health check.
