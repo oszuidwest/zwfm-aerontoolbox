@@ -114,10 +114,15 @@ func (s *Scheduler) runBackup(ctx context.Context) {
 	}
 }
 
-// runFileMonitor checks all monitored files for staleness.
+// runFileMonitor checks all monitored files for staleness. It funnels the
+// scheduled run through TriggerCheck so a manual API trigger and a cron tick
+// cannot overlap (which would otherwise duplicate alert/recovery emails).
 func (s *Scheduler) runFileMonitor(_ context.Context) {
+	if _, err := s.service.FileMonitor.TriggerCheck(); err != nil {
+		slog.Info("Scheduled file monitor skipped (already running)")
+		return
+	}
 	slog.Info("Scheduled file monitor check started")
-	s.service.FileMonitor.Run()
 }
 
 // healthCheckTimeout is the maximum time allowed for a scheduled health check.

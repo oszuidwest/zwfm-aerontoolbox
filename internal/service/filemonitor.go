@@ -11,8 +11,10 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/oszuidwest/zwfm-aerontoolbox/internal/async"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/config"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/notify"
+	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
 )
 
 // osStat is the file-system probe used by Run(). Tests override it to inject
@@ -57,10 +59,31 @@ type FileMonitorService struct {
 	// In-flight stat tracking for single-flight per path.
 	inflightMu sync.Mutex
 	inflight   map[string]*statInFlight
+
+	// Run-state: tracks manual + scheduled triggers and exposes a monotone run ID
+	// so clients can correlate POST /check responses with /status snapshots.
+	// Distinct from inflight (per-path stat dedup) and statusMu (lastCheck).
+	runner         *async.Runner
+	runStateMu     sync.RWMutex
+	running        bool
+	startedAt      *time.Time
+	runID          uint64
+	completedRunID uint64
 }
 
-// FileMonitorStatus contains the results of the most recent file monitor check.
+// FileMonitorStatus contains the results of the most recent file monitor check
+// plus the live run-state for the service.
+//
+// Polling recipe after POST /check: read run_id from the response (myRunID),
+// then poll /status until completed_run_id >= myRunID && running == false.
+// Strict equality (==) confirms the visible Checks were produced by your run;
+// > means a later (e.g. cron) run overtook yours, which is fine for "is the
+// system healthy" but loses exact correlation.
 type FileMonitorStatus struct {
+	Running         bool              `json:"running"`
+	RunID           uint64            `json:"run_id"`
+	CompletedRunID  uint64            `json:"completed_run_id"`
+	StartedAt       *time.Time        `json:"started_at,omitempty"`
 	LastCheckAt     *time.Time        `json:"last_check_at,omitempty"`
 	IntervalSeconds int               `json:"interval_seconds"`
 	Checks          []FileCheckResult `json:"checks"`
@@ -95,6 +118,7 @@ func newFileMonitorService(cfg *config.Config, notifySvc *notify.NotificationSer
 		notify:     notifySvc,
 		alertState: make(map[string]bool),
 		inflight:   make(map[string]*statInFlight),
+		runner:     async.New(),
 	}
 }
 
@@ -183,18 +207,49 @@ func (s *FileMonitorService) Run() {
 	slog.Info("File monitor check completed", "total", len(results), "stale", staleCount)
 }
 
-// Status returns the most recent file monitor check results.
+// Status returns a fresh snapshot combining lastCheck (Run() output) with the
+// current run-state (TriggerCheck/markCompleted).
+//
+// Composition is critical: returning s.lastCheck directly would mean Running
+// is never visible to clients. We read both state sources under their own
+// locks and assemble a new struct. lastCheck.Checks is safe to share because
+// Run() never mutates the slice after publishing it — a new run replaces the
+// pointer entirely.
+//
+// Ordering guarantee: markCompleted runs via defer after Run() returns, and
+// Run() writes s.lastCheck before returning. So once a client observes
+// completedRunID == myRunID, the visible Checks are guaranteed to be that
+// run's output.
 func (s *FileMonitorService) Status() *FileMonitorStatus {
-	s.statusMu.RLock()
-	defer s.statusMu.RUnlock()
-
-	if s.lastCheck == nil {
-		return &FileMonitorStatus{
-			IntervalSeconds: int(s.config.FileMonitor.Interval().Seconds()),
-			Checks:          []FileCheckResult{},
-		}
+	s.runStateMu.RLock()
+	running := s.running
+	runID := s.runID
+	completedRunID := s.completedRunID
+	var startedAt *time.Time
+	if s.startedAt != nil {
+		t := *s.startedAt
+		startedAt = &t
 	}
-	return s.lastCheck
+	s.runStateMu.RUnlock()
+
+	s.statusMu.RLock()
+	last := s.lastCheck
+	s.statusMu.RUnlock()
+
+	snap := &FileMonitorStatus{
+		Running:         running,
+		RunID:           runID,
+		CompletedRunID:  completedRunID,
+		StartedAt:       startedAt,
+		IntervalSeconds: int(s.config.FileMonitor.Interval().Seconds()),
+		Checks:          []FileCheckResult{},
+	}
+	if last != nil {
+		snap.LastCheckAt = last.LastCheckAt
+		snap.Checks = last.Checks
+		snap.staleCount = last.staleCount
+	}
+	return snap
 }
 
 // StaleCount returns the number of files that were stale in the most recent check.
@@ -208,8 +263,49 @@ func (s *FileMonitorService) StaleCount() int {
 	return s.lastCheck.staleCount
 }
 
-// Close satisfies the service lifecycle pattern.
-func (s *FileMonitorService) Close() {}
+// Close waits for any running TriggerCheck() invocation to finish.
+func (s *FileMonitorService) Close() {
+	s.runner.Close()
+}
+
+// TriggerCheck starts a file monitor run in the background. It is the single
+// entry point for both manual API triggers and scheduled cron ticks so the two
+// can never run concurrently. Returns the monotone run_id of the run just
+// started, or a ConflictError if a run is already in progress.
+func (s *FileMonitorService) TriggerCheck() (uint64, error) {
+	if !s.runner.TryStart() {
+		return 0, types.NewConflictError("file_monitor", "file monitor check already running")
+	}
+	runID := s.startNewRun()
+	s.runner.Go(func() {
+		defer s.markCompleted(runID)
+		s.Run()
+	})
+	return runID, nil
+}
+
+// startNewRun increments the run counter, marks the service running, and
+// records the start time. Returns the new run ID.
+func (s *FileMonitorService) startNewRun() uint64 {
+	s.runStateMu.Lock()
+	defer s.runStateMu.Unlock()
+	s.runID++
+	s.running = true
+	now := time.Now()
+	s.startedAt = &now
+	return s.runID
+}
+
+// markCompleted clears the running flag and links the just-finished runID to
+// the published Checks. Called via defer after Run() returns; Run() writes
+// s.lastCheck before returning, so completedRunID is always consistent with
+// lastCheck.
+func (s *FileMonitorService) markCompleted(runID uint64) {
+	s.runStateMu.Lock()
+	defer s.runStateMu.Unlock()
+	s.running = false
+	s.completedRunID = runID
+}
 
 // checkFileWithTimeout performs a single-flight os.Stat with a per-flight
 // timeout budget. At most one goroutine per path is in flight at a time;

@@ -5,12 +5,14 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/config"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/notify"
+	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
 )
 
 // newTestService creates a FileMonitorService for testing.
@@ -404,6 +406,262 @@ func TestStatTimeout_DefaultIsFiveSeconds(t *testing.T) {
 	if got := c.StatTimeout(); got != 12*time.Second {
 		t.Errorf("StatTimeoutSec=12 → StatTimeout() = %v, want 12s", got)
 	}
+}
+
+// hangingStatReleasable is like hangingStat but exposes the release channel
+// so a test can resume the stubbed osStat mid-test rather than only during
+// t.Cleanup. The returned release function is idempotent.
+func hangingStatReleasable(t *testing.T, paths ...string) func() {
+	t.Helper()
+	hangSet := make(map[string]struct{}, len(paths))
+	for _, p := range paths {
+		hangSet[p] = struct{}{}
+	}
+	var once sync.Once
+	releaseCh := make(chan struct{})
+	release := func() { once.Do(func() { close(releaseCh) }) }
+	t.Cleanup(release)
+
+	prev := osStat
+	t.Cleanup(func() { osStat = prev })
+
+	osStat = func(path string) (os.FileInfo, error) {
+		if _, hangs := hangSet[path]; !hangs {
+			return nil, os.ErrNotExist
+		}
+		<-releaseCh
+		return nil, errors.New("released by test")
+	}
+	return release
+}
+
+// waitForCompleted polls Status() until the given runID is completed and the
+// service is idle. Fails the test after a short deadline.
+func waitForCompleted(t *testing.T, svc *FileMonitorService, runID uint64) {
+	t.Helper()
+	end := time.Now().Add(2 * time.Second)
+	for time.Now().Before(end) {
+		st := svc.Status()
+		if !st.Running && st.CompletedRunID >= runID {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for run %d to complete", runID)
+}
+
+func TestTriggerCheck_RunsAndUpdatesStatus(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "news.mp3")
+	touchFile(t, path)
+
+	svc := newTestService([]config.FileMonitorCheckConfig{
+		{Name: "News", Path: path, MaxAgeMinutes: 60},
+	})
+	t.Cleanup(svc.Close)
+
+	runID, err := svc.TriggerCheck()
+	if err != nil {
+		t.Fatalf("TriggerCheck: %v", err)
+	}
+	if runID != 1 {
+		t.Errorf("expected first runID=1, got %d", runID)
+	}
+
+	// RunID is visible immediately.
+	if got := svc.Status().RunID; got != runID {
+		t.Errorf("Status().RunID = %d, want %d", got, runID)
+	}
+
+	waitForCompleted(t, svc, runID)
+
+	st := svc.Status()
+	if st.Running {
+		t.Error("Status().Running should be false after completion")
+	}
+	if st.CompletedRunID != runID {
+		t.Errorf("Status().CompletedRunID = %d, want %d", st.CompletedRunID, runID)
+	}
+	if st.LastCheckAt == nil {
+		t.Error("Status().LastCheckAt should be set after a completed run")
+	}
+	if st.StartedAt == nil {
+		t.Error("Status().StartedAt should be set after a completed run")
+	}
+	if len(st.Checks) != 1 {
+		t.Fatalf("expected 1 check, got %d", len(st.Checks))
+	}
+}
+
+func TestTriggerCheck_ReturnsConflictWhenAlreadyRunning(t *testing.T) {
+	path := "/hang/news.mp3"
+	release := hangingStatReleasable(t, path)
+
+	svc := newTestService([]config.FileMonitorCheckConfig{
+		{Name: "News", Path: path, MaxAgeMinutes: 10, StatTimeoutSec: 5},
+	})
+
+	runID1, err := svc.TriggerCheck()
+	if err != nil {
+		t.Fatalf("first TriggerCheck: %v", err)
+	}
+	if runID1 != 1 {
+		t.Errorf("first runID = %d, want 1", runID1)
+	}
+
+	runID2, err := svc.TriggerCheck()
+	if err == nil {
+		t.Fatalf("expected ConflictError on overlapping trigger, got runID=%d", runID2)
+	}
+	if runID2 != 0 {
+		t.Errorf("conflict runID = %d, want 0", runID2)
+	}
+	var conflict *types.ConflictError
+	if !errors.As(err, &conflict) {
+		t.Errorf("expected *types.ConflictError, got %T: %v", err, err)
+	}
+
+	// runID counter should not advance on conflict.
+	if got := svc.Status().RunID; got != runID1 {
+		t.Errorf("Status().RunID = %d, want %d (counter must not advance on conflict)", got, runID1)
+	}
+
+	// Release before Close so Close() doesn't block on the hanging stat.
+	release()
+	waitForCompleted(t, svc, runID1)
+	svc.Close()
+}
+
+func TestStatus_ShowsRunningTrueDuringRun(t *testing.T) {
+	path := "/hang/news.mp3"
+	release := hangingStatReleasable(t, path)
+
+	svc := newTestService([]config.FileMonitorCheckConfig{
+		{Name: "News", Path: path, MaxAgeMinutes: 10, StatTimeoutSec: 30},
+	})
+
+	runID, err := svc.TriggerCheck()
+	if err != nil {
+		t.Fatalf("TriggerCheck: %v", err)
+	}
+
+	st := svc.Status()
+	if !st.Running {
+		t.Error("Status().Running should be true while run is active")
+	}
+	if st.RunID != runID {
+		t.Errorf("Status().RunID = %d, want %d", st.RunID, runID)
+	}
+	if st.CompletedRunID >= runID {
+		t.Errorf("Status().CompletedRunID = %d, want < %d (run not yet complete)", st.CompletedRunID, runID)
+	}
+	if st.StartedAt == nil {
+		t.Error("Status().StartedAt should be set during active run")
+	}
+
+	// Release the stub so the run completes, then verify post-completion state.
+	release()
+	waitForCompleted(t, svc, runID)
+
+	st = svc.Status()
+	if st.Running {
+		t.Error("Status().Running should be false after release")
+	}
+	if st.CompletedRunID != runID {
+		t.Errorf("Status().CompletedRunID = %d, want %d after release", st.CompletedRunID, runID)
+	}
+	svc.Close()
+}
+
+func TestTriggerCheck_RunIDIsMonotonic(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "news.mp3")
+	touchFile(t, path)
+
+	svc := newTestService([]config.FileMonitorCheckConfig{
+		{Name: "News", Path: path, MaxAgeMinutes: 60},
+	})
+	defer svc.Close()
+
+	for want := uint64(1); want <= 3; want++ {
+		got, err := svc.TriggerCheck()
+		if err != nil {
+			t.Fatalf("TriggerCheck #%d: %v", want, err)
+		}
+		if got != want {
+			t.Errorf("TriggerCheck #%d returned runID=%d, want %d", want, got, want)
+		}
+		waitForCompleted(t, svc, want)
+
+		st := svc.Status()
+		if st.RunID != want {
+			t.Errorf("after run #%d, Status().RunID = %d, want %d", want, st.RunID, want)
+		}
+		if st.CompletedRunID != want {
+			t.Errorf("after run #%d, Status().CompletedRunID = %d, want %d", want, st.CompletedRunID, want)
+		}
+	}
+}
+
+func TestCompletedRunID_LagsBehindRunIDDuringActiveRun(t *testing.T) {
+	path := "/hang/news.mp3"
+	release := hangingStatReleasable(t, path)
+
+	svc := newTestService([]config.FileMonitorCheckConfig{
+		{Name: "News", Path: path, MaxAgeMinutes: 10, StatTimeoutSec: 30},
+	})
+
+	runID, err := svc.TriggerCheck()
+	if err != nil {
+		t.Fatalf("TriggerCheck: %v", err)
+	}
+
+	st := svc.Status()
+	if st.RunID != runID {
+		t.Errorf("Status().RunID = %d, want %d", st.RunID, runID)
+	}
+	// First-ever active run: completedRunID is still 0.
+	if st.CompletedRunID != 0 {
+		t.Errorf("Status().CompletedRunID = %d, want 0 (first active run)", st.CompletedRunID)
+	}
+	if st.CompletedRunID >= st.RunID {
+		t.Errorf("CompletedRunID (%d) should lag RunID (%d) during active run", st.CompletedRunID, st.RunID)
+	}
+
+	release()
+	waitForCompleted(t, svc, runID)
+	svc.Close()
+}
+
+func TestSchedulerSkipsWhenManualRunActive(t *testing.T) {
+	// Verify the contract Scheduler.runFileMonitor relies on: a second
+	// TriggerCheck while one is in flight returns ConflictError without
+	// starting a new run. The scheduler logs+skips on this signal.
+	path := "/hang/news.mp3"
+	release := hangingStatReleasable(t, path)
+
+	svc := newTestService([]config.FileMonitorCheckConfig{
+		{Name: "News", Path: path, MaxAgeMinutes: 10, StatTimeoutSec: 30},
+	})
+
+	manualID, err := svc.TriggerCheck()
+	if err != nil {
+		t.Fatalf("manual TriggerCheck: %v", err)
+	}
+
+	scheduledID, err := svc.TriggerCheck()
+	if err == nil {
+		t.Fatalf("scheduled TriggerCheck should conflict, got runID=%d", scheduledID)
+	}
+	var conflict *types.ConflictError
+	if !errors.As(err, &conflict) {
+		t.Errorf("expected *types.ConflictError, got %T", err)
+	}
+	if got := svc.Status().RunID; got != manualID {
+		t.Errorf("RunID advanced from %d to %d on conflict", manualID, got)
+	}
+
+	release()
+	waitForCompleted(t, svc, manualID)
+	svc.Close()
 }
 
 // writeAndAge creates a file and sets its modification time to the past.

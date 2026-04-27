@@ -82,6 +82,7 @@ func (s *Server) Start(port string) error {
 			})
 
 			r.Get("/file-monitor/status", s.handleFileMonitorStatus)
+			r.Post("/file-monitor/check", s.handleFileMonitorCheck)
 
 			r.Post("/notifications/test-email", s.handleTestEmail)
 		})
