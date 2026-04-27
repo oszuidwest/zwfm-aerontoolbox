@@ -68,7 +68,7 @@ func parseHHMM(s string) (int, error) {
 // Active reports whether t (in its own location) falls inside the window.
 // An unconfigured window is treated as always-active.
 func (w TimeWindow) Active(t time.Time) bool {
-	if !w.configured {
+	if !w.IsConfigured() {
 		return true
 	}
 	cur := t.Hour()*60 + t.Minute()

@@ -17,6 +17,15 @@ import (
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
 )
 
+// run drives the service synchronously for testing. It is the test-only
+// alternative to TriggerCheck, which is asynchronous and involves the runner.
+func (s *FileMonitorService) run() {
+	status := s.executeRun()
+	s.publishedMu.Lock()
+	s.lastCheck = status
+	s.publishedMu.Unlock()
+}
+
 // newTestService creates a FileMonitorService for testing. Variadic for
 // brevity at call sites (all tests pass an inline literal). The notification
 // service has no email configured so it never sends. Constructor errors fail
