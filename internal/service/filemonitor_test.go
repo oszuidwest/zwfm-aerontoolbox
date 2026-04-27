@@ -1,9 +1,11 @@
 package service
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -238,6 +240,169 @@ func TestStaleCount(t *testing.T) {
 
 	if got := svc.StaleCount(); got != 1 {
 		t.Errorf("StaleCount() = %d, want 1", got)
+	}
+}
+
+// hangingStat installs an osStat stub that hangs forever for the listed paths
+// (until t.Cleanup releases it) and returns os.ErrNotExist for any other path.
+// It returns per-path call counters so tests can assert single-flight behavior
+// deterministically without touching runtime.NumGoroutine().
+//
+// async.Runner.Close() does not track these stat goroutines, so without the
+// t.Cleanup release channel each "hang forever" stub would leak a goroutine
+// for the rest of the test process. Always use t.Cleanup.
+func hangingStat(t *testing.T, paths ...string) map[string]*atomic.Int64 {
+	t.Helper()
+	counters := make(map[string]*atomic.Int64, len(paths))
+	hangSet := make(map[string]struct{}, len(paths))
+	for _, p := range paths {
+		counters[p] = &atomic.Int64{}
+		hangSet[p] = struct{}{}
+	}
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+
+	prev := osStat
+	t.Cleanup(func() { osStat = prev })
+
+	osStat = func(path string) (os.FileInfo, error) {
+		if _, hangs := hangSet[path]; !hangs {
+			return nil, os.ErrNotExist
+		}
+		counters[path].Add(1)
+		<-release
+		return nil, errors.New("released by t.Cleanup")
+	}
+	return counters
+}
+
+func TestStatTimeout_TriggersStaleWithTimeoutKind(t *testing.T) {
+	path := "/hang/news.mp3"
+	hangingStat(t, path)
+
+	svc := newTestService([]config.FileMonitorCheckConfig{
+		{Name: "News", Path: path, MaxAgeMinutes: 10, StatTimeoutSec: 1},
+	})
+
+	svc.Run()
+
+	result := svc.Status().Checks[0]
+	if !result.IsStale {
+		t.Error("expected IsStale=true on stat timeout")
+	}
+	if result.ErrorKind != "stat_timeout" {
+		t.Errorf("expected ErrorKind=%q, got %q", "stat_timeout", result.ErrorKind)
+	}
+	if result.Error == "" {
+		t.Error("expected Error message to mention timeout")
+	}
+}
+
+func TestSingleFlight_RepeatedRunsCallStatAtMostOnce(t *testing.T) {
+	path := "/hang/news.mp3"
+	counters := hangingStat(t, path)
+
+	svc := newTestService([]config.FileMonitorCheckConfig{
+		{Name: "News", Path: path, MaxAgeMinutes: 10, StatTimeoutSec: 1},
+	})
+
+	for i := 0; i < 10; i++ {
+		svc.Run()
+	}
+
+	if got := counters[path].Load(); got != 1 {
+		t.Errorf("osStat called %d times for %q, want exactly 1 (single-flight broken)", got, path)
+	}
+}
+
+func TestSingleFlight_DifferentPathsAreIndependent(t *testing.T) {
+	pathA := "/hang/a.mp3"
+	pathB := "/hang/b.mp3"
+	counters := hangingStat(t, pathA, pathB)
+
+	svc := newTestService([]config.FileMonitorCheckConfig{
+		{Name: "A", Path: pathA, MaxAgeMinutes: 10, StatTimeoutSec: 1},
+		{Name: "B", Path: pathB, MaxAgeMinutes: 10, StatTimeoutSec: 1},
+	})
+
+	svc.Run()
+
+	if got := counters[pathA].Load(); got != 1 {
+		t.Errorf("osStat for %q called %d times, want 1", pathA, got)
+	}
+	if got := counters[pathB].Load(); got != 1 {
+		t.Errorf("osStat for %q called %d times, want 1", pathB, got)
+	}
+}
+
+func TestSingleFlight_JoinAfterTimeoutReturnsImmediately(t *testing.T) {
+	path := "/hang/news.mp3"
+	hangingStat(t, path)
+
+	svc := newTestService([]config.FileMonitorCheckConfig{
+		{Name: "News", Path: path, MaxAgeMinutes: 10, StatTimeoutSec: 1},
+	})
+
+	// First Run() establishes the flight and waits the full StatTimeout.
+	svc.Run()
+
+	// Second Run() must observe remaining<=0 on the still-hanging flight and
+	// return immediately rather than waiting another full StatTimeout.
+	start := time.Now()
+	svc.Run()
+	elapsed := time.Since(start)
+
+	if elapsed > 200*time.Millisecond {
+		t.Errorf("second Run() took %v, expected near-instant return on already-budgeted flight", elapsed)
+	}
+}
+
+func TestParallelChecks_FastFailNotBlockedBySlowStat(t *testing.T) {
+	slow := "/hang/slow.mp3"
+	fastA := "/missing/a.mp3"
+	fastB := "/missing/b.mp3"
+	hangingStat(t, slow) // only slow hangs; fastA/fastB get ErrNotExist immediately
+
+	svc := newTestService([]config.FileMonitorCheckConfig{
+		{Name: "Slow", Path: slow, MaxAgeMinutes: 10, StatTimeoutSec: 1},
+		{Name: "FastA", Path: fastA, MaxAgeMinutes: 10, StatTimeoutSec: 1},
+		{Name: "FastB", Path: fastB, MaxAgeMinutes: 10, StatTimeoutSec: 1},
+	})
+
+	start := time.Now()
+	svc.Run()
+	elapsed := time.Since(start)
+
+	// Total should be ~1s (slow timeout), not ~3s (sequential).
+	if elapsed > 1500*time.Millisecond {
+		t.Errorf("Run() took %v, expected ~1s — fast checks appear serialized behind slow stat", elapsed)
+	}
+
+	results := svc.Status().Checks
+	if len(results) != 3 {
+		t.Fatalf("expected 3 results, got %d", len(results))
+	}
+	for _, r := range results {
+		if !r.IsStale {
+			t.Errorf("expected all checks stale, got %+v", r)
+		}
+	}
+}
+
+func TestStatTimeout_DefaultIsFiveSeconds(t *testing.T) {
+	c := config.FileMonitorCheckConfig{StatTimeoutSec: 0}
+	if got := c.StatTimeout(); got != 5*time.Second {
+		t.Errorf("StatTimeout() = %v, want 5s", got)
+	}
+
+	c.StatTimeoutSec = -1
+	if got := c.StatTimeout(); got != 5*time.Second {
+		t.Errorf("negative StatTimeoutSec → StatTimeout() = %v, want 5s", got)
+	}
+
+	c.StatTimeoutSec = 12
+	if got := c.StatTimeout(); got != 12*time.Second {
+		t.Errorf("StatTimeoutSec=12 → StatTimeout() = %v, want 12s", got)
 	}
 }
 

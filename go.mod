@@ -18,6 +18,7 @@ require (
 	github.com/go-playground/validator/v10 v10.30.2
 	github.com/netresearch/go-cron v0.14.0
 	golang.org/x/oauth2 v0.36.0
+	golang.org/x/sync v0.20.0
 )
 
 require (

@@ -117,9 +117,10 @@ type FileMonitorConfig struct {
 
 // FileMonitorCheckConfig defines a single file to monitor for staleness.
 type FileMonitorCheckConfig struct {
-	Name          string `json:"name"`
-	Path          string `json:"path" validate:"required,absolute_path"`
-	MaxAgeMinutes int    `json:"max_age_minutes" validate:"required,gte=1"`
+	Name           string `json:"name"`
+	Path           string `json:"path" validate:"required,absolute_path"`
+	MaxAgeMinutes  int    `json:"max_age_minutes" validate:"required,gte=1"`
+	StatTimeoutSec int    `json:"stat_timeout_seconds" validate:"gte=0"`
 }
 
 // DisplayName returns the check name if set, otherwise the file path.
@@ -132,6 +133,18 @@ func (c *FileMonitorCheckConfig) DisplayName() string {
 
 // DefaultFileMonitorIntervalSeconds is the default polling cadence when interval_seconds is unset.
 const DefaultFileMonitorIntervalSeconds = 60
+
+// DefaultFileMonitorStatTimeoutSeconds is the default stat-timeout per check when stat_timeout_seconds is unset.
+const DefaultFileMonitorStatTimeoutSeconds = 5
+
+// StatTimeout returns the per-check stat timeout. Falls back to
+// DefaultFileMonitorStatTimeoutSeconds when StatTimeoutSec is zero or negative.
+func (c *FileMonitorCheckConfig) StatTimeout() time.Duration {
+	if c.StatTimeoutSec <= 0 {
+		return DefaultFileMonitorStatTimeoutSeconds * time.Second
+	}
+	return time.Duration(c.StatTimeoutSec) * time.Second
+}
 
 // Interval returns the polling cadence for the file monitor scheduler.
 // When IntervalSeconds is unset (0) or negative, it falls back to DefaultFileMonitorIntervalSeconds.
