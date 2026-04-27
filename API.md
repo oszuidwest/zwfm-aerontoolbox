@@ -1024,7 +1024,7 @@ Controles draaien automatisch met een vast interval. Standaard is dat 60 seconde
 Toont de resultaten van de meest recente bestandscontrole, plus de huidige runstatus.
 
 **Endpoint:** `GET /api/file-monitor/status`
-**Authentication:** Required
+**Authenticatie:** Vereist
 
 **Response:** `200 OK`
 ```json
@@ -1145,7 +1145,7 @@ De volgende voorbeelden tonen losse items uit de `checks`-array voor specifieke 
 Start een bestandscontrole op de achtergrond. Handig tijdens configuratie of storingsonderzoek, zodat operators niet hoeven te wachten op de volgende geplande tick.
 
 **Endpoint:** `POST /api/file-monitor/check`
-**Authentication:** Required
+**Authenticatie:** Vereist
 
 **Response:** `202 Accepted`
 ```json

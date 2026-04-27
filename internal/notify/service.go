@@ -213,10 +213,15 @@ func (s *NotificationService) getOrCreateClient() (*GraphClient, error) {
 }
 
 // sendAsync sends an email asynchronously via the runner.
+// Logs a warning and drops the message if the runner has already been closed.
+// TryGoBackground is used because sendAsync is called from scheduler jobs and
+// HTTP handlers, not from within an active primary run.
 func (s *NotificationService) sendAsync(subject, body string) {
-	s.runner.GoBackground(func() {
+	if !s.runner.TryGoBackground(func() {
 		s.send(subject, body)
-	})
+	}) {
+		slog.Warn("Notificatie e-mail niet verstuurd: service is afgesloten", "subject", subject)
+	}
 }
 
 // sendTimeout is the maximum time allowed for sending a notification email.

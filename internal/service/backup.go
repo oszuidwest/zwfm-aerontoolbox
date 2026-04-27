@@ -357,9 +357,11 @@ func (s *BackupService) execute(ctx context.Context, req BackupRequest) error {
 		"size", util.FormatBytes(fileInfo.Size()),
 		"duration", duration.Round(time.Millisecond).String())
 
-	// Upload backup to S3 asynchronously
+	// Upload backup to S3 asynchronously. GoChild is safe here because
+	// execute() always runs within an active TryStart()+Go() or TryStart()+Done()
+	// body, so Close() is already blocking on the primary WaitGroup slot.
 	if s.s3 != nil {
-		s.runner.GoBackground(func() {
+		s.runner.GoChild(func() {
 			uploadCtx, cancel := context.WithTimeout(context.Background(), s.config.Backup.GetTimeout())
 			defer cancel()
 
@@ -519,16 +521,19 @@ func (s *BackupService) Delete(filename string) error {
 
 	slog.Info("Backup deleted", "filename", filename)
 
-	// Delete from S3 asynchronously
+	// Delete from S3 asynchronously. TryGoBackground is used because Delete()
+	// is called from an HTTP handler, not from within an active primary run.
 	if s.s3 != nil {
-		s.runner.GoBackground(func() {
+		if !s.runner.TryGoBackground(func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 
 			if err := s.s3.delete(ctx, filename); err != nil {
 				slog.Warn("Failed to delete S3 backup", "filename", filename, "error", err)
 			}
-		})
+		}) {
+			slog.Warn("S3 verwijdering overgeslagen: backup service is afgesloten", "filename", filename)
+		}
 	}
 
 	return nil

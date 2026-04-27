@@ -47,7 +47,7 @@ func TestGraceRun_NoAlertsOnFirstRun(t *testing.T) {
 	)
 
 	// First run = grace run.
-	svc.Run()
+	svc.run()
 
 	status := svc.Status()
 	if len(status.Checks) != 1 {
@@ -74,10 +74,10 @@ func TestGraceRun_AlertOnSecondRun(t *testing.T) {
 	)
 
 	// First run = grace run (no alerts).
-	svc.Run()
+	svc.run()
 
 	// Second run should detect the stale file as a new alert.
-	svc.Run()
+	svc.run()
 
 	status := svc.Status()
 	if !status.Checks[0].InAlert {
@@ -95,14 +95,14 @@ func TestGraceRun_NoPhantomRecovery(t *testing.T) {
 	)
 
 	// Grace run: file is stale.
-	svc.Run()
+	svc.run()
 
 	// Touch the file so it's fresh.
 	touchFile(t, path)
 
 	// Second run: file is now fresh. Since grace run didn't set alertState,
 	// wasInAlert=false, so no recovery should be triggered.
-	svc.Run()
+	svc.run()
 
 	status := svc.Status()
 	if status.Checks[0].IsStale {
@@ -122,16 +122,16 @@ func TestAlertAndRecovery(t *testing.T) {
 	)
 
 	// Grace run.
-	svc.Run()
+	svc.run()
 
 	// Second run: file is stale → enters alert.
-	svc.Run()
+	svc.run()
 	if !svc.Status().Checks[0].InAlert {
 		t.Fatal("expected InAlert=true after second run")
 	}
 
 	// Third run: file still stale → stays in alert (no duplicate alert).
-	svc.Run()
+	svc.run()
 	if !svc.Status().Checks[0].InAlert {
 		t.Error("expected InAlert=true to persist for still-stale file")
 	}
@@ -139,7 +139,7 @@ func TestAlertAndRecovery(t *testing.T) {
 	// Touch the file → should recover.
 	touchFile(t, path)
 
-	svc.Run()
+	svc.run()
 	if svc.Status().Checks[0].InAlert {
 		t.Error("expected InAlert=false after file recovery")
 	}
@@ -154,9 +154,9 @@ func TestMissingFile_FileExistsFalse(t *testing.T) {
 	)
 
 	// Grace run.
-	svc.Run()
+	svc.run()
 	// Real run.
-	svc.Run()
+	svc.run()
 
 	result := svc.Status().Checks[0]
 	if result.FileExists == nil {
@@ -199,9 +199,9 @@ func TestPermissionDenied_FileExistsNull(t *testing.T) {
 	)
 
 	// Grace run.
-	svc.Run()
+	svc.run()
 	// Real run.
-	svc.Run()
+	svc.run()
 
 	result := svc.Status().Checks[0]
 	if result.FileExists != nil {
@@ -230,8 +230,8 @@ func TestGenericStatError_UsesStatErrorKind(t *testing.T) {
 		config.FileMonitorCheckConfig{Name: "Broken", Path: "/broken/news.mp3", MaxAgeMinutes: 10},
 	)
 
-	svc.Run() // grace
-	svc.Run() // real
+	svc.run() // grace
+	svc.run() // real
 
 	result := svc.Status().Checks[0]
 	if result.FileExists != nil {
@@ -250,8 +250,8 @@ func TestFreshFile_NotStale(t *testing.T) {
 		config.FileMonitorCheckConfig{Name: "News", Path: path, MaxAgeMinutes: 60},
 	)
 
-	svc.Run() // grace
-	svc.Run() // real
+	svc.run() // grace
+	svc.run() // real
 
 	result := svc.Status().Checks[0]
 	if result.IsStale {
@@ -277,8 +277,8 @@ func TestStaleCount(t *testing.T) {
 		config.FileMonitorCheckConfig{Name: "Stale", Path: stale, MaxAgeMinutes: 10},
 	)
 
-	svc.Run() // grace
-	svc.Run() // real
+	svc.run() // grace
+	svc.run() // real
 
 	if got := svc.StaleCount(); got != 1 {
 		t.Errorf("StaleCount() = %d, want 1", got)
@@ -326,7 +326,7 @@ func TestStatTimeout_TriggersStaleWithTimeoutKind(t *testing.T) {
 		config.FileMonitorCheckConfig{Name: "News", Path: path, MaxAgeMinutes: 10, StatTimeoutSec: 1},
 	)
 
-	svc.Run()
+	svc.run()
 
 	result := svc.Status().Checks[0]
 	if !result.IsStale {
@@ -362,7 +362,7 @@ func TestSingleFlight_RepeatedRunsCallStatAtMostOnce(t *testing.T) {
 	)
 
 	for i := 0; i < 10; i++ {
-		svc.Run()
+		svc.run()
 	}
 
 	if got := counters[path].Load(); got != 1 {
@@ -380,7 +380,7 @@ func TestSingleFlight_DifferentPathsAreIndependent(t *testing.T) {
 		config.FileMonitorCheckConfig{Name: "B", Path: pathB, MaxAgeMinutes: 10, StatTimeoutSec: 1},
 	)
 
-	svc.Run()
+	svc.run()
 
 	if got := counters[pathA].Load(); got != 1 {
 		t.Errorf("osStat for %q called %d times, want 1", pathA, got)
@@ -399,12 +399,12 @@ func TestSingleFlight_JoinAfterTimeoutReturnsImmediately(t *testing.T) {
 	)
 
 	// First Run() establishes the flight and waits the full StatTimeout.
-	svc.Run()
+	svc.run()
 
 	// Second Run() must observe remaining<=0 on the still-hanging flight and
 	// return immediately rather than waiting another full StatTimeout.
 	start := time.Now()
-	svc.Run()
+	svc.run()
 	elapsed := time.Since(start)
 
 	if elapsed > 200*time.Millisecond {
@@ -425,7 +425,7 @@ func TestParallelChecks_FastFailNotBlockedBySlowStat(t *testing.T) {
 	)
 
 	start := time.Now()
-	svc.Run()
+	svc.run()
 	elapsed := time.Since(start)
 
 	// Total should be ~1s (slow timeout), not ~3s (sequential).
@@ -999,8 +999,8 @@ func TestActiveWindow_NoAlertOutsideWindow(t *testing.T) {
 		},
 	)
 
-	svc.Run() // grace
-	svc.Run() // real
+	svc.run() // grace
+	svc.run() // real
 
 	r := svc.Status().Checks[0]
 	if !r.IsStale {
@@ -1031,8 +1031,8 @@ func TestActiveWindow_AlertWhenWindowOpens(t *testing.T) {
 		},
 	)
 
-	svc.Run()
-	svc.Run()
+	svc.run()
+	svc.run()
 	if svc.Status().Checks[0].InAlert {
 		t.Fatal("InAlert leaked outside window")
 	}
@@ -1043,7 +1043,7 @@ func TestActiveWindow_AlertWhenWindowOpens(t *testing.T) {
 	// Re-stamp the mod time so it is still 60 minutes old relative to the
 	// new pinned clock (otherwise the file would now appear "in the future").
 	makeStale(t, path, 60*time.Minute)
-	svc.Run()
+	svc.run()
 
 	r := svc.Status().Checks[0]
 	if !r.InAlert {
@@ -1067,8 +1067,8 @@ func TestActiveWindow_StatTimeoutOutsideWindowDoesNotAlert(t *testing.T) {
 		},
 	)
 
-	svc.Run() // grace
-	svc.Run() // real
+	svc.run() // grace
+	svc.run() // real
 
 	r := svc.Status().Checks[0]
 	if !r.IsStale {
@@ -1108,8 +1108,8 @@ func TestActiveWindow_RecoveryRespectsWindow(t *testing.T) {
 	notifier := &captureFileMonitorNotifier{}
 	svc.notify = notifier
 
-	svc.Run() // grace
-	svc.Run() // real → alert
+	svc.run() // grace
+	svc.run() // real → alert
 
 	if !svc.Status().Checks[0].InAlert {
 		t.Fatal("setup precondition: file should be alerting inside window")
@@ -1121,7 +1121,7 @@ func TestActiveWindow_RecoveryRespectsWindow(t *testing.T) {
 	// 2) File becomes fresh, but it is now outside the window.
 	pinNow(t, timeAt(22, 0))
 	makeFresh(t, path)
-	svc.Run()
+	svc.run()
 
 	r := svc.Status().Checks[0]
 	if r.IsStale {
@@ -1137,7 +1137,7 @@ func TestActiveWindow_RecoveryRespectsWindow(t *testing.T) {
 	// 3) Re-enter the window while the file is still fresh. This must emit the
 	// delayed recovery exactly once.
 	pinNow(t, timeAt(11, 0))
-	svc.Run()
+	svc.run()
 
 	r = svc.Status().Checks[0]
 	if r.IsStale {
@@ -1169,8 +1169,8 @@ func TestAlertingCount_ExcludesOutsideWindow(t *testing.T) {
 		},
 	)
 
-	svc.Run() // grace
-	svc.Run() // real
+	svc.run() // grace
+	svc.run() // real
 
 	if got := svc.StaleCount(); got != 1 {
 		t.Errorf("StaleCount() = %d, want 1 (raw stale is preserved)", got)
