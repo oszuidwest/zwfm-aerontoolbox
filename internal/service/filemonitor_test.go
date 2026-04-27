@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -685,6 +686,109 @@ func TestScheduler_RunFileMonitor_SkipsWhenAlreadyActive(t *testing.T) {
 	release()
 	waitForCompleted(t, fmSvc, manualID)
 	fmSvc.Close()
+}
+
+func TestStatus_NoTornSnapshotUnderConcurrentReads(t *testing.T) {
+	// Real interleaving test for the torn-snapshot bug. Concurrent readers
+	// snapshot Status() while a writer triggers many runs back-to-back. The
+	// invariant under the fix: every observed snapshot pairs CompletedRunID
+	// with the LastCheckAt that run actually published.
+	//
+	// Why this catches the old bug. The two-lock implementation published
+	// lastCheck under statusMu, then bumped completedRunID under runStateMu
+	// via a separate `defer markCompleted`. A reader landing between those
+	// two unlocks would observe (CompletedRunID=N-1, LastCheckAt=tag[N]) —
+	// a mismatch this assertion would flag. Under the single-lock fix
+	// (publishCompleted writes both atomically), no such window exists, so
+	// the test passes deterministically.
+	path := filepath.Join(t.TempDir(), "news.mp3")
+	touchFile(t, path)
+
+	svc := newTestService([]config.FileMonitorCheckConfig{
+		{Name: "News", Path: path, MaxAgeMinutes: 60},
+	})
+	defer svc.Close()
+
+	var tagMu sync.RWMutex
+	tag := make(map[uint64]time.Time)
+	record := func(runID uint64, lastCheckAt time.Time) {
+		tagMu.Lock()
+		tag[runID] = lastCheckAt
+		tagMu.Unlock()
+	}
+	lookup := func(runID uint64) (time.Time, bool) {
+		tagMu.RLock()
+		defer tagMu.RUnlock()
+		t, ok := tag[runID]
+		return t, ok
+	}
+
+	// Pre-run twice so the tag map has entries before the readers start —
+	// otherwise early reads find no tag and skip the assertion.
+	for i := 0; i < 2; i++ {
+		runID, err := svc.TriggerCheck()
+		if err != nil {
+			t.Fatalf("warmup TriggerCheck: %v", err)
+		}
+		waitForCompleted(t, svc, runID)
+		record(runID, *svc.Status().LastCheckAt)
+	}
+
+	stop := make(chan struct{})
+	var torn atomic.Int64
+	var mismatchSample atomic.Pointer[string]
+	var readers sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		readers.Go(func() {
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				st := svc.Status()
+				if st.LastCheckAt == nil || st.CompletedRunID == 0 {
+					continue
+				}
+				want, ok := lookup(st.CompletedRunID)
+				if !ok {
+					// Writer hasn't recorded tag[N] yet; will be checked on next reads.
+					continue
+				}
+				if !st.LastCheckAt.Equal(want) {
+					torn.Add(1)
+					if mismatchSample.Load() == nil {
+						s := fmt.Sprintf("CompletedRunID=%d LastCheckAt=%v want=%v",
+							st.CompletedRunID, st.LastCheckAt, want)
+						mismatchSample.CompareAndSwap(nil, &s)
+					}
+				}
+			}
+		})
+	}
+
+	// Drive many runs concurrently with the readers. Each run's tag is
+	// recorded synchronously after waitForCompleted so the readers always
+	// see a consistent (runID → published LastCheckAt) ground truth.
+	for i := 0; i < 100; i++ {
+		runID, err := svc.TriggerCheck()
+		if err != nil {
+			t.Fatalf("TriggerCheck #%d: %v", i, err)
+		}
+		waitForCompleted(t, svc, runID)
+		record(runID, *svc.Status().LastCheckAt)
+	}
+
+	close(stop)
+	readers.Wait()
+
+	if got := torn.Load(); got > 0 {
+		sample := "(no sample captured)"
+		if p := mismatchSample.Load(); p != nil {
+			sample = *p
+		}
+		t.Errorf("observed %d torn snapshots; first mismatch: %s", got, sample)
+	}
 }
 
 func TestStatus_CompletedRunIDMatchesLastCheck(t *testing.T) {
