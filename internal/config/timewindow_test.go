@@ -159,6 +159,31 @@ func TestFileMonitorValidation_ActiveWindow(t *testing.T) {
 	}
 }
 
+func TestFileMonitorValidation_ActiveWindow_IncludesIndex(t *testing.T) {
+	// Multiple bad windows must produce distinct, indexed error labels —
+	// otherwise an operator with two typos sees the same "active_window"
+	// key twice and cannot tell which checks[] entry needs editing. The
+	// label is the only way to locate the bad row when the parser message
+	// alone (e.g. "out of range") is shared between checks.
+	cfg := minimalConfig()
+	cfg.FileMonitor.Enabled = true
+	cfg.FileMonitor.Checks = []FileMonitorCheckConfig{
+		{Path: "/data/news.mp3", MaxAgeMinutes: 30, ActiveWindow: "12:00-12:00"},
+		{Path: "/data/weather.mp3", MaxAgeMinutes: 60, ActiveWindow: "24:00-06:00"},
+	}
+	err := validate(cfg)
+	if err == nil {
+		t.Fatal("expected validation error for two bad windows")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "checks[0].active_window") {
+		t.Errorf("error %q missing checks[0].active_window label", msg)
+	}
+	if !strings.Contains(msg, "checks[1].active_window") {
+		t.Errorf("error %q missing checks[1].active_window label", msg)
+	}
+}
+
 func TestFileMonitorValidation_ActiveWindow_EvenWhenDisabled(t *testing.T) {
 	// Operators must see window-format errors during config load even with
 	// the monitor turned off, otherwise enabling it later would fail with

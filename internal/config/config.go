@@ -409,12 +409,20 @@ func validateS3Config(sl validator.StructLevel) {
 func validateFileMonitorConfig(sl validator.StructLevel) {
 	fm := sl.Current().Interface().(FileMonitorConfig)
 
+	// Encode the slice index in the reported field name (e.g.
+	// "checks[1].active_window") so multiple bad windows produce distinct,
+	// locatable error labels. ReportError otherwise registers at the parent
+	// struct level — every bad check would collapse onto a single
+	// "filemonitor.active_window" key, defeating the point of telling the
+	// operator which entry to fix.
 	for i, c := range fm.Checks {
 		if c.ActiveWindow == "" {
 			continue
 		}
 		if _, err := ParseTimeWindow(c.ActiveWindow); err != nil {
-			sl.ReportError(fm.Checks[i].ActiveWindow, "active_window", "ActiveWindow", "invalid_time_window", err.Error())
+			fieldName := fmt.Sprintf("checks[%d].active_window", i)
+			structFieldName := fmt.Sprintf("Checks[%d].ActiveWindow", i)
+			sl.ReportError(fm.Checks[i].ActiveWindow, fieldName, structFieldName, "invalid_time_window", err.Error())
 		}
 	}
 
