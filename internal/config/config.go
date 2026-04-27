@@ -110,8 +110,9 @@ type GraphConfig struct {
 
 // FileMonitorConfig contains settings for monitoring file freshness on disk.
 type FileMonitorConfig struct {
-	Enabled bool                     `json:"enabled"`
-	Checks  []FileMonitorCheckConfig `json:"checks" validate:"required_if=Enabled true,dive"`
+	Enabled         bool                     `json:"enabled"`
+	IntervalSeconds int                      `json:"interval_seconds" validate:"gte=0"`
+	Checks          []FileMonitorCheckConfig `json:"checks" validate:"required_if=Enabled true,dive"`
 }
 
 // FileMonitorCheckConfig defines a single file to monitor for staleness.
@@ -129,19 +130,16 @@ func (c *FileMonitorCheckConfig) DisplayName() string {
 	return c.Path
 }
 
-// CheckIntervalMinutes returns the smallest max_age_minutes across all checks.
-// This is used as the scheduler interval so the most urgent file is checked on time.
-func (c *FileMonitorConfig) CheckIntervalMinutes() int {
-	if len(c.Checks) == 0 {
-		return 0
+// DefaultFileMonitorIntervalSeconds is the default polling cadence when interval_seconds is unset.
+const DefaultFileMonitorIntervalSeconds = 60
+
+// Interval returns the polling cadence for the file monitor scheduler.
+// When IntervalSeconds is unset (0) or negative, it falls back to DefaultFileMonitorIntervalSeconds.
+func (c *FileMonitorConfig) Interval() time.Duration {
+	if c.IntervalSeconds <= 0 {
+		return DefaultFileMonitorIntervalSeconds * time.Second
 	}
-	m := c.Checks[0].MaxAgeMinutes
-	for _, check := range c.Checks[1:] {
-		if check.MaxAgeMinutes < m {
-			m = check.MaxAgeMinutes
-		}
-	}
-	return m
+	return time.Duration(c.IntervalSeconds) * time.Second
 }
 
 // LogConfig contains logging configuration.

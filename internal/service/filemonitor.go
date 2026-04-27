@@ -31,7 +31,7 @@ type FileMonitorService struct {
 // FileMonitorStatus contains the results of the most recent file monitor check.
 type FileMonitorStatus struct {
 	LastCheckAt     *time.Time        `json:"last_check_at,omitempty"`
-	IntervalMinutes int               `json:"interval_minutes"`
+	IntervalSeconds int               `json:"interval_seconds"`
 	Checks          []FileCheckResult `json:"checks"`
 	staleCount      int
 }
@@ -130,7 +130,7 @@ func (s *FileMonitorService) Run() {
 	}
 	status := &FileMonitorStatus{
 		LastCheckAt:     &now,
-		IntervalMinutes: s.config.FileMonitor.CheckIntervalMinutes(),
+		IntervalSeconds: int(s.config.FileMonitor.Interval().Seconds()),
 		Checks:          results,
 		staleCount:      staleCount,
 	}
@@ -148,7 +148,7 @@ func (s *FileMonitorService) Status() *FileMonitorStatus {
 
 	if s.lastCheck == nil {
 		return &FileMonitorStatus{
-			IntervalMinutes: s.config.FileMonitor.CheckIntervalMinutes(),
+			IntervalSeconds: int(s.config.FileMonitor.Interval().Seconds()),
 			Checks:          []FileCheckResult{},
 		}
 	}

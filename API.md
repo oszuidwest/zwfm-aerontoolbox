@@ -1014,7 +1014,10 @@ Validatie gebeurt via `pg_restore --list` die de TOC en interne checksums contro
 
 De bestandscontrole (file monitor) bewaakt bestanden op schijf en signaleert wanneer ze ouder zijn dan een geconfigureerde maximumleeftijd. Dit is nuttig voor het detecteren van falende downloads of updates van externe processen (bijv. nieuwsbulletins, weerbericht-MP3's).
 
-De controle draait automatisch op een interval dat is afgeleid van de kleinste `max_age_minutes` uit alle geconfigureerde checks. Na een herstart wordt de eerste controle als "grace run" beschouwd: resultaten worden geobserveerd maar er worden geen meldingen verstuurd, om valse alarmen te voorkomen.
+De controle draait automatisch op een vast interval. Standaard is dat 60 seconden; pas dit aan via `file_monitor.interval_seconds`. Na een herstart wordt de eerste controle als "grace run" beschouwd: resultaten worden geobserveerd maar er worden geen meldingen verstuurd, om valse alarmen te voorkomen.
+
+> [!IMPORTANT]
+> **Breaking change:** het veld `interval_minutes` in de status-respons is vervangen door `interval_seconds`. Externe consumers moeten de nieuwe veldnaam gebruiken.
 
 ### Status bestandscontrole
 
@@ -1027,7 +1030,7 @@ Toont de resultaten van de meest recente bestandscontrole.
 ```json
 {
   "last_check_at": "2024-01-15T10:30:00Z",
-  "interval_minutes": 10,
+  "interval_seconds": 60,
   "checks": [
     {
       "name": "Nieuws bulletin",
@@ -1082,7 +1085,7 @@ De volgende voorbeelden tonen individuele items uit de `checks`-array voor speci
 
 **Velden:**
 - `last_check_at`: Tijdstip van de laatste controle
-- `interval_minutes`: Automatisch berekend controle-interval (kleinste `max_age_minutes`)
+- `interval_seconds`: Geconfigureerde polling-cadence in seconden (standaard 60)
 - `checks`: Array met resultaten per bestand
   - `name`: Optionele weergavenaam (uit configuratie)
   - `path`: Bestandspad op schijf
@@ -1386,6 +1389,7 @@ Het gedrag van de API kan worden geconfigureerd via `config.json`:
   },
   "file_monitor": {
     "enabled": false,
+    "interval_seconds": 60,
     "checks": [
       {
         "name": "Nieuws bulletin",
@@ -1408,12 +1412,13 @@ Het gedrag van de API kan worden geconfigureerd via `config.json`:
 
 **Bestandscontrole-instellingen:**
 - `file_monitor.enabled`: Schakel de bestandscontrole in
+- `file_monitor.interval_seconds`: Polling-cadence in seconden (standaard 60; `0` of weglaten = default)
 - `file_monitor.checks`: Array van te bewaken bestanden (minstens 1 vereist wanneer ingeschakeld)
   - `name`: Optionele weergavenaam voor meldingen
   - `path`: Absoluut pad naar het bestand
   - `max_age_minutes`: Maximale leeftijd in minuten (minimaal 1)
 
-Het controle-interval wordt automatisch afgeleid van de kleinste `max_age_minutes` waarde. Er is geen apart schedule nodig.
+Het controle-interval staat los van `max_age_minutes` en is via `interval_seconds` configureerbaar (standaard 60 s).
 
 Zie [config.example.json](config.example.json) voor alle beschikbare opties.
 
