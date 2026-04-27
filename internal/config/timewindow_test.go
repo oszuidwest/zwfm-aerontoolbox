@@ -33,7 +33,7 @@ func TestParseTimeWindow_Cases(t *testing.T) {
 		{name: "leading whitespace tolerated", input: " 06:00 - 22:00 ", checks: []struct {
 			hh, mm int
 			want   bool
-		}{{6, 0, true}}},
+		}{{5, 59, false}, {6, 0, true}, {22, 0, false}}},
 		{name: "missing dash", input: "06:00", wantErr: true},
 		{name: "extra dash", input: "06:00-12:00-18:00", wantErr: true},
 		{name: "non-numeric hour", input: "ab:00-22:00", wantErr: true},

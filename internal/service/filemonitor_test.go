@@ -344,6 +344,9 @@ func TestFreshFile_NotStale(t *testing.T) {
 	if result.InAlert {
 		t.Error("expected InAlert=false for fresh file")
 	}
+	if result.ErrorKind != FileCheckErrorKindNone {
+		t.Errorf("expected ErrorKind=%q for fresh file, got %q", FileCheckErrorKindNone, result.ErrorKind)
+	}
 }
 
 func TestStaleCount(t *testing.T) {
@@ -1232,6 +1235,20 @@ func TestActiveWindow_RecoveryRespectsWindow(t *testing.T) {
 	}
 	if got := notifier.recoveries[0][0].Path; got != path {
 		t.Errorf("recovery dispatch path = %q, want %q", got, path)
+	}
+
+	// 4) File goes stale again after recovery — a fresh alert must fire exactly
+	// once. This guards the invariant that alertState is cleared by the recovery
+	// dispatch, so the next stale detection starts a new alert cycle.
+	makeStale(t, path, 60*time.Minute)
+	svc.run()
+
+	r = svc.Status().Checks[0]
+	if !r.InAlert {
+		t.Error("expected InAlert=true after file goes stale again post-recovery")
+	}
+	if len(notifier.alerts) != 2 {
+		t.Fatalf("expected 2 alert dispatches after second stale cycle, got %d", len(notifier.alerts))
 	}
 }
 

@@ -9,12 +9,12 @@ import (
 
 // TimeWindow represents a HH:MM-HH:MM window in local time.
 //
-// A window with EndMin < StartMin wraps around midnight (e.g. 22:00-06:00
-// is active from 22:00 until 06:00 the next morning). Configured == false
-// distinguishes the zero value ("no window set, always active") from a
-// parsed window — StartMin == EndMin would otherwise be ambiguous, so it
-// is rejected at parse time and operators must omit the field for
-// always-active behaviour.
+// A window whose end is earlier than its start wraps around midnight (e.g.
+// 22:00-06:00 is active from 22:00 until 06:00 the next morning). An
+// unconfigured window (zero value) is always active; this is distinct from a
+// parsed window — equal start and end would otherwise be ambiguous, so it is
+// rejected at parse time and operators must omit the field for always-active
+// behaviour.
 type TimeWindow struct {
 	startMin, endMin int
 	configured       bool

@@ -512,6 +512,9 @@ func (s *FileMonitorService) buildResult(check config.FileMonitorCheckConfig, in
 			exists := false
 			result.FileExists = &exists
 			result.ErrorKind = FileCheckErrorKindNotFound
+			// Error intentionally left empty: FileExists=false already encodes the
+			// absence, and the path itself identifies the missing file. The other
+			// branches set Error because the file may exist but be unreadable.
 			slog.Warn("File monitor: file not found", "name", label, "path", check.Path)
 		case errors.Is(err, os.ErrPermission):
 			result.Error = err.Error()
