@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -631,37 +632,102 @@ func TestCompletedRunID_LagsBehindRunIDDuringActiveRun(t *testing.T) {
 	svc.Close()
 }
 
-func TestSchedulerSkipsWhenManualRunActive(t *testing.T) {
-	// Verify the contract Scheduler.runFileMonitor relies on: a second
-	// TriggerCheck while one is in flight returns ConflictError without
-	// starting a new run. The scheduler logs+skips on this signal.
+func TestScheduler_RunFileMonitor_TriggersCheck(t *testing.T) {
+	// Exercise the actual code path used by cron: Scheduler.runFileMonitor.
+	// A regression that breaks runFileMonitor (e.g. dropping TriggerCheck)
+	// should fail this test, not just contract tests on FileMonitorService.
+	path := filepath.Join(t.TempDir(), "news.mp3")
+	touchFile(t, path)
+
+	fmSvc := newTestService([]config.FileMonitorCheckConfig{
+		{Name: "News", Path: path, MaxAgeMinutes: 60},
+	})
+	defer fmSvc.Close()
+
+	sch := &Scheduler{service: &AeronService{FileMonitor: fmSvc}}
+
+	sch.runFileMonitor(context.Background())
+	waitForCompleted(t, fmSvc, 1)
+
+	st := fmSvc.Status()
+	if st.RunID != 1 || st.CompletedRunID != 1 {
+		t.Errorf("after scheduled tick: RunID=%d CompletedRunID=%d, want 1/1", st.RunID, st.CompletedRunID)
+	}
+}
+
+func TestScheduler_RunFileMonitor_SkipsWhenAlreadyActive(t *testing.T) {
+	// A scheduled tick that fires while a manual run is in flight must not
+	// start a second run (would race + duplicate alert/recovery emails).
+	// Tests Scheduler.runFileMonitor's conflict-swallowing behavior, not
+	// just the underlying TryStart() contract.
 	path := "/hang/news.mp3"
 	release := hangingStatReleasable(t, path)
 
-	svc := newTestService([]config.FileMonitorCheckConfig{
+	fmSvc := newTestService([]config.FileMonitorCheckConfig{
 		{Name: "News", Path: path, MaxAgeMinutes: 10, StatTimeoutSec: 30},
 	})
 
-	manualID, err := svc.TriggerCheck()
+	sch := &Scheduler{service: &AeronService{FileMonitor: fmSvc}}
+
+	manualID, err := fmSvc.TriggerCheck()
 	if err != nil {
 		t.Fatalf("manual TriggerCheck: %v", err)
 	}
 
-	scheduledID, err := svc.TriggerCheck()
-	if err == nil {
-		t.Fatalf("scheduled TriggerCheck should conflict, got runID=%d", scheduledID)
-	}
-	var conflict *types.ConflictError
-	if !errors.As(err, &conflict) {
-		t.Errorf("expected *types.ConflictError, got %T", err)
-	}
-	if got := svc.Status().RunID; got != manualID {
-		t.Errorf("RunID advanced from %d to %d on conflict", manualID, got)
+	// Cron tick fires while the manual run hangs. Must not error or panic,
+	// and must not advance the run counter.
+	sch.runFileMonitor(context.Background())
+
+	if got := fmSvc.Status().RunID; got != manualID {
+		t.Errorf("scheduler started a second run: RunID went %d → %d", manualID, got)
 	}
 
 	release()
-	waitForCompleted(t, svc, manualID)
-	svc.Close()
+	waitForCompleted(t, fmSvc, manualID)
+	fmSvc.Close()
+}
+
+func TestStatus_CompletedRunIDMatchesLastCheck(t *testing.T) {
+	// Regression test for the torn-snapshot bug: lastCheck and
+	// completedRunID must be published together so a reader cannot observe
+	// run N+1's Checks paired with completed_run_id=N. Each executeRun()
+	// builds a fresh LastCheckAt; we record per-run values and verify the
+	// final snapshot's LastCheckAt matches the run named by CompletedRunID.
+	path := filepath.Join(t.TempDir(), "news.mp3")
+	touchFile(t, path)
+
+	svc := newTestService([]config.FileMonitorCheckConfig{
+		{Name: "News", Path: path, MaxAgeMinutes: 60},
+	})
+	defer svc.Close()
+
+	lastCheckAtPerRun := make(map[uint64]time.Time)
+	for i := uint64(1); i <= 5; i++ {
+		runID, err := svc.TriggerCheck()
+		if err != nil {
+			t.Fatalf("TriggerCheck #%d: %v", i, err)
+		}
+		waitForCompleted(t, svc, runID)
+		st := svc.Status()
+		if st.LastCheckAt == nil {
+			t.Fatalf("run %d: LastCheckAt nil", runID)
+		}
+		lastCheckAtPerRun[runID] = *st.LastCheckAt
+		if st.CompletedRunID != runID {
+			t.Errorf("run %d: CompletedRunID=%d, want %d", runID, st.CompletedRunID, runID)
+		}
+		// Tiny gap so consecutive runs have distinguishable LastCheckAt.
+		time.Sleep(time.Millisecond)
+	}
+
+	// Final correlation: the snapshot's CompletedRunID must name the run
+	// whose LastCheckAt we still observe.
+	st := svc.Status()
+	want := lastCheckAtPerRun[st.CompletedRunID]
+	if !st.LastCheckAt.Equal(want) {
+		t.Errorf("LastCheckAt=%v doesn't match recorded value for run %d (%v)",
+			st.LastCheckAt, st.CompletedRunID, want)
+	}
 }
 
 // writeAndAge creates a file and sets its modification time to the past.

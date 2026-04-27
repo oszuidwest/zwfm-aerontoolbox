@@ -52,19 +52,18 @@ type FileMonitorService struct {
 	graceRunDone bool
 	stateMu      sync.Mutex
 
-	// Last check results for the status API endpoint.
-	lastCheck *FileMonitorStatus
-	statusMu  sync.RWMutex
-
 	// In-flight stat tracking for single-flight per path.
 	inflightMu sync.Mutex
 	inflight   map[string]*statInFlight
 
-	// Run-state: tracks manual + scheduled triggers and exposes a monotone run ID
-	// so clients can correlate POST /check responses with /status snapshots.
-	// Distinct from inflight (per-path stat dedup) and statusMu (lastCheck).
+	// Published state: lastCheck + run-state live under one lock so a Status()
+	// snapshot is internally consistent. Writing lastCheck without also bumping
+	// completedRunID (or vice versa) would let a client observe checks from
+	// run N+1 paired with completed_run_id=N — which would falsify the
+	// documented exact-correlation contract.
 	runner         *async.Runner
-	runStateMu     sync.RWMutex
+	publishedMu    sync.RWMutex
+	lastCheck      *FileMonitorStatus
 	running        bool
 	startedAt      *time.Time
 	runID          uint64
@@ -122,8 +121,21 @@ func newFileMonitorService(cfg *config.Config, notifySvc *notify.NotificationSer
 	}
 }
 
-// Run checks all configured files and sends notifications for newly stale or recovered files.
+// Run checks all configured files, sends alert/recovery notifications, and
+// publishes the result via lastCheck. It does NOT touch run-state; for the
+// trigger path, TriggerCheck's wrapper publishes lastCheck atomically with
+// run-state via publishCompleted to avoid torn snapshots.
 func (s *FileMonitorService) Run() {
+	status := s.executeRun()
+	s.publishedMu.Lock()
+	s.lastCheck = status
+	s.publishedMu.Unlock()
+}
+
+// executeRun performs the check cycle and returns the result without
+// publishing it. Separated from Run() so the trigger path can publish the
+// result together with run-state under a single lock.
+func (s *FileMonitorService) executeRun() *FileMonitorStatus {
 	now := time.Now()
 	checks := s.config.FileMonitor.Checks
 
@@ -187,75 +199,60 @@ func (s *FileMonitorService) Run() {
 		s.notify.SendFileRecoveries(newRecoveries)
 	}
 
-	// Update status for the API endpoint.
 	staleCount := 0
 	for _, r := range results {
 		if r.IsStale {
 			staleCount++
 		}
 	}
-	status := &FileMonitorStatus{
+
+	slog.Info("File monitor check completed", "total", len(results), "stale", staleCount)
+
+	return &FileMonitorStatus{
 		LastCheckAt:     &now,
 		IntervalSeconds: int(s.config.FileMonitor.Interval().Seconds()),
 		Checks:          results,
 		staleCount:      staleCount,
 	}
-	s.statusMu.Lock()
-	s.lastCheck = status
-	s.statusMu.Unlock()
-
-	slog.Info("File monitor check completed", "total", len(results), "stale", staleCount)
 }
 
-// Status returns a fresh snapshot combining lastCheck (Run() output) with the
-// current run-state (TriggerCheck/markCompleted).
+// Status returns a fresh snapshot of run-state and the most recent Checks.
 //
-// Composition is critical: returning s.lastCheck directly would mean Running
-// is never visible to clients. We read both state sources under their own
-// locks and assemble a new struct. lastCheck.Checks is safe to share because
-// Run() never mutates the slice after publishing it — a new run replaces the
-// pointer entirely.
+// Single-lock read: lastCheck and run-state (running/runID/completedRunID)
+// are written together under publishedMu by publishCompleted, so a snapshot
+// observed here is internally consistent. Concretely, completed_run_id
+// always names the run that produced the visible Checks — clients can rely
+// on the documented `completed_run_id == myRunID` exact-correlation contract.
 //
-// Ordering guarantee: markCompleted runs via defer after Run() returns, and
-// Run() writes s.lastCheck before returning. So once a client observes
-// completedRunID == myRunID, the visible Checks are guaranteed to be that
-// run's output.
+// lastCheck.Checks is safe to share because executeRun() builds a fresh
+// slice each call and never mutates a previously published one.
 func (s *FileMonitorService) Status() *FileMonitorStatus {
-	s.runStateMu.RLock()
-	running := s.running
-	runID := s.runID
-	completedRunID := s.completedRunID
-	var startedAt *time.Time
-	if s.startedAt != nil {
-		t := *s.startedAt
-		startedAt = &t
-	}
-	s.runStateMu.RUnlock()
-
-	s.statusMu.RLock()
-	last := s.lastCheck
-	s.statusMu.RUnlock()
+	s.publishedMu.RLock()
+	defer s.publishedMu.RUnlock()
 
 	snap := &FileMonitorStatus{
-		Running:         running,
-		RunID:           runID,
-		CompletedRunID:  completedRunID,
-		StartedAt:       startedAt,
+		Running:         s.running,
+		RunID:           s.runID,
+		CompletedRunID:  s.completedRunID,
 		IntervalSeconds: int(s.config.FileMonitor.Interval().Seconds()),
 		Checks:          []FileCheckResult{},
 	}
-	if last != nil {
-		snap.LastCheckAt = last.LastCheckAt
-		snap.Checks = last.Checks
-		snap.staleCount = last.staleCount
+	if s.startedAt != nil {
+		t := *s.startedAt
+		snap.StartedAt = &t
+	}
+	if s.lastCheck != nil {
+		snap.LastCheckAt = s.lastCheck.LastCheckAt
+		snap.Checks = s.lastCheck.Checks
+		snap.staleCount = s.lastCheck.staleCount
 	}
 	return snap
 }
 
 // StaleCount returns the number of files that were stale in the most recent check.
 func (s *FileMonitorService) StaleCount() int {
-	s.statusMu.RLock()
-	defer s.statusMu.RUnlock()
+	s.publishedMu.RLock()
+	defer s.publishedMu.RUnlock()
 
 	if s.lastCheck == nil {
 		return 0
@@ -278,8 +275,8 @@ func (s *FileMonitorService) TriggerCheck() (uint64, error) {
 	}
 	runID := s.startNewRun()
 	s.runner.Go(func() {
-		defer s.markCompleted(runID)
-		s.Run()
+		status := s.executeRun()
+		s.publishCompleted(status, runID)
 	})
 	return runID, nil
 }
@@ -287,8 +284,8 @@ func (s *FileMonitorService) TriggerCheck() (uint64, error) {
 // startNewRun increments the run counter, marks the service running, and
 // records the start time. Returns the new run ID.
 func (s *FileMonitorService) startNewRun() uint64 {
-	s.runStateMu.Lock()
-	defer s.runStateMu.Unlock()
+	s.publishedMu.Lock()
+	defer s.publishedMu.Unlock()
 	s.runID++
 	s.running = true
 	now := time.Now()
@@ -296,13 +293,15 @@ func (s *FileMonitorService) startNewRun() uint64 {
 	return s.runID
 }
 
-// markCompleted clears the running flag and links the just-finished runID to
-// the published Checks. Called via defer after Run() returns; Run() writes
-// s.lastCheck before returning, so completedRunID is always consistent with
-// lastCheck.
-func (s *FileMonitorService) markCompleted(runID uint64) {
-	s.runStateMu.Lock()
-	defer s.runStateMu.Unlock()
+// publishCompleted atomically publishes the run's result and clears the
+// running flag under a single lock. Pairing lastCheck with completedRunID in
+// one critical section is what makes the polling contract
+// `completed_run_id == myRunID` an exact-correlation guarantee — a Status()
+// reader can never see lastCheck from run N+1 alongside completedRunID=N.
+func (s *FileMonitorService) publishCompleted(status *FileMonitorStatus, runID uint64) {
+	s.publishedMu.Lock()
+	defer s.publishedMu.Unlock()
+	s.lastCheck = status
 	s.running = false
 	s.completedRunID = runID
 }
