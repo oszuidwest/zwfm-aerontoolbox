@@ -120,6 +120,8 @@ func TestAlertAndRecovery(t *testing.T) {
 	svc := newTestService(t,
 		config.FileMonitorCheckConfig{Name: "News", Path: path, MaxAgeMinutes: 10},
 	)
+	notifier := &captureFileMonitorNotifier{}
+	svc.notify = notifier
 
 	// Grace run.
 	svc.run()
@@ -129,11 +131,17 @@ func TestAlertAndRecovery(t *testing.T) {
 	if !svc.Status().Checks[0].InAlert {
 		t.Fatal("expected InAlert=true after second run")
 	}
+	if len(notifier.alerts) != 1 {
+		t.Fatalf("expected exactly 1 alert call, got %d", len(notifier.alerts))
+	}
 
 	// Third run: file still stale → stays in alert (no duplicate alert).
 	svc.run()
 	if !svc.Status().Checks[0].InAlert {
 		t.Error("expected InAlert=true to persist for still-stale file")
+	}
+	if len(notifier.alerts) != 1 {
+		t.Fatalf("expected still exactly 1 alert call after duplicate run, got %d", len(notifier.alerts))
 	}
 
 	// Touch the file → should recover.
@@ -145,6 +153,79 @@ func TestAlertAndRecovery(t *testing.T) {
 	}
 	if svc.Status().Checks[0].IsStale {
 		t.Error("expected IsStale=false after file recovery")
+	}
+	if len(notifier.recoveries) != 1 {
+		t.Fatalf("expected exactly 1 recovery call, got %d", len(notifier.recoveries))
+	}
+}
+
+func TestAlertSuppressedAcrossWindowGap(t *testing.T) {
+	// 1. Inside window: file goes stale → alert fires exactly once.
+	pinNow(t, timeAt(10, 0))
+
+	path := filepath.Join(t.TempDir(), "news.mp3")
+	makeStale(t, path, 60*time.Minute)
+
+	svc := newTestService(t,
+		config.FileMonitorCheckConfig{
+			Name: "Daytime news", Path: path, MaxAgeMinutes: 10,
+			ActiveWindow: "08:00-20:00",
+		},
+	)
+	notifier := &captureFileMonitorNotifier{}
+	svc.notify = notifier
+
+	svc.run() // grace
+	svc.run() // real → alert
+	if !svc.Status().Checks[0].InAlert {
+		t.Fatal("expected InAlert=true after entering alert inside window")
+	}
+	if len(notifier.alerts) != 1 {
+		t.Fatalf("expected 1 alert dispatch, got %d", len(notifier.alerts))
+	}
+
+	// 2. Window closes → run outside window, no state mutation, no duplicate.
+	pinNow(t, timeAt(22, 0))
+	makeStale(t, path, 60*time.Minute)
+	svc.run()
+
+	r := svc.Status().Checks[0]
+	if !r.IsStale {
+		t.Error("expected IsStale=true outside window (transparency)")
+	}
+	if r.InAlert {
+		t.Error("expected InAlert=false outside window")
+	}
+	if len(notifier.alerts) != 1 {
+		t.Fatalf("expected still 1 alert dispatch after outside-window run, got %d", len(notifier.alerts))
+	}
+
+	// 3. Window reopens while file is still stale → no duplicate alert.
+	pinNow(t, timeAt(10, 0))
+	makeStale(t, path, 60*time.Minute)
+	svc.run()
+
+	r = svc.Status().Checks[0]
+	if !r.InAlert {
+		t.Error("expected InAlert=true once window reopens with still-stale file")
+	}
+	if len(notifier.alerts) != 1 {
+		t.Fatalf("expected no duplicate alert after window reopens, got %d", len(notifier.alerts))
+	}
+
+	// 4. File becomes fresh inside window → recovery fires exactly once.
+	makeFresh(t, path)
+	svc.run()
+
+	r = svc.Status().Checks[0]
+	if r.IsStale {
+		t.Error("expected IsStale=false after recovery")
+	}
+	if r.InAlert {
+		t.Error("expected InAlert=false after recovery")
+	}
+	if len(notifier.recoveries) != 1 {
+		t.Fatalf("expected 1 recovery dispatch, got %d", len(notifier.recoveries))
 	}
 }
 
@@ -171,8 +252,8 @@ func TestMissingFile_FileExistsFalse(t *testing.T) {
 	if result.Error != "" {
 		t.Errorf("expected no error string for ENOENT, got %q", result.Error)
 	}
-	if result.ErrorKind != fileCheckErrorKindNotFound {
-		t.Errorf("expected ErrorKind=%q, got %q", fileCheckErrorKindNotFound, result.ErrorKind)
+	if result.ErrorKind != FileCheckErrorKindNotFound {
+		t.Errorf("expected ErrorKind=%q, got %q", FileCheckErrorKindNotFound, result.ErrorKind)
 	}
 }
 
@@ -213,8 +294,8 @@ func TestPermissionDenied_FileExistsNull(t *testing.T) {
 	if !result.IsStale {
 		t.Error("expected stat error to be treated as stale")
 	}
-	if result.ErrorKind != fileCheckErrorKindPermission {
-		t.Errorf("expected ErrorKind=%q, got %q", fileCheckErrorKindPermission, result.ErrorKind)
+	if result.ErrorKind != FileCheckErrorKindPermission {
+		t.Errorf("expected ErrorKind=%q, got %q", FileCheckErrorKindPermission, result.ErrorKind)
 	}
 }
 
@@ -237,8 +318,8 @@ func TestGenericStatError_UsesStatErrorKind(t *testing.T) {
 	if result.FileExists != nil {
 		t.Errorf("expected file_exists=null for generic stat error, got %v", *result.FileExists)
 	}
-	if result.ErrorKind != fileCheckErrorKindStatError {
-		t.Errorf("expected ErrorKind=%q, got %q", fileCheckErrorKindStatError, result.ErrorKind)
+	if result.ErrorKind != FileCheckErrorKindStatError {
+		t.Errorf("expected ErrorKind=%q, got %q", FileCheckErrorKindStatError, result.ErrorKind)
 	}
 }
 
@@ -332,8 +413,8 @@ func TestStatTimeout_TriggersStaleWithTimeoutKind(t *testing.T) {
 	if !result.IsStale {
 		t.Error("expected IsStale=true on stat timeout")
 	}
-	if result.ErrorKind != fileCheckErrorKindStatTimeout {
-		t.Errorf("expected ErrorKind=%q, got %q", fileCheckErrorKindStatTimeout, result.ErrorKind)
+	if result.ErrorKind != FileCheckErrorKindStatTimeout {
+		t.Errorf("expected ErrorKind=%q, got %q", FileCheckErrorKindStatTimeout, result.ErrorKind)
 	}
 	if result.Error == "" {
 		t.Error("expected Error message to mention timeout")
@@ -1077,8 +1158,8 @@ func TestActiveWindow_StatTimeoutOutsideWindowDoesNotAlert(t *testing.T) {
 	if r.InAlert {
 		t.Error("InAlert must stay false outside the active window on stat timeout")
 	}
-	if r.ErrorKind != fileCheckErrorKindStatTimeout {
-		t.Errorf("expected ErrorKind=%q, got %q", fileCheckErrorKindStatTimeout, r.ErrorKind)
+	if r.ErrorKind != FileCheckErrorKindStatTimeout {
+		t.Errorf("expected ErrorKind=%q, got %q", FileCheckErrorKindStatTimeout, r.ErrorKind)
 	}
 	if got := svc.AlertingCount(); got != 0 {
 		t.Errorf("AlertingCount() = %d, want 0 outside window", got)

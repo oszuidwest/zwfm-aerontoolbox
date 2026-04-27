@@ -16,8 +16,8 @@ import (
 // is rejected at parse time and operators must omit the field for
 // always-active behaviour.
 type TimeWindow struct {
-	StartMin, EndMin int
-	Configured       bool
+	startMin, endMin int
+	configured       bool
 }
 
 // ParseTimeWindow parses "HH:MM-HH:MM". An empty string returns an
@@ -43,7 +43,7 @@ func ParseTimeWindow(s string) (TimeWindow, error) {
 	if start == end {
 		return TimeWindow{}, fmt.Errorf("invalid window %q: start and end are equal; omit the field for always-active", s)
 	}
-	return TimeWindow{StartMin: start, EndMin: end, Configured: true}, nil
+	return TimeWindow{startMin: start, endMin: end, configured: true}, nil
 }
 
 func parseHHMM(s string) (int, error) {
@@ -68,12 +68,18 @@ func parseHHMM(s string) (int, error) {
 // Active reports whether t (in its own location) falls inside the window.
 // An unconfigured window is treated as always-active.
 func (w TimeWindow) Active(t time.Time) bool {
-	if !w.Configured {
+	if !w.configured {
 		return true
 	}
 	cur := t.Hour()*60 + t.Minute()
-	if w.StartMin < w.EndMin {
-		return cur >= w.StartMin && cur < w.EndMin
+	if w.startMin < w.endMin {
+		return cur >= w.startMin && cur < w.endMin
 	}
-	return cur >= w.StartMin || cur < w.EndMin
+	return cur >= w.startMin || cur < w.endMin
+}
+
+// IsConfigured reports whether this time window was explicitly parsed from a
+// non-empty string. An unconfigured window is treated as always-active.
+func (w TimeWindow) IsConfigured() bool {
+	return w.configured
 }
