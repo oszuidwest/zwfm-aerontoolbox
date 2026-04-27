@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -127,18 +128,51 @@ func TestFileMonitorValidation_ActiveWindow(t *testing.T) {
 		t.Errorf("valid window rejected: %v", err)
 	}
 
-	cfg.FileMonitor.Checks[0].ActiveWindow = "12:00-12:00"
-	if err := validate(cfg); err == nil {
-		t.Error("expected validation error for equal start/end window")
+	// Specific reasons must survive into the user-facing message rather than
+	// being collapsed to a generic "must be HH:MM-HH:MM". Without the verbatim
+	// parser error, an operator hitting the equal-start/end case has no way
+	// to tell what changed about the format and what to do about it.
+	cases := []struct {
+		input   string
+		wantMsg string
+	}{
+		{"12:00-12:00", "start and end are equal"},
+		{"24:00-06:00", "out of range"},
+		{"garbage", "expected HH:MM"},
 	}
-
-	cfg.FileMonitor.Checks[0].ActiveWindow = "garbage"
-	if err := validate(cfg); err == nil {
-		t.Error("expected validation error for unparsable window")
+	for _, tc := range cases {
+		t.Run(tc.input, func(t *testing.T) {
+			cfg.FileMonitor.Checks[0].ActiveWindow = tc.input
+			err := validate(cfg)
+			if err == nil {
+				t.Fatalf("expected validation error for %q", tc.input)
+			}
+			if !strings.Contains(err.Error(), tc.wantMsg) {
+				t.Errorf("error %q missing %q (parser reason was discarded)", err.Error(), tc.wantMsg)
+			}
+		})
 	}
 
 	cfg.FileMonitor.Checks[0].ActiveWindow = ""
 	if err := validate(cfg); err != nil {
 		t.Errorf("empty (always-active) window should pass validation, got: %v", err)
+	}
+}
+
+func TestFileMonitorValidation_ActiveWindow_EvenWhenDisabled(t *testing.T) {
+	// Operators must see window-format errors during config load even with
+	// the monitor turned off, otherwise enabling it later would fail with
+	// confusing context.
+	cfg := minimalConfig()
+	cfg.FileMonitor.Enabled = false
+	cfg.FileMonitor.Checks = []FileMonitorCheckConfig{
+		{Path: "/data/news.mp3", MaxAgeMinutes: 30, ActiveWindow: "12:00-12:00"},
+	}
+	err := validate(cfg)
+	if err == nil {
+		t.Fatal("expected validation error even when file_monitor is disabled")
+	}
+	if !strings.Contains(err.Error(), "start and end are equal") {
+		t.Errorf("error %q missing parser reason", err.Error())
 	}
 }

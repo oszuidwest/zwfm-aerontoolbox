@@ -116,12 +116,16 @@ type FileMonitorConfig struct {
 }
 
 // FileMonitorCheckConfig defines a single file to monitor for staleness.
+//
+// ActiveWindow is validated by validateFileMonitorConfig (struct-level) so the
+// parser's specific reason — equal start/end, range, format — survives into
+// the error message instead of collapsing to a generic tag string.
 type FileMonitorCheckConfig struct {
 	Name           string `json:"name"`
 	Path           string `json:"path" validate:"required,absolute_path"`
 	MaxAgeMinutes  int    `json:"max_age_minutes" validate:"required,gte=1"`
 	StatTimeoutSec int    `json:"stat_timeout_seconds" validate:"gte=0"`
-	ActiveWindow   string `json:"active_window" validate:"omitempty,time_window"`
+	ActiveWindow   string `json:"active_window"`
 }
 
 // DisplayName returns the check name if set, otherwise the file path.
@@ -377,15 +381,6 @@ func newConfigValidator() *validator.Validate {
 		return filepath.IsAbs(fl.Field().String())
 	})
 
-	_ = v.RegisterValidation("time_window", func(fl validator.FieldLevel) bool {
-		s := fl.Field().String()
-		if s == "" {
-			return true
-		}
-		_, err := ParseTimeWindow(s)
-		return err == nil
-	})
-
 	v.RegisterStructValidation(validateS3Config, S3Config{})
 	v.RegisterStructValidation(validateFileMonitorConfig, FileMonitorConfig{})
 
@@ -403,10 +398,26 @@ func validateS3Config(sl validator.StructLevel) {
 	}
 }
 
-// validateFileMonitorConfig checks that at least one check is configured when file monitor
-// is enabled, and that no two checks share the same path.
+// validateFileMonitorConfig checks that at least one check is configured when
+// file monitor is enabled, that no two checks share the same path, and that
+// each ActiveWindow parses cleanly. The window check runs even when the
+// monitor is disabled so format/range typos surface during config load
+// rather than only after the operator flips the feature on. The parser
+// error string is forwarded verbatim via the tag param so the user sees the
+// concrete reason (e.g. "start and end are equal") instead of a generic
+// "must be HH:MM-HH:MM".
 func validateFileMonitorConfig(sl validator.StructLevel) {
 	fm := sl.Current().Interface().(FileMonitorConfig)
+
+	for i, c := range fm.Checks {
+		if c.ActiveWindow == "" {
+			continue
+		}
+		if _, err := ParseTimeWindow(c.ActiveWindow); err != nil {
+			sl.ReportError(fm.Checks[i].ActiveWindow, "active_window", "ActiveWindow", "invalid_time_window", err.Error())
+		}
+	}
+
 	if !fm.Enabled {
 		return
 	}
@@ -476,8 +487,8 @@ func tagMessage(tag, param string) string {
 		return "contains invalid characters (only letters, numbers and underscores allowed)"
 	case "guid":
 		return "must be a valid GUID (e.g., 12345678-1234-1234-1234-123456789abc)"
-	case "time_window":
-		return "must be HH:MM-HH:MM (omit for always-active)"
+	case "invalid_time_window":
+		return param
 	default:
 		return fmt.Sprintf("is invalid (%s)", tag)
 	}
