@@ -174,19 +174,6 @@ func newFileMonitorService(cfg *config.Config, notifySvc *notify.NotificationSer
 	}, nil
 }
 
-// run checks all configured files, sends alert/recovery notifications, and
-// publishes the result via lastCheck. It does NOT touch run-state; for the
-// trigger path, TriggerCheck's wrapper publishes lastCheck atomically with
-// run-state via publishCompleted to avoid torn snapshots.
-// Tests use this directly to drive the service synchronously without going
-// through the async runner.
-func (s *FileMonitorService) run() {
-	status := s.executeRun()
-	s.publishedMu.Lock()
-	s.lastCheck = status
-	s.publishedMu.Unlock()
-}
-
 // executeRun performs the check cycle and returns the result without
 // publishing it. Separated from Run() so the trigger path can publish the
 // result together with run-state under a single lock.
