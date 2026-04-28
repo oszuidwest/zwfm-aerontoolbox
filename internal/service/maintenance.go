@@ -279,7 +279,7 @@ func (s *MaintenanceService) getTableHealth(ctx context.Context) ([]TableHealth,
 	cfg := s.config.Maintenance
 	tables := make([]TableHealth, 0, len(rows))
 	for _, row := range rows {
-		tables = append(tables, convertTableRow(row, &cfg))
+		tables = append(tables, convertTableRow(&row, &cfg))
 	}
 
 	return tables, nil
@@ -287,7 +287,7 @@ func (s *MaintenanceService) getTableHealth(ctx context.Context) ([]TableHealth,
 
 // convertTableRow maps a raw database statistics row to a TableHealth struct,
 // computing derived fields like dead-tuple ratio and maintenance flags.
-func convertTableRow(row tableHealthRow, cfg *config.MaintenanceConfig) TableHealth {
+func convertTableRow(row *tableHealthRow, cfg *config.MaintenanceConfig) TableHealth {
 	table := TableHealth{
 		Name:            row.TableName,
 		RowCount:        row.LiveTuples,
