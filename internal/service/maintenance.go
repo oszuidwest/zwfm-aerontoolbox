@@ -22,7 +22,9 @@ type MaintenanceService struct {
 }
 
 // newMaintenanceService creates a new MaintenanceService instance.
-func newMaintenanceService(repo *database.Repository, cfg *config.Config, notifySvc *notify.NotificationService) *MaintenanceService {
+func newMaintenanceService(
+	repo *database.Repository, cfg *config.Config, notifySvc *notify.NotificationService,
+) *MaintenanceService {
 	return &MaintenanceService{
 		repo:   repo,
 		config: cfg,
@@ -277,42 +279,49 @@ func (s *MaintenanceService) getTableHealth(ctx context.Context) ([]TableHealth,
 	cfg := s.config.Maintenance
 	tables := make([]TableHealth, 0, len(rows))
 	for _, row := range rows {
-		table := TableHealth{
-			Name:            row.TableName,
-			RowCount:        row.LiveTuples,
-			DeadTuples:      row.DeadTuples,
-			ModSinceAnalyze: row.ModSinceAnalyze,
-			LastVacuum:      row.LastVacuum,
-			LastAutovacuum:  row.LastAutovacuum,
-			LastAnalyze:     row.LastAnalyze,
-			LastAutoanalyze: row.LastAutoanalyze,
-			SeqScans:        row.SeqScan,
-			IdxScans:        row.IdxScan,
-			TotalSizeRaw:    row.TotalSize,
-			TotalSize:       util.FormatBytes(row.TotalSize),
-			TableSizeRaw:    row.TableSize,
-			TableSize:       util.FormatBytes(row.TableSize),
-			IndexSizeRaw:    row.IndexSize,
-			IndexSize:       util.FormatBytes(row.IndexSize),
-			ToastSizeRaw:    row.ToastSize,
-			ToastSize:       util.FormatBytes(row.ToastSize),
-		}
-
-		if row.LiveTuples > 0 {
-			table.DeadTupleRatio = float64(row.DeadTuples) / float64(row.LiveTuples+row.DeadTuples) * 100
-		}
-
-		table.NeedsVacuum = table.DeadTupleRatio > cfg.GetBloatThreshold() ||
-			table.DeadTuples > cfg.GetDeadTupleThreshold()
-
-		neverAnalyzed := table.LastAnalyze == nil && table.LastAutoanalyze == nil && table.RowCount > 0
-		staleStats := table.RowCount > 0 && table.ModSinceAnalyze > (table.RowCount*int64(cfg.GetStaleStatsThreshold())/100)
-		table.NeedsAnalyze = neverAnalyzed || staleStats
-
-		tables = append(tables, table)
+		tables = append(tables, convertTableRow(row, &cfg))
 	}
 
 	return tables, nil
+}
+
+// convertTableRow maps a raw database statistics row to a TableHealth struct,
+// computing derived fields like dead-tuple ratio and maintenance flags.
+func convertTableRow(row tableHealthRow, cfg *config.MaintenanceConfig) TableHealth {
+	table := TableHealth{
+		Name:            row.TableName,
+		RowCount:        row.LiveTuples,
+		DeadTuples:      row.DeadTuples,
+		ModSinceAnalyze: row.ModSinceAnalyze,
+		LastVacuum:      row.LastVacuum,
+		LastAutovacuum:  row.LastAutovacuum,
+		LastAnalyze:     row.LastAnalyze,
+		LastAutoanalyze: row.LastAutoanalyze,
+		SeqScans:        row.SeqScan,
+		IdxScans:        row.IdxScan,
+		TotalSizeRaw:    row.TotalSize,
+		TotalSize:       util.FormatBytes(row.TotalSize),
+		TableSizeRaw:    row.TableSize,
+		TableSize:       util.FormatBytes(row.TableSize),
+		IndexSizeRaw:    row.IndexSize,
+		IndexSize:       util.FormatBytes(row.IndexSize),
+		ToastSizeRaw:    row.ToastSize,
+		ToastSize:       util.FormatBytes(row.ToastSize),
+	}
+
+	if row.LiveTuples > 0 {
+		table.DeadTupleRatio = float64(row.DeadTuples) / float64(row.LiveTuples+row.DeadTuples) * 100
+	}
+
+	table.NeedsVacuum = table.DeadTupleRatio > cfg.GetBloatThreshold() ||
+		table.DeadTuples > cfg.GetDeadTupleThreshold()
+
+	neverAnalyzed := table.LastAnalyze == nil && table.LastAutoanalyze == nil && table.RowCount > 0
+	staleStats := table.RowCount > 0 &&
+		table.ModSinceAnalyze > (table.RowCount*int64(cfg.GetStaleStatsThreshold())/100)
+	table.NeedsAnalyze = neverAnalyzed || staleStats
+
+	return table
 }
 
 // Recommendations.
@@ -355,8 +364,10 @@ func (s *MaintenanceService) checkTableHealth(t *TableHealth, recs []string) []s
 		recs = append(recs, fmt.Sprintf("Table '%s' has never been vacuumed", t.Name))
 	}
 
-	if lastVac := lastVacuumTime(t); lastVac != nil && time.Since(*lastVac) > cfg.GetVacuumStaleness() && t.RowCount > minRows {
-		recs = append(recs, fmt.Sprintf("Table '%s' has not been vacuumed in over %d days", t.Name, cfg.GetVacuumStalenessDays()))
+	if lastVac := lastVacuumTime(t); lastVac != nil &&
+		time.Since(*lastVac) > cfg.GetVacuumStaleness() && t.RowCount > minRows {
+		recs = append(recs, fmt.Sprintf(
+			"Table '%s' has not been vacuumed in over %d days", t.Name, cfg.GetVacuumStalenessDays()))
 	}
 
 	if t.LastAnalyze == nil && t.LastAutoanalyze == nil && t.RowCount > minRows {
@@ -366,12 +377,17 @@ func (s *MaintenanceService) checkTableHealth(t *TableHealth, recs []string) []s
 	if t.RowCount > 0 && t.ModSinceAnalyze > 0 {
 		threshold := t.RowCount * int64(cfg.GetStaleStatsThreshold()) / 100
 		if t.ModSinceAnalyze > threshold {
-			recs = append(recs, fmt.Sprintf("Table '%s' has %d modifications since last ANALYZE - statistics stale", t.Name, t.ModSinceAnalyze))
+			recs = append(recs, fmt.Sprintf(
+				"Table '%s' has %d modifications since last ANALYZE - statistics stale",
+				t.Name, t.ModSinceAnalyze))
 		}
 	}
 
-	if t.SeqScans > 1000 && t.IdxScans > 0 && float64(t.SeqScans)/float64(t.IdxScans) > cfg.GetSeqScanRatioThreshold() {
-		recs = append(recs, fmt.Sprintf("Table '%s' has high sequential scans (%d) vs index scans (%d) - possible missing index", t.Name, t.SeqScans, t.IdxScans))
+	if t.SeqScans > 1000 && t.IdxScans > 0 &&
+		float64(t.SeqScans)/float64(t.IdxScans) > cfg.GetSeqScanRatioThreshold() {
+		recs = append(recs, fmt.Sprintf(
+			"Table '%s' has high sequential scans (%d) vs index scans (%d) - possible missing index",
+			t.Name, t.SeqScans, t.IdxScans))
 	}
 
 	if t.ToastSizeRaw > cfg.GetToastSizeWarningBytes() {

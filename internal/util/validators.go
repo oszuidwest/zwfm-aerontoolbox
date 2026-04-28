@@ -92,7 +92,8 @@ func ValidateImageData(data []byte) error {
 // ValidateImageFormat validates that an image format is supported.
 func ValidateImageFormat(format string) error {
 	if !slices.Contains(types.SupportedFormats, format) {
-		return types.NewValidationError("image", fmt.Sprintf("file format %s is not supported (use: %v)", format, types.SupportedFormats))
+		return types.NewValidationError("image",
+			fmt.Sprintf("file format %s is not supported (use: %v)", format, types.SupportedFormats))
 	}
 	return nil
 }

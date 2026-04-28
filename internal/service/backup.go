@@ -57,7 +57,9 @@ type S3SyncStatus struct {
 }
 
 // newBackupService creates a BackupService with resolved tool paths and optional S3 client.
-func newBackupService(repo *database.Repository, cfg *config.Config, notifySvc *notify.NotificationService) (*BackupService, error) {
+func newBackupService(
+	repo *database.Repository, cfg *config.Config, notifySvc *notify.NotificationService,
+) (*BackupService, error) {
 	svc := &BackupService{
 		repo:   repo,
 		config: cfg,
@@ -200,7 +202,8 @@ func (s *BackupService) compressionLevel(requested int) (int, error) {
 
 // validateBackupFile checks backup file integrity using pg_restore --list.
 func (s *BackupService) validateBackupFile(ctx context.Context, filePath string) error {
-	cmd := exec.CommandContext(ctx, s.pgRestorePath, "--list", filePath) //nolint:gosec // pgRestorePath is from validated config
+	//nolint:gosec // pgRestorePath is from validated config
+	cmd := exec.CommandContext(ctx, s.pgRestorePath, "--list", filePath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		errMsg := strings.TrimSpace(string(output))
@@ -219,8 +222,11 @@ func generateBackupFilename() string {
 }
 
 // executePgDump runs pg_dump and returns file info on success, cleaning up on failure.
-func (s *BackupService) executePgDump(ctx context.Context, pgDumpPath, filename, fullPath string, args []string) (os.FileInfo, time.Duration, error) {
-	cmd := exec.CommandContext(ctx, pgDumpPath, args...) //nolint:gosec // G204: pgDumpPath is resolved from config/PATH, not user HTTP input
+func (s *BackupService) executePgDump(
+	ctx context.Context, pgDumpPath, filename, fullPath string, args []string,
+) (os.FileInfo, time.Duration, error) {
+	//nolint:gosec // G204: pgDumpPath is resolved from config/PATH, not user HTTP input
+	cmd := exec.CommandContext(ctx, pgDumpPath, args...)
 	cmd.Env = append(os.Environ(), "PGPASSWORD="+s.config.Database.Password)
 
 	start := time.Now()
@@ -262,7 +268,8 @@ func (s *BackupService) executePgDump(ctx context.Context, pgDumpPath, filename,
 
 // Public methods.
 
-// Start initiates a database backup in the background. Returns an error if validation fails or a backup is already running.
+// Start initiates a database backup in the background. Returns an error if
+// validation fails or a backup is already running.
 func (s *BackupService) Start(req BackupRequest) error {
 	if err := s.checkEnabled(); err != nil {
 		return err

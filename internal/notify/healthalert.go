@@ -62,7 +62,9 @@ func formatHealthAlert(r *HealthAlertResult) (subject, body string) {
 	var b strings.Builder
 	b.WriteString("Database health check meldt problemen\n\n")
 	fmt.Fprintf(&b, "Tijdstip:     %s\n", r.CheckedAt.Format(timeFormat))
-	fmt.Fprintf(&b, "Connecties:   %d / %d (%.0f%%)\n\n", r.ActiveConnections, r.MaxConnections, r.ConnectionUsagePct) //nolint:misspell // Dutch word
+	//nolint:misspell // Dutch word
+	fmt.Fprintf(&b, "Connecties:   %d / %d (%.0f%%)\n\n",
+		r.ActiveConnections, r.MaxConnections, r.ConnectionUsagePct)
 
 	if len(r.LongRunningQueries) > 0 {
 		fmt.Fprintf(&b, "Langlopende queries: %d\n", len(r.LongRunningQueries))
@@ -92,7 +94,9 @@ func formatHealthRecovery(r *HealthAlertResult) (subject, body string) {
 	b.WriteString("Database health check hersteld\n\n")
 	b.WriteString("Alle eerder gemelde problemen zijn opgelost.\n\n")
 	fmt.Fprintf(&b, "Tijdstip:     %s\n", r.CheckedAt.Format(timeFormat))
-	fmt.Fprintf(&b, "Connecties:   %d / %d (%.0f%%)\n", r.ActiveConnections, r.MaxConnections, r.ConnectionUsagePct) //nolint:misspell // Dutch word
+	//nolint:misspell // Dutch word
+	fmt.Fprintf(&b, "Connecties:   %d / %d (%.0f%%)\n",
+		r.ActiveConnections, r.MaxConnections, r.ConnectionUsagePct)
 
 	return subject, b.String()
 }

@@ -177,7 +177,9 @@ func (s *NotificationService) SendTestEmail(ctx context.Context) error {
 	}
 
 	subject := "[TEST] Aeron Toolbox - E-mailnotificatie test"
-	body := fmt.Sprintf("Dit is een test-e-mail van Aeron Toolbox.\n\nTijdstip: %s\n\nAls u deze e-mail ontvangt, zijn de notificatie-instellingen correct geconfigureerd.",
+	body := fmt.Sprintf(
+		"Dit is een test-e-mail van Aeron Toolbox.\n\nTijdstip: %s\n\n"+
+			"Als u deze e-mail ontvangt, zijn de notificatie-instellingen correct geconfigureerd.",
 		time.Now().Format(timeFormat))
 
 	return client.SendMail(ctx, s.recipients, subject, body)
