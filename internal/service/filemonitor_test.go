@@ -1,7 +1,6 @@
 package service
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -454,7 +453,7 @@ func TestSingleFlight_RepeatedRunsCallStatAtMostOnce(t *testing.T) {
 		config.FileMonitorCheckConfig{Name: "News", Path: path, MaxAgeMinutes: 10, StatTimeoutSec: 1},
 	)
 
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		svc.run()
 	}
 
@@ -791,7 +790,7 @@ func TestScheduler_RunFileMonitor_TriggersCheck(t *testing.T) {
 
 	sch := &Scheduler{service: &AeronService{FileMonitor: fmSvc}}
 
-	sch.runFileMonitor(context.Background())
+	sch.runFileMonitor(t.Context())
 	waitForCompleted(t, fmSvc, 1)
 
 	st := fmSvc.Status()
@@ -821,7 +820,7 @@ func TestScheduler_RunFileMonitor_SkipsWhenAlreadyActive(t *testing.T) {
 
 	// Cron tick fires while the manual run hangs. Must not error or panic,
 	// and must not advance the run counter.
-	sch.runFileMonitor(context.Background())
+	sch.runFileMonitor(t.Context())
 
 	if got := fmSvc.Status().RunID; got != manualID {
 		t.Errorf("scheduler started a second run: RunID went %d → %d", manualID, got)
@@ -850,7 +849,7 @@ func TestTriggerCheck_NoConflictAfterStatusReportsIdle(t *testing.T) {
 	// 200 back-to-back triggers; if Status().Running could ever lead the
 	// runner gate, one of these waitForCompleted → TriggerCheck pairs would
 	// hit a 409. Reproducer at -count=50 originally failed ~5/50.
-	for i := 0; i < 200; i++ {
+	for i := range 200 {
 		runID, err := svc.TriggerCheck()
 		if err != nil {
 			t.Fatalf("TriggerCheck #%d (after %d successful back-to-backs): %v", i, i, err)
@@ -899,7 +898,7 @@ func TestStatus_NoTornSnapshotUnderConcurrentReads(t *testing.T) {
 
 	// Pre-run twice so the tag map has entries before the readers start —
 	// otherwise early reads find no tag and skip the assertion.
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		runID, err := svc.TriggerCheck()
 		if err != nil {
 			t.Fatalf("warmup TriggerCheck: %v", err)
@@ -912,7 +911,7 @@ func TestStatus_NoTornSnapshotUnderConcurrentReads(t *testing.T) {
 	var torn atomic.Int64
 	var mismatchSample atomic.Pointer[string]
 	var readers sync.WaitGroup
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		readers.Go(func() {
 			for {
 				select {
@@ -944,7 +943,7 @@ func TestStatus_NoTornSnapshotUnderConcurrentReads(t *testing.T) {
 	// Drive many runs concurrently with the readers. Each run's tag is
 	// recorded synchronously after waitForCompleted so the readers always
 	// see a consistent (runID → published LastCheckAt) ground truth.
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		runID, err := svc.TriggerCheck()
 		if err != nil {
 			t.Fatalf("TriggerCheck #%d: %v", i, err)
