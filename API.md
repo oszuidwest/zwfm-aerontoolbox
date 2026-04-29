@@ -79,8 +79,10 @@ Wanneer authenticatie is ingeschakeld in de configuratie, vereisen alle endpoint
 
 ## Algemene response-headers
 
-Alle API-responses bevatten:
-- `Content-Type: application/json; charset=utf-8` (uitgezonderd afbeeldingsendpoints)
+JSON-responses bevatten:
+- `Content-Type: application/json; charset=utf-8`
+
+Succesvolle binaire responses, zoals afbeeldingsdownloads en backupdownloads, gebruiken het passende bestandstype in plaats van JSON. Foutresponses voor deze endpoints zijn wel JSON.
 
 ## Response-formaat
 
@@ -101,7 +103,7 @@ Of bij fouten:
 ```
 
 > [!NOTE]
-> In de JSON-voorbeelden hieronder wordt voor de leesbaarheid alleen de inhoud van het `data`-veld getoond, en bij foutresponses alleen het `error`-veld. JSON-responses gebruiken in werkelijkheid de complete wrapper (inclusief `"success"`).
+> In de JSON-voorbeelden hieronder wordt voor de leesbaarheid alleen de inhoud van het `data`-veld getoond, en bij foutresponses alleen het `error`-veld. JSON-responses gebruiken in werkelijkheid de complete wrapper (inclusief `"success"`). Succesvolle binaire responses gebruiken geen JSON-wrapper.
 
 ## Foutmeldingen
 
