@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -266,10 +265,6 @@ func TestMissingFile_FileExistsFalse(t *testing.T) {
 }
 
 func TestPermissionDenied_FileExistsNull(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("permission-based test not reliable on Windows")
-	}
-
 	dir := t.TempDir()
 	path := filepath.Join(dir, "restricted.mp3")
 	if err := os.WriteFile(path, []byte("data"), 0o600); err != nil {

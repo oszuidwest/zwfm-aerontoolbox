@@ -43,7 +43,7 @@ docker run -d -p 8080:8080 \
 
 ### Binary
 
-Download een kant-en-klare binary voor jouw platform via de [releases-pagina](https://github.com/oszuidwest/zwfm-aerontoolbox/releases).
+Download een kant-en-klare Linux- of macOS-binary via de [releases-pagina](https://github.com/oszuidwest/zwfm-aerontoolbox/releases).
 
 ### Vanaf broncode
 
