@@ -45,12 +45,27 @@ func TestConvertTableRow(t *testing.T) {
 	})
 
 	t.Run("MixedTuples", func(t *testing.T) {
-		// live=900, dead=100, total=1000 → pct = 100/1000*100 = 10.0
+		// live=900, dead=100, total=1000 → pct = 100/1000*100 = 10.0.
+		// NeedsVacuum must be false: the code uses >, not >=, so exactly at the
+		// default threshold (10.0) is not a trigger.
 		row := &tableHealthRow{TableName: "t", LiveTuples: 900, DeadTuples: 100}
 		got := convertTableRow(row, defaultCfg)
 		const wantPct = 10.0
 		if got.DeadTuplePct != wantPct {
 			t.Errorf("DeadTuplePct = %.2f, want %.2f", got.DeadTuplePct, wantPct)
+		}
+		if got.NeedsVacuum {
+			t.Errorf("NeedsVacuum = true, want false (%.1f%% is not > threshold=10.0%%)", got.DeadTuplePct)
+		}
+	})
+
+	t.Run("NeedsVacuumByCustomThreshold", func(t *testing.T) {
+		// BloatThreshold=5.0: pct=10.0 > 5.0 → NeedsVacuum=true, proving cfg is used.
+		customCfg := &config.MaintenanceConfig{BloatThreshold: 5.0}
+		row := &tableHealthRow{TableName: "t", LiveTuples: 900, DeadTuples: 100}
+		got := convertTableRow(row, customCfg)
+		if !got.NeedsVacuum {
+			t.Errorf("NeedsVacuum = false, want true (pct=%.1f%% > custom threshold=5.0%%)", got.DeadTuplePct)
 		}
 	})
 

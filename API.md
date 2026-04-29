@@ -647,7 +647,7 @@ Bekijk gedetailleerde databasestatistieken inclusief tabelgroottes, bloat-percen
   "long_running_queries": [],
   "needs_maintenance": true,
   "recommendations": [
-    "Table 'playlistitem' has high dead tuple ratio (15.2%) - VACUUM recommended",
+    "Table 'playlistitem' has 15.2% dead tuples - VACUUM recommended",
     "Table 'artist' has 12500 dead tuples - VACUUM recommended"
   ],
   "checked_at": "2025-12-22T14:30:00Z"
@@ -1217,9 +1217,7 @@ Als de bestandscontrole is ingeschakeld, geeft de health-endpoint (`GET /api/hea
 ```
 
 - `checks_stale`: ruwe telling van bestanden die te oud zijn of niet bereikbaar zijn, inclusief bestanden buiten hun `active_window`.
-- `checks_alerting`: window-aware telling; bestanden buiten hun `active_window` tellen hier niet mee. Wanneer de database verbonden is, draagt dit veld bij aan de algemene status `"degraded"` zodra de waarde groter dan `0` is; `"unhealthy"` heeft altijd prioriteit.
-
-Wanneer de database verbonden is, wordt de algemene status `"degraded"` zodra `checks_alerting > 0`. Een bestand dat 's nachts verouderd raakt maar alleen overdag wordt ververst, zet `/api/health` dus niet op `degraded` zolang het buiten zijn venster valt.
+- `checks_alerting`: window-aware telling; bestanden buiten hun `active_window` tellen hier niet mee. Wanneer de database verbonden is en `checks_alerting > 0`, wordt de algemene status `"degraded"` (`"unhealthy"` heeft altijd prioriteit). Een bestand dat 's nachts verouderd raakt maar alleen overdag wordt ververst, telt hier dus niet mee.
 
 ---
 

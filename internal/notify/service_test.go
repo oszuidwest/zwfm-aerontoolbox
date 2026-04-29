@@ -22,7 +22,7 @@ func TestSendAsync_DroppedOnClose(t *testing.T) {
 	if lastErrAt == nil {
 		t.Error("LastErrorAt is nil, want non-nil")
 	}
-	const wantErr = "notification dropped: service is closed"
+	const wantErr = "notificatie niet verzonden: service is gesloten"
 	if lastErr != wantErr {
 		t.Errorf("LastError = %q, want %q", lastErr, wantErr)
 	}

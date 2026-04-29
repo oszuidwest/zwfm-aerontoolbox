@@ -2,6 +2,7 @@ package notify
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -215,7 +216,8 @@ func (s *NotificationService) getOrCreateClient() (*GraphClient, error) {
 }
 
 // sendAsync sends an email asynchronously via the runner.
-// Logs a warning and records a trackError if the runner has already been closed.
+// If the runner is closed the message is dropped, a warning is logged, and the
+// drop is recorded so the health endpoint reflects it via LastError.
 // TryGoBackground is used because sendAsync is called from scheduler jobs and
 // HTTP handlers, not from within an active primary run.
 func (s *NotificationService) sendAsync(subject, body string) {
@@ -223,7 +225,7 @@ func (s *NotificationService) sendAsync(subject, body string) {
 		s.send(subject, body)
 	}) {
 		slog.Warn("Notification email not sent: service is closed", "subject", subject)
-		s.trackError(fmt.Errorf("notification dropped: service is closed"))
+		s.trackError(errors.New("notificatie niet verzonden: service is gesloten"))
 	}
 }
 

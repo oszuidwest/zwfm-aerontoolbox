@@ -112,6 +112,7 @@ func (s *MaintenanceService) GetHealth(ctx context.Context) (*DatabaseHealth, er
 	var version string
 	if err := s.repo.DB().GetContext(ctx, &version, "SELECT version()"); err != nil {
 		slog.Warn("Maintenance: could not retrieve database version", "error", err)
+		health.DatabaseVersion = "unavailable"
 	} else {
 		health.DatabaseVersion = version
 	}
