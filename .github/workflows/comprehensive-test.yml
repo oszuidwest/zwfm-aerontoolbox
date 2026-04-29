@@ -33,6 +33,7 @@ env:
   ARTIST_ID: "9e37ff1f-7823-43ce-93d0-12fc1c2edb8b"
   BLOF_ID: "add55a6e-2068-4114-b82a-e0729881f0be"
   FAKE_UUID: "00000000-0000-4000-8000-000000000001"
+  TEST_IMAGE_URL: "https://placehold.co/1500x1500/png"
 
 jobs:
   build:
@@ -520,7 +521,7 @@ jobs:
           RESPONSE=$(curl -s -X POST -H "X-API-Key: ${{ env.API_KEY }}" \
             "http://localhost:${{ env.API_PORT }}/api/artists/${{ env.ARTIST_ID }}/image" \
             -H 'Content-Type: application/json' \
-            -d '{"url":"https://picsum.photos/1500"}' -m 15)
+            -d "{\"url\":\"${{ env.TEST_IMAGE_URL }}\"}" -m 30)
           SUCCESS=$(echo "$RESPONSE" | jq -r '.success')
           if [ "$SUCCESS" = "true" ]; then
             echo "Afbeelding succesvol geupload via URL"
@@ -1595,7 +1596,7 @@ jobs:
           RESPONSE=$(curl -s -X POST -H "X-API-Key: ${{ env.API_KEY }}" \
             "http://localhost:${{ env.API_PORT }}/api/artists/${{ env.FAKE_UUID }}/image" \
             -H 'Content-Type: application/json' \
-            -d '{"url":"https://picsum.photos/500"}')
+            -d "{\"url\":\"${{ env.TEST_IMAGE_URL }}\"}")
           SUCCESS=$(echo "$RESPONSE" | jq -r '.success')
           if [ "$SUCCESS" = "false" ]; then
             echo "Correct: upload naar niet-bestaande artiest wordt geweigerd"
@@ -1611,7 +1612,7 @@ jobs:
           HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST -H "X-API-Key: ${{ env.API_KEY }}" \
             "http://localhost:${{ env.API_PORT }}/api/artists/not-a-uuid/image" \
             -H 'Content-Type: application/json' \
-            -d '{"url":"https://picsum.photos/500"}')
+            -d "{\"url\":\"${{ env.TEST_IMAGE_URL }}\"}")
           echo "HTTP status: $HTTP_CODE (verwacht: 400)"
           if [ "$HTTP_CODE" = "400" ]; then
             echo "Correct: ongeldige UUID geeft 400 Bad Request"
@@ -1671,17 +1672,17 @@ jobs:
           curl -s -X POST -H "X-API-Key: ${{ env.API_KEY }}" \
             "http://localhost:${{ env.API_PORT }}/api/artists/${{ env.ARTIST_ID }}/image" \
             -H 'Content-Type: application/json' \
-            -d '{"url":"https://picsum.photos/1500"}' > /tmp/r1.json &
+            -d "{\"url\":\"${{ env.TEST_IMAGE_URL }}\"}" -m 30 > /tmp/r1.json &
 
           curl -s -X POST -H "X-API-Key: ${{ env.API_KEY }}" \
             "http://localhost:${{ env.API_PORT }}/api/artists/${ARTIST_ID2}/image" \
             -H 'Content-Type: application/json' \
-            -d '{"url":"https://picsum.photos/1500"}' > /tmp/r2.json &
+            -d "{\"url\":\"${{ env.TEST_IMAGE_URL }}\"}" -m 30 > /tmp/r2.json &
 
           curl -s -X POST -H "X-API-Key: ${{ env.API_KEY }}" \
             "http://localhost:${{ env.API_PORT }}/api/tracks/${TRACK_ID}/image" \
             -H 'Content-Type: application/json' \
-            -d '{"url":"https://picsum.photos/1500"}' > /tmp/r3.json &
+            -d "{\"url\":\"${{ env.TEST_IMAGE_URL }}\"}" -m 30 > /tmp/r3.json &
 
           wait
           echo "Upload 1: $(cat /tmp/r1.json | jq -r '.success')"

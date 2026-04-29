@@ -370,7 +370,7 @@ func (s *FileMonitorService) Close() {
 
 // TriggerCheck starts a file monitor run in the background. It is the single
 // entry point for both manual API triggers and scheduled cron ticks so the two
-// can never run concurrently. Returns the monotone run_id of the run just
+// can never run concurrently. Returns the monotonic run_id of the run just
 // started, or a ConflictError if a run is already in progress.
 func (s *FileMonitorService) TriggerCheck() (uint64, error) {
 	if !s.runner.TryStart() {

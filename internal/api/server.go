@@ -30,6 +30,19 @@ func New(svc *service.AeronService, version string) *Server {
 
 // Start initializes and starts the HTTP server on the specified port.
 func (s *Server) Start(port string) error {
+	router := s.router()
+
+	s.server = &http.Server{
+		Addr:              ":" + port,
+		Handler:           router,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+
+	return s.server.ListenAndServe()
+}
+
+// router builds the HTTP handler tree.
+func (s *Server) router() http.Handler {
 	router := chi.NewRouter()
 
 	cop := http.NewCrossOriginProtection()
@@ -84,20 +97,18 @@ func (s *Server) Start(port string) error {
 				})
 			})
 
-			r.Get("/file-monitor/status", s.handleFileMonitorStatus)
-			r.Post("/file-monitor/check", s.handleFileMonitorCheck)
+			// File monitor endpoints (guarded: 404 when file monitor is disabled)
+			r.Group(func(r chi.Router) {
+				r.Use(s.requireFileMonitorEnabled)
+				r.Get("/file-monitor/status", s.handleFileMonitorStatus)
+				r.Post("/file-monitor/check", s.handleFileMonitorCheck)
+			})
 
 			r.Post("/notifications/test-email", s.handleTestEmail)
 		})
 	})
 
-	s.server = &http.Server{
-		Addr:              ":" + port,
-		Handler:           router,
-		ReadHeaderTimeout: 10 * time.Second,
-	}
-
-	return s.server.ListenAndServe()
+	return router
 }
 
 // Shutdown gracefully shuts down the server.
@@ -153,6 +164,16 @@ func (s *Server) requireBackupEnabled(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !s.service.Config().Backup.Enabled {
 			respondError(w, http.StatusNotFound, "backup is not enabled")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) requireFileMonitorEnabled(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.service.Config().FileMonitor.Enabled {
+			respondError(w, http.StatusNotFound, "file monitor is not enabled")
 			return
 		}
 		next.ServeHTTP(w, r)
