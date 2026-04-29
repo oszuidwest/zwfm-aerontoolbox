@@ -831,7 +831,7 @@ De backup wordt asynchroon uitgevoerd. Controleer `GET /api/db/backup/status` vo
 }
 ```
 
-`500 Internal Server Error` - Backup al bezig:
+`409 Conflict` - Backup al bezig:
 ```json
 {
   "error": "backup already in progress"
@@ -886,7 +886,7 @@ Toont de status van de laatste backupbewerking.
   "started_at": "2024-01-15T03:00:00Z",
   "ended_at": "2024-01-15T03:00:05Z",
   "success": false,
-  "error": "backup timeout na 30m0s (configureer backup.timeout_minutes)",
+  "error": "create backup failed: backup timeout after 30m0s (configure backup.timeout_minutes)",
   "filename": "aeron-backup-2024-01-15-030000.dump"
 }
 ```
@@ -964,7 +964,7 @@ Een specifiek backupbestand downloaden.
 **Foutresponse:** `404 Not Found`
 ```json
 {
-  "error": "backupbestand niet gevonden"
+  "error": "backup with ID 'aeron-backup-2025-12-22-143000.dump' not found"
 }
 ```
 
@@ -992,7 +992,7 @@ Een specifiek backupbestand verwijderen.
 **Foutresponse:** `400 Bad Request`
 ```json
 {
-  "error": "confirmation header missing: X-Confirm-Delete must contain the filename"
+  "error": "Confirmation header missing: X-Confirm-Delete must contain the filename"
 }
 ```
 
@@ -1019,14 +1019,14 @@ De integriteit van een bestaand backupbestand valideren. Handig voor het control
 {
   "filename": "aeron-backup-2025-12-22-143000.dump",
   "valid": false,
-  "error": "backup validatie: bestand is corrupt of onleesbaar: pg_restore: error: ..."
+  "error": "backup validation failed: file is corrupt or unreadable: pg_restore: error: ..."
 }
 ```
 
 **Foutresponse:** `404 Not Found`
 ```json
 {
-  "error": "backupbestand niet gevonden"
+  "error": "backup with ID 'aeron-backup-2025-12-22-143000.dump' not found"
 }
 ```
 
@@ -1579,4 +1579,4 @@ CREATE TABLE {schema}.playlistblock (
 - UUID's zijn hoofdletterongevoelig
 - Het contenttype van afbeeldingen wordt automatisch gedetecteerd
 - De API maakt gebruik van connection pooling voor optimale databaseprestaties
-- API-foutmeldingen worden in het Engels geretourneerd; e-mailnotificaties zijn Nederlandstalig
+- Runtime user-facing messages, including API responses and email notifications, are in English.

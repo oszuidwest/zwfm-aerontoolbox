@@ -34,13 +34,13 @@ func (s *NotificationService) NotifyHealthCheckError(err error) {
 	s.prevHealthAlertActive = true
 	s.stateMu.Unlock()
 
-	subject := "[FOUT] Database health check mislukt - Aeron Toolbox"
+	subject := "[ERROR] Database health check failed - Aeron Toolbox"
 
 	var b strings.Builder
-	b.WriteString("Database health check mislukt\n\n")
-	b.WriteString("De health check kon niet worden uitgevoerd. Controleer de databaseverbinding.\n\n")
-	fmt.Fprintf(&b, "Tijdstip:  %s\n", time.Now().Format(timeFormat))
-	fmt.Fprintf(&b, "Fout:      %s\n", err.Error())
+	b.WriteString("Database health check failed\n\n")
+	b.WriteString("The health check could not be completed. Check the database connection.\n\n")
+	fmt.Fprintf(&b, "Timestamp: %s\n", time.Now().Format(timeFormat))
+	fmt.Fprintf(&b, "Error:     %s\n", err.Error())
 
 	s.sendAsync(subject, b.String())
 }
@@ -57,17 +57,16 @@ func (s *NotificationService) NotifyHealthAlert(r *HealthAlertResult) {
 }
 
 func formatHealthAlert(r *HealthAlertResult) (subject, body string) {
-	subject = "[FOUT] Database health check - Aeron Toolbox"
+	subject = "[ERROR] Database health check - Aeron Toolbox"
 
 	var b strings.Builder
-	b.WriteString("Database health check meldt problemen\n\n")
-	fmt.Fprintf(&b, "Tijdstip:     %s\n", r.CheckedAt.Format(timeFormat))
-	//nolint:misspell // Dutch word
-	fmt.Fprintf(&b, "Connecties:   %d / %d (%.0f%%)\n\n",
+	b.WriteString("Database health check reports problems\n\n")
+	fmt.Fprintf(&b, "Timestamp:    %s\n", r.CheckedAt.Format(timeFormat))
+	fmt.Fprintf(&b, "Connections:  %d / %d (%.0f%%)\n\n",
 		r.ActiveConnections, r.MaxConnections, r.ConnectionUsagePct)
 
 	if len(r.LongRunningQueries) > 0 {
-		fmt.Fprintf(&b, "Langlopende queries: %d\n", len(r.LongRunningQueries))
+		fmt.Fprintf(&b, "Long-running queries: %d\n", len(r.LongRunningQueries))
 		for _, q := range r.LongRunningQueries {
 			fmt.Fprintf(&b, "  PID %-6d  %s  %s\n", q.PID, q.Duration, q.State)
 			if q.Query != "" {
@@ -78,7 +77,7 @@ func formatHealthAlert(r *HealthAlertResult) (subject, body string) {
 	}
 
 	if len(r.Recommendations) > 0 {
-		fmt.Fprintf(&b, "Aanbevelingen: %d\n", len(r.Recommendations))
+		fmt.Fprintf(&b, "Recommendations: %d\n", len(r.Recommendations))
 		for _, rec := range r.Recommendations {
 			fmt.Fprintf(&b, "  - %s\n", rec)
 		}
@@ -88,14 +87,13 @@ func formatHealthAlert(r *HealthAlertResult) (subject, body string) {
 }
 
 func formatHealthRecovery(r *HealthAlertResult) (subject, body string) {
-	subject = "[OK] Database health check hersteld - Aeron Toolbox"
+	subject = "[OK] Database health check recovered - Aeron Toolbox"
 
 	var b strings.Builder
-	b.WriteString("Database health check hersteld\n\n")
-	b.WriteString("Alle eerder gemelde problemen zijn opgelost.\n\n")
-	fmt.Fprintf(&b, "Tijdstip:     %s\n", r.CheckedAt.Format(timeFormat))
-	//nolint:misspell // Dutch word
-	fmt.Fprintf(&b, "Connecties:   %d / %d (%.0f%%)\n",
+	b.WriteString("Database health check recovered\n\n")
+	b.WriteString("All previously reported problems have been resolved.\n\n")
+	fmt.Fprintf(&b, "Timestamp:    %s\n", r.CheckedAt.Format(timeFormat))
+	fmt.Fprintf(&b, "Connections:  %d / %d (%.0f%%)\n",
 		r.ActiveConnections, r.MaxConnections, r.ConnectionUsagePct)
 
 	return subject, b.String()

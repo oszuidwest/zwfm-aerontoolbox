@@ -243,7 +243,7 @@ func (s *FileMonitorService) processAlertStates(
 		// Outside an active window the result still reflects raw staleness
 		// (transparent in /status) but does not flip alert state, send mail,
 		// or trigger a recovery. Suppressing recovery is essential — without
-		// it a midnight refresh would mail "[OK] hersteld" for an alert the
+		// it a midnight refresh would mail "[OK] recovered" for an alert the
 		// operator never received.
 		if !s.windows[check.Path].Active(now) {
 			results[i].InAlert = false

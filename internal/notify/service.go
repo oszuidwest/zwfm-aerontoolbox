@@ -177,10 +177,10 @@ func (s *NotificationService) SendTestEmail(ctx context.Context) error {
 		return fmt.Errorf("client init: %w", err)
 	}
 
-	subject := "[TEST] Aeron Toolbox - E-mailnotificatie test"
+	subject := "[TEST] Aeron Toolbox - Email notification test"
 	body := fmt.Sprintf(
-		"Dit is een test-e-mail van Aeron Toolbox.\n\nTijdstip: %s\n\n"+
-			"Als u deze e-mail ontvangt, zijn de notificatie-instellingen correct geconfigureerd.",
+		"This is a test email from Aeron Toolbox.\n\nTimestamp: %s\n\n"+
+			"If you received this email, notification settings are configured correctly.",
 		time.Now().Format(timeFormat))
 
 	return client.SendMail(ctx, s.recipients, subject, body)
@@ -265,70 +265,70 @@ func (s *NotificationService) trackError(err error) {
 // Email formatting.
 
 func (s *NotificationService) formatBackupFailure(r *BackupResult) (subject, body string) {
-	subject = "[FOUT] Backup mislukt - Aeron Toolbox"
+	subject = "[ERROR] Backup failed - Aeron Toolbox"
 
 	var b strings.Builder
-	b.WriteString("Backup mislukt\n\n")
+	b.WriteString("Backup failed\n\n")
 	if r.StartedAt != nil {
-		fmt.Fprintf(&b, "Tijdstip:       %s\n", r.StartedAt.Format(timeFormat))
+		fmt.Fprintf(&b, "Timestamp:      %s\n", r.StartedAt.Format(timeFormat))
 	}
 	if r.StartedAt != nil && r.EndedAt != nil {
-		fmt.Fprintf(&b, "Duur:           %s\n", r.EndedAt.Sub(*r.StartedAt).Round(time.Second))
+		fmt.Fprintf(&b, "Duration:       %s\n", r.EndedAt.Sub(*r.StartedAt).Round(time.Second))
 	}
 	if r.Filename != "" {
-		fmt.Fprintf(&b, "Bestandsnaam:   %s\n", r.Filename)
+		fmt.Fprintf(&b, "Filename:       %s\n", r.Filename)
 	}
 	if r.Error != "" {
-		fmt.Fprintf(&b, "Fout:           %s\n", r.Error)
+		fmt.Fprintf(&b, "Error:          %s\n", r.Error)
 	}
 
 	return subject, b.String()
 }
 
 func (s *NotificationService) formatBackupRecovery(r *BackupResult) (subject, body string) {
-	subject = "[OK] Backup hersteld - Aeron Toolbox"
+	subject = "[OK] Backup recovered - Aeron Toolbox"
 
 	var b strings.Builder
-	b.WriteString("Backup hersteld\n\n")
-	b.WriteString("De backup is weer succesvol na een eerdere fout.\n\n")
+	b.WriteString("Backup recovered\n\n")
+	b.WriteString("Backup succeeded again after a previous failure.\n\n")
 	if r.StartedAt != nil {
-		fmt.Fprintf(&b, "Tijdstip:       %s\n", r.StartedAt.Format(timeFormat))
+		fmt.Fprintf(&b, "Timestamp:      %s\n", r.StartedAt.Format(timeFormat))
 	}
 	if r.StartedAt != nil && r.EndedAt != nil {
-		fmt.Fprintf(&b, "Duur:           %s\n", r.EndedAt.Sub(*r.StartedAt).Round(time.Second))
+		fmt.Fprintf(&b, "Duration:       %s\n", r.EndedAt.Sub(*r.StartedAt).Round(time.Second))
 	}
 	if r.Filename != "" {
-		fmt.Fprintf(&b, "Bestandsnaam:   %s\n", r.Filename)
+		fmt.Fprintf(&b, "Filename:       %s\n", r.Filename)
 	}
 
 	return subject, b.String()
 }
 
 func (s *NotificationService) formatS3Failure(filename string, r *S3SyncResult) (subject, body string) {
-	subject = "[FOUT] S3-synchronisatie mislukt - Aeron Toolbox"
+	subject = "[ERROR] S3 synchronization failed - Aeron Toolbox"
 
 	var b strings.Builder
-	b.WriteString("S3-synchronisatie mislukt\n\n")
-	fmt.Fprintf(&b, "Tijdstip:       %s\n", time.Now().Format(timeFormat))
+	b.WriteString("S3 synchronization failed\n\n")
+	fmt.Fprintf(&b, "Timestamp:      %s\n", time.Now().Format(timeFormat))
 	if filename != "" {
-		fmt.Fprintf(&b, "Bestandsnaam:   %s\n", filename)
+		fmt.Fprintf(&b, "Filename:       %s\n", filename)
 	}
 	if r.Error != "" {
-		fmt.Fprintf(&b, "Fout:           %s\n", r.Error)
+		fmt.Fprintf(&b, "Error:          %s\n", r.Error)
 	}
 
 	return subject, b.String()
 }
 
 func (s *NotificationService) formatS3Recovery(filename string) (subject, body string) {
-	subject = "[OK] S3-synchronisatie hersteld - Aeron Toolbox"
+	subject = "[OK] S3 synchronization recovered - Aeron Toolbox"
 
 	var b strings.Builder
-	b.WriteString("S3-synchronisatie hersteld\n\n")
-	b.WriteString("De S3-synchronisatie is weer succesvol na een eerdere fout.\n\n")
-	fmt.Fprintf(&b, "Tijdstip:       %s\n", time.Now().Format(timeFormat))
+	b.WriteString("S3 synchronization recovered\n\n")
+	b.WriteString("S3 synchronization succeeded again after a previous failure.\n\n")
+	fmt.Fprintf(&b, "Timestamp:      %s\n", time.Now().Format(timeFormat))
 	if filename != "" {
-		fmt.Fprintf(&b, "Bestandsnaam:   %s\n", filename)
+		fmt.Fprintf(&b, "Filename:       %s\n", filename)
 	}
 
 	return subject, b.String()
