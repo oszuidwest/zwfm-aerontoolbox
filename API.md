@@ -173,8 +173,16 @@ Het `file_monitor`-veld is alleen aanwezig wanneer de bestandscontrole is ingesc
 - `checks_stale`: Ruwe telling van bestanden die te oud zijn of niet bereikbaar zijn (inclusief buiten `active_window`)
 - `checks_alerting`: Window-aware telling; bestanden buiten hun `active_window` tellen hier niet mee
 
-Wanneer `expires_soon` `true` is, wordt de overall status `"degraded"`.
-Wanneer `checks_alerting` groter dan `0` is, wordt de overall status eveneens `"degraded"`.
+De `status`-waarden hebben een vaste prioriteitsvolgorde: `"unhealthy"` > `"degraded"` > `"healthy"`.
+
+| Conditie | Status |
+|---|---|
+| `database_status` is `"disconnected"` | `"unhealthy"` (hoogste prioriteit) |
+| `expires_soon` is `true` | `"degraded"` |
+| `checks_alerting` groter dan `0` | `"degraded"` |
+| Geen van bovenstaande | `"healthy"` |
+
+Een database-uitval overschrijft altijd een eventuele `"degraded"`-signaal van notificaties of de bestandscontrole.
 
 ---
 
@@ -616,7 +624,7 @@ Bekijk gedetailleerde databasestatistieken inclusief tabelgroottes, bloat-percen
       "name": "track",
       "row_count": 125000,
       "dead_tuples": 4500,
-      "dead_tuple_ratio": 3.6,
+      "dead_tuple_pct": 3.6,
       "modifications_since_analyze": 1250,
       "total_size": "1.2 GB",
       "total_size_bytes": 1288490188,
@@ -645,6 +653,8 @@ Bekijk gedetailleerde databasestatistieken inclusief tabelgroottes, bloat-percen
   "checked_at": "2025-12-22T14:30:00Z"
 }
 ```
+
+> **Breaking change:** het veld `dead_tuple_ratio` in de tabelresponse is hernoemd naar `dead_tuple_pct`. De waarde was altijd al een percentage (0–100), niet een ratio (0–1); de naam is gecorrigeerd om verwarring te voorkomen. Externe afnemers moeten de nieuwe veldnaam gebruiken.
 
 ### Automatische health check
 
@@ -1207,9 +1217,9 @@ Als de bestandscontrole is ingeschakeld, geeft de health-endpoint (`GET /api/hea
 ```
 
 - `checks_stale`: ruwe telling van bestanden die te oud zijn of niet bereikbaar zijn, inclusief bestanden buiten hun `active_window`.
-- `checks_alerting`: window-aware telling; bestanden buiten hun `active_window` tellen hier niet mee. Dit veld bepaalt de algemene status `"degraded"`.
+- `checks_alerting`: window-aware telling; bestanden buiten hun `active_window` tellen hier niet mee. Wanneer de database verbonden is, draagt dit veld bij aan de algemene status `"degraded"` zodra de waarde groter dan `0` is; `"unhealthy"` heeft altijd prioriteit.
 
-De algemene status wordt `"degraded"` zodra `checks_alerting > 0`. Een bestand dat 's nachts verouderd raakt maar alleen overdag wordt ververst, zet `/api/health` dus niet op `degraded` zolang het buiten zijn venster valt.
+Wanneer de database verbonden is, wordt de algemene status `"degraded"` zodra `checks_alerting > 0`. Een bestand dat 's nachts verouderd raakt maar alleen overdag wordt ververst, zet `/api/health` dus niet op `degraded` zolang het buiten zijn venster valt.
 
 ---
 

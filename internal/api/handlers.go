@@ -96,12 +96,12 @@ func (s *Server) validateAndGetEntityID(w http.ResponseWriter, r *http.Request, 
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	dbStatus := "connected"
+	dbConnected := true
 	if err := s.service.Repository().Ping(r.Context()); err != nil {
 		dbStatus = "disconnected"
+		dbConnected = false
 		slog.Warn("Database health check failed", "error", err)
 	}
-
-	overallStatus := "healthy"
 
 	resp := HealthResponse{
 		Version:        s.version,
@@ -109,11 +109,12 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		DatabaseStatus: dbStatus,
 	}
 
-	// Add notification health info
+	// Add notification health info.
 	emailCfg := &s.service.Config().Notifications.Email
 	configured := notify.IsConfigured(emailCfg)
 	nh := &NotificationHealth{Configured: configured}
 
+	var notifyExpiresSoon bool
 	if configured {
 		lastErr, lastErrAt := s.service.Notify.LastError()
 		nh.LastError = lastErr
@@ -121,30 +122,38 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 		if expiry := s.service.Notify.SecretExpiry(); expiry != nil {
 			nh.SecretExpiry = expiry
-			if expiry.ExpiresSoon {
-				overallStatus = "degraded"
-			}
+			notifyExpiresSoon = expiry.ExpiresSoon
 		}
 	}
 	resp.Notifications = nh
 
-	// Add file monitor health info
+	// Add file monitor health info.
+	var fmAlerting int
 	fmCfg := s.service.Config().FileMonitor
 	if fmCfg.Enabled {
-		fmh := &FileMonitorHealth{
+		fmAlerting = s.service.FileMonitor.AlertingCount()
+		resp.FileMonitor = &FileMonitorHealth{
 			Enabled:        true,
 			ChecksTotal:    len(fmCfg.Checks),
 			ChecksStale:    s.service.FileMonitor.StaleCount(),
-			ChecksAlerting: s.service.FileMonitor.AlertingCount(),
+			ChecksAlerting: fmAlerting,
 		}
-		if fmh.ChecksAlerting > 0 {
-			overallStatus = "degraded"
-		}
-		resp.FileMonitor = fmh
 	}
 
-	resp.Status = overallStatus
+	resp.Status = overallHealthStatus(dbConnected, notifyExpiresSoon, fmAlerting)
 	respondJSON(w, http.StatusOK, resp)
+}
+
+// overallHealthStatus returns the highest-severity status given component states.
+// Severity order: "unhealthy" > "degraded" > "healthy".
+func overallHealthStatus(dbConnected, notifyExpiresSoon bool, fmAlerting int) string {
+	if !dbConnected {
+		return "unhealthy"
+	}
+	if notifyExpiresSoon || fmAlerting > 0 {
+		return "degraded"
+	}
+	return "healthy"
 }
 
 func (s *Server) handleStats(entityType types.EntityType) http.HandlerFunc {

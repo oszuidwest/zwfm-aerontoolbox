@@ -215,7 +215,7 @@ func (s *NotificationService) getOrCreateClient() (*GraphClient, error) {
 }
 
 // sendAsync sends an email asynchronously via the runner.
-// Logs a warning and drops the message if the runner has already been closed.
+// Logs a warning and records a trackError if the runner has already been closed.
 // TryGoBackground is used because sendAsync is called from scheduler jobs and
 // HTTP handlers, not from within an active primary run.
 func (s *NotificationService) sendAsync(subject, body string) {
@@ -223,6 +223,7 @@ func (s *NotificationService) sendAsync(subject, body string) {
 		s.send(subject, body)
 	}) {
 		slog.Warn("Notification email not sent: service is closed", "subject", subject)
+		s.trackError(fmt.Errorf("notification dropped: service is closed"))
 	}
 }
 

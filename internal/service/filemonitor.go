@@ -216,9 +216,13 @@ func (s *FileMonitorService) executeRun() *FileMonitorStatus {
 }
 
 // processAlertStates evaluates check results against alert state under the
-// state lock. It handles the grace run (first run after restart, observe-only),
-// active-window suppression, and alert/recovery transitions. Returns new alerts
-// and recoveries for notification dispatch (which must happen outside the lock).
+// state lock. It handles the grace run (first run after restart, observe-only —
+// only graceRunDone is set; per-path alertState is not touched), active-window
+// alert suppression (IsStale is preserved transparently; only alert-state
+// transitions and notifications are suppressed), and alert/recovery transitions.
+// Note: mutates results[i].InAlert in-place via the shared slice backing array.
+// Returns new alerts and recoveries for notification dispatch (which must happen
+// outside the lock).
 func (s *FileMonitorService) processAlertStates(
 	checks []config.FileMonitorCheckConfig,
 	results []FileCheckResult,

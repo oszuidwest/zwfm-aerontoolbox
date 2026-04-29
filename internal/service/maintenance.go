@@ -60,7 +60,7 @@ type TableHealth struct {
 	Name            string     `json:"name"`
 	RowCount        int64      `json:"row_count"`
 	DeadTuples      int64      `json:"dead_tuples"`
-	DeadTupleRatio  float64    `json:"dead_tuple_ratio"`
+	DeadTuplePct    float64    `json:"dead_tuple_pct"`
 	ModSinceAnalyze int64      `json:"modifications_since_analyze"`
 	TotalSize       string     `json:"total_size"`
 	TotalSizeRaw    int64      `json:"total_size_bytes"`
@@ -110,7 +110,9 @@ func (s *MaintenanceService) GetHealth(ctx context.Context) (*DatabaseHealth, er
 	}
 
 	var version string
-	if err := s.repo.DB().GetContext(ctx, &version, "SELECT version()"); err == nil {
+	if err := s.repo.DB().GetContext(ctx, &version, "SELECT version()"); err != nil {
+		slog.Warn("Maintenance: could not retrieve database version", "error", err)
+	} else {
 		health.DatabaseVersion = version
 	}
 
@@ -286,7 +288,7 @@ func (s *MaintenanceService) getTableHealth(ctx context.Context) ([]TableHealth,
 }
 
 // convertTableRow maps a raw database statistics row to a TableHealth struct,
-// computing derived fields like dead-tuple ratio and maintenance flags.
+// computing derived fields like dead-tuple percentage (0–100) and maintenance flags.
 func convertTableRow(row *tableHealthRow, cfg *config.MaintenanceConfig) TableHealth {
 	table := TableHealth{
 		Name:            row.TableName,
@@ -309,11 +311,11 @@ func convertTableRow(row *tableHealthRow, cfg *config.MaintenanceConfig) TableHe
 		ToastSize:       util.FormatBytes(row.ToastSize),
 	}
 
-	if row.LiveTuples > 0 {
-		table.DeadTupleRatio = float64(row.DeadTuples) / float64(row.LiveTuples+row.DeadTuples) * 100
+	if total := row.LiveTuples + row.DeadTuples; total > 0 {
+		table.DeadTuplePct = float64(row.DeadTuples) / float64(total) * 100
 	}
 
-	table.NeedsVacuum = table.DeadTupleRatio > cfg.GetBloatThreshold() ||
+	table.NeedsVacuum = table.DeadTuplePct > cfg.GetBloatThreshold() ||
 		table.DeadTuples > cfg.GetDeadTupleThreshold()
 
 	neverAnalyzed := table.LastAnalyze == nil && table.LastAutoanalyze == nil && table.RowCount > 0
@@ -352,8 +354,8 @@ func (s *MaintenanceService) checkTableHealth(t *TableHealth, recs []string) []s
 	cfg := s.config.Maintenance
 	minRows := cfg.GetMinRowsForRecommendation()
 
-	if t.DeadTupleRatio > cfg.GetBloatThreshold() {
-		recs = append(recs, fmt.Sprintf("Table '%s' has %.1f%% dead tuples - VACUUM recommended", t.Name, t.DeadTupleRatio))
+	if t.DeadTuplePct > cfg.GetBloatThreshold() {
+		recs = append(recs, fmt.Sprintf("Table '%s' has %.1f%% dead tuples - VACUUM recommended", t.Name, t.DeadTuplePct))
 	}
 
 	if t.DeadTuples > cfg.GetDeadTupleThreshold() {
