@@ -1303,7 +1303,7 @@ Alle geüploade afbeeldingen worden automatisch:
 
 ### UUID-validatie
 - Alle artiest- en track-ID's moeten geldige UUID's zijn (versie 4-formaat)
-- Ongeldige UUID's resulteren in 400 Bad Request met Nederlandse foutmelding
+- Ongeldige UUID's resulteren in 400 Bad Request met Engelse foutmelding
 - Voorbeeld geldig UUID: `123e4567-e89b-12d3-a456-426614174000`
 
 ### Afbeeldingsopslag
@@ -1579,4 +1579,4 @@ CREATE TABLE {schema}.playlistblock (
 - UUID's zijn hoofdletterongevoelig
 - Het contenttype van afbeeldingen wordt automatisch gedetecteerd
 - De API maakt gebruik van connection pooling voor optimale databaseprestaties
-- Foutmeldingen worden in het Engels geretourneerd
+- API-foutmeldingen worden in het Engels geretourneerd; e-mailnotificaties zijn Nederlandstalig

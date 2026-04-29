@@ -225,7 +225,7 @@ func (s *NotificationService) sendAsync(subject, body string) {
 		s.send(subject, body)
 	}) {
 		slog.Warn("Notification email not sent: service is closed", "subject", subject)
-		s.trackError(errors.New("notificatie niet verzonden: service is gesloten"))
+		s.trackError(errors.New("notification dropped: service is closed"))
 	}
 }
 
@@ -279,7 +279,7 @@ func (s *NotificationService) formatBackupFailure(r *BackupResult) (subject, bod
 		fmt.Fprintf(&b, "Bestandsnaam:   %s\n", r.Filename)
 	}
 	if r.Error != "" {
-		fmt.Fprintf(&b, "Fout:           %s\n", r.Error)
+		fmt.Fprintf(&b, "Fout:           %s\n", formatEmailError(r.Error))
 	}
 
 	return subject, b.String()
@@ -314,7 +314,7 @@ func (s *NotificationService) formatS3Failure(filename string, r *S3SyncResult) 
 		fmt.Fprintf(&b, "Bestandsnaam:   %s\n", filename)
 	}
 	if r.Error != "" {
-		fmt.Fprintf(&b, "Fout:           %s\n", r.Error)
+		fmt.Fprintf(&b, "Fout:           %s\n", formatEmailError(r.Error))
 	}
 
 	return subject, b.String()

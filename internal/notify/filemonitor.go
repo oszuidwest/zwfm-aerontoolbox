@@ -57,7 +57,7 @@ func formatFileAlerts(alerts []FileAlertResult) (subject, body string) {
 		fmt.Fprintf(&b, "    Max. leeftijd:    %d minuten\n", a.MaxAgeMinutes)
 		switch {
 		case a.Error != "":
-			fmt.Fprintf(&b, "    Status:           Fout: %s\n", a.Error)
+			fmt.Fprintf(&b, "    Status:           Fout: %s\n", formatEmailError(a.Error))
 		case !a.Exists:
 			b.WriteString("    Status:           Bestand niet gevonden\n")
 		default:

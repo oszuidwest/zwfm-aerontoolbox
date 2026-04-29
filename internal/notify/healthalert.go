@@ -2,6 +2,7 @@ package notify
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -40,7 +41,7 @@ func (s *NotificationService) NotifyHealthCheckError(err error) {
 	b.WriteString("Database health check mislukt\n\n")
 	b.WriteString("De health check kon niet worden uitgevoerd. Controleer de databaseverbinding.\n\n")
 	fmt.Fprintf(&b, "Tijdstip:  %s\n", time.Now().Format(timeFormat))
-	fmt.Fprintf(&b, "Fout:      %s\n", err.Error())
+	fmt.Fprintf(&b, "Fout:      %s\n", formatEmailError(err.Error()))
 
 	s.sendAsync(subject, b.String())
 }
@@ -80,11 +81,66 @@ func formatHealthAlert(r *HealthAlertResult) (subject, body string) {
 	if len(r.Recommendations) > 0 {
 		fmt.Fprintf(&b, "Aanbevelingen: %d\n", len(r.Recommendations))
 		for _, rec := range r.Recommendations {
-			fmt.Fprintf(&b, "  - %s\n", rec)
+			fmt.Fprintf(&b, "  - %s\n", formatHealthRecommendation(rec))
 		}
 	}
 
 	return subject, b.String()
+}
+
+var healthRecommendationPatterns = []struct {
+	re   *regexp.Regexp
+	repl string
+}{
+	{
+		re:   regexp.MustCompile(`^Connection usage is high: ([0-9]+)/([0-9]+) \(([0-9]+)%\) - check for connection leaks$`),
+		repl: `Connectiegebruik is hoog: $1/$2 ($3%) - controleer op connectielekken`,
+	},
+	{
+		re:   regexp.MustCompile(`^Long-running query detected \(PID ([0-9]+), running for (.+)\)$`),
+		repl: `Langlopende query gedetecteerd (PID $1, actief gedurende $2)`,
+	},
+	{
+		re:   regexp.MustCompile(`^Table '([^']+)' has ([0-9.]+)% dead tuples - VACUUM recommended$`),
+		repl: `Tabel '$1' heeft $2% dode tuples - VACUUM aanbevolen`,
+	},
+	{
+		re:   regexp.MustCompile(`^Table '([^']+)' has ([0-9]+) dead tuples - VACUUM recommended$`),
+		repl: `Tabel '$1' heeft $2 dode tuples - VACUUM aanbevolen`,
+	},
+	{
+		re:   regexp.MustCompile(`^Table '([^']+)' has never been vacuumed$`),
+		repl: `Tabel '$1' is nog nooit gevacuumd`,
+	},
+	{
+		re:   regexp.MustCompile(`^Table '([^']+)' has not been vacuumed in over ([0-9]+) days$`),
+		repl: `Tabel '$1' is al meer dan $2 dagen niet gevacuumd`,
+	},
+	{
+		re:   regexp.MustCompile(`^Table '([^']+)' has never been analyzed - ANALYZE recommended$`),
+		repl: `Tabel '$1' is nog nooit geanalyseerd - ANALYZE aanbevolen`,
+	},
+	{
+		re:   regexp.MustCompile(`^Table '([^']+)' has ([0-9]+) modifications since last ANALYZE - statistics stale$`),
+		repl: `Tabel '$1' heeft $2 wijzigingen sinds de laatste ANALYZE - statistieken zijn verouderd`,
+	},
+	{
+		re:   regexp.MustCompile(`^Table '([^']+)' has high sequential scans \(([0-9]+)\) vs index scans \(([0-9]+)\) - possible missing index$`),
+		repl: `Tabel '$1' heeft veel sequential scans ($2) ten opzichte van index scans ($3) - mogelijk ontbreekt een index`,
+	},
+	{
+		re:   regexp.MustCompile(`^Table '([^']+)' has (.+) of TOAST data \(images\)$`),
+		repl: `Tabel '$1' heeft $2 aan TOAST-data (afbeeldingen)`,
+	},
+}
+
+func formatHealthRecommendation(rec string) string {
+	for _, pattern := range healthRecommendationPatterns {
+		if pattern.re.MatchString(rec) {
+			return pattern.re.ReplaceAllString(rec, pattern.repl)
+		}
+	}
+	return rec
 }
 
 func formatHealthRecovery(r *HealthAlertResult) (subject, body string) {
