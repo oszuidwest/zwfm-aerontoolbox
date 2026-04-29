@@ -51,13 +51,6 @@ jobs:
             goarch: arm
             goarm: '7'
             suffix: ''
-          # Windows builds
-          - goos: windows
-            goarch: amd64
-            suffix: '.exe'
-          - goos: windows
-            goarch: arm64
-            suffix: '.exe'
           # macOS builds
           - goos: darwin
             goarch: amd64
