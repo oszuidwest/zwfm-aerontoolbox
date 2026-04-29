@@ -231,7 +231,7 @@ Bekijk artiestgegevens inclusief afbeeldingsstatus.
 **Foutresponse:** `404 Not Found`
 ```json
 {
-  "error": "artist not found"
+  "error": "artist with ID '123e4567-e89b-12d3-a456-426614174000' not found"
 }
 ```
 
@@ -252,7 +252,7 @@ Bekijk de afbeelding van de artiest.
 **Foutresponse:** `404 Not Found`
 ```json
 {
-  "error": "artist image not found"
+  "error": "artist image with ID '123e4567-e89b-12d3-a456-426614174000' not found"
 }
 ```
 
@@ -286,9 +286,8 @@ Een artiestafbeelding uploaden of bijwerken.
 ```
 
 **Foutresponses:**
-- `400` Bad Request - Ongeldige invoer
+- `400` Bad Request - Ongeldige invoer of afbeeldingsvalidatie mislukt
 - `404` Not Found - Artiest niet gevonden
-- `422` Unprocessable Entity - Afbeeldingsvalidatie mislukt
 
 ### Artiestafbeelding verwijderen
 
@@ -311,7 +310,7 @@ Het verwijderen van een artiestafbeelding.
 **Foutresponse:** `404 Not Found`
 ```json
 {
-  "error": "artist image not found"
+  "error": "artist image with ID '123e4567-e89b-12d3-a456-426614174000' not found"
 }
 ```
 
@@ -336,7 +335,7 @@ Het verwijderen van alle artiestafbeeldingen uit de database.
 **Foutresponse:** `400 Bad Request`
 ```json
 {
-  "error": "missing confirmation header: X-Confirm-Bulk-Delete"
+  "error": "Missing confirmation header: X-Confirm-Bulk-Delete"
 }
 ```
 
@@ -406,7 +405,7 @@ Bekijk trackgegevens inclusief afbeeldingsstatus.
 **Foutresponse:** `404 Not Found`
 ```json
 {
-  "error": "track not found"
+  "error": "track with ID '456e7890-e89b-12d3-a456-426614174000' not found"
 }
 ```
 
@@ -427,7 +426,7 @@ Bekijk de albumhoes van de track.
 **Foutresponse:** `404 Not Found`
 ```json
 {
-  "error": "track image not found"
+  "error": "track image with ID '456e7890-e89b-12d3-a456-426614174000' not found"
 }
 ```
 
@@ -462,9 +461,8 @@ Een albumhoes uploaden of bijwerken.
 ```
 
 **Foutresponses:**
-- `400` Bad Request - Ongeldige invoer
+- `400` Bad Request - Ongeldige invoer of afbeeldingsvalidatie mislukt
 - `404` Not Found - Track niet gevonden
-- `422` Unprocessable Entity - Afbeeldingsvalidatie mislukt
 
 ### Trackafbeelding verwijderen
 
@@ -487,7 +485,7 @@ Het verwijderen van de albumhoes van een track.
 **Foutresponse:** `404 Not Found`
 ```json
 {
-  "error": "track image not found"
+  "error": "track image with ID '456e7890-e89b-12d3-a456-426614174000' not found"
 }
 ```
 
@@ -512,7 +510,7 @@ Het verwijderen van alle trackafbeeldingen uit de database.
 **Foutresponse:** `400 Bad Request`
 ```json
 {
-  "error": "missing confirmation header: X-Confirm-Bulk-Delete"
+  "error": "Missing confirmation header: X-Confirm-Bulk-Delete"
 }
 ```
 
@@ -824,10 +822,10 @@ De backup wordt asynchroon uitgevoerd. Controleer `GET /api/db/backup/status` vo
 
 **Foutresponses:**
 
-`400 Bad Request` - Backup niet ingeschakeld:
+`404 Not Found` - Backup niet ingeschakeld:
 ```json
 {
-  "error": "backup functionality is not enabled"
+  "error": "backup is not enabled"
 }
 ```
 
@@ -1050,6 +1048,13 @@ Toont de resultaten van de meest recente bestandscontrole, plus de huidige runst
 **Endpoint:** `GET /api/file-monitor/status`
 **Authenticatie:** Vereist
 
+**Foutresponse indien uitgeschakeld:** `404 Not Found`
+```json
+{
+  "error": "file monitor is not enabled"
+}
+```
+
 **Response:** `200 OK`
 ```json
 {
@@ -1170,6 +1175,13 @@ Start een bestandscontrole op de achtergrond. Handig tijdens configuratie of sto
 
 **Endpoint:** `POST /api/file-monitor/check`
 **Authenticatie:** Vereist
+
+**Foutresponse indien uitgeschakeld:** `404 Not Found`
+```json
+{
+  "error": "file monitor is not enabled"
+}
+```
 
 **Response:** `202 Accepted`
 ```json

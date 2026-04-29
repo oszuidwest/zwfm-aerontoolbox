@@ -72,13 +72,16 @@ func (s *Server) Start(port string) error {
 					r.Get("/health", s.handleDatabaseHealth)
 				})
 
-				// Backup endpoints
-				r.Post("/backup", s.handleCreateBackup)
-				r.Get("/backup/status", s.handleBackupStatus)
-				r.Get("/backups", s.handleListBackups)
-				r.Get("/backups/{filename}", s.handleDownloadBackupFile)
-				r.Get("/backups/{filename}/validate", s.handleValidateBackup)
-				r.Delete("/backups/{filename}", s.handleDeleteBackup)
+				// Backup endpoints (guarded: 404 when backup is disabled)
+				r.Group(func(r chi.Router) {
+					r.Use(s.requireBackupEnabled)
+					r.Post("/backup", s.handleCreateBackup)
+					r.Get("/backup/status", s.handleBackupStatus)
+					r.Get("/backups", s.handleListBackups)
+					r.Get("/backups/{filename}", s.handleDownloadBackupFile)
+					r.Get("/backups/{filename}/validate", s.handleValidateBackup)
+					r.Delete("/backups/{filename}", s.handleDeleteBackup)
+				})
 			})
 
 			r.Get("/file-monitor/status", s.handleFileMonitorStatus)
@@ -142,6 +145,16 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) requireBackupEnabled(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.service.Config().Backup.Enabled {
+			respondError(w, http.StatusNotFound, "backup is not enabled")
+			return
+		}
 		next.ServeHTTP(w, r)
 	})
 }
