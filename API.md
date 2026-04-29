@@ -101,7 +101,7 @@ Of bij fouten:
 ```
 
 > [!NOTE]
-> In de voorbeelden hieronder wordt voor de leesbaarheid alleen de inhoud van het `data`-veld getoond, maar in werkelijkheid wordt altijd de complete wrapper geretourneerd.
+> In de JSON-voorbeelden hieronder wordt voor de leesbaarheid alleen de inhoud van het `data`-veld getoond, en bij foutresponses alleen het `error`-veld. JSON-responses gebruiken in werkelijkheid de complete wrapper (inclusief `"success"`).
 
 ## Foutmeldingen
 
@@ -843,6 +843,13 @@ Toont de status van de laatste backupbewerking.
 **Endpoint:** `GET /api/db/backup/status`
 **Authenticatie:** Vereist
 
+**Foutresponse indien uitgeschakeld:** `404 Not Found`
+```json
+{
+  "error": "backup is not enabled"
+}
+```
+
 **Response tijdens backup:** `200 OK`
 ```json
 {
@@ -922,6 +929,13 @@ Bekijk een overzicht van alle beschikbare backups.
 **Endpoint:** `GET /api/db/backups`
 **Authenticatie:** Vereist
 
+**Foutresponse indien uitgeschakeld:** `404 Not Found`
+```json
+{
+  "error": "backup is not enabled"
+}
+```
+
 **Response:** `200 OK`
 ```json
 {
@@ -951,6 +965,13 @@ Een specifiek backupbestand downloaden.
 **Endpoint:** `GET /api/db/backups/{filename}`
 **Authenticatie:** Vereist
 
+**Foutresponse indien uitgeschakeld:** `404 Not Found`
+```json
+{
+  "error": "backup is not enabled"
+}
+```
+
 **Parameters:**
 - `filename` (padparameter, vereist): Naam van het backupbestand
 
@@ -972,6 +993,13 @@ Een specifiek backupbestand verwijderen.
 
 **Endpoint:** `DELETE /api/db/backups/{filename}`
 **Authenticatie:** Vereist
+
+**Foutresponse indien uitgeschakeld:** `404 Not Found`
+```json
+{
+  "error": "backup is not enabled"
+}
+```
 
 **Parameters:**
 - `filename` (padparameter, vereist): Naam van het backupbestand
@@ -1000,6 +1028,13 @@ De integriteit van een bestaand backupbestand valideren. Handig voor het control
 
 **Endpoint:** `GET /api/db/backups/{filename}/validate`
 **Authenticatie:** Vereist
+
+**Foutresponse indien uitgeschakeld:** `404 Not Found`
+```json
+{
+  "error": "backup is not enabled"
+}
+```
 
 **Parameters:**
 - `filename` (padparameter, vereist): Naam van het backupbestand
