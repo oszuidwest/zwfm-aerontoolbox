@@ -723,7 +723,7 @@ jobs:
           echo "Checking table health fields"
           RESPONSE=$(curl -s -H "X-API-Key: ${{ env.API_KEY }}" http://localhost:${{ env.API_PORT }}/api/db/maintenance/health)
           FIRST_TABLE=$(echo "$RESPONSE" | jq -r '.data.tables[0]')
-          HAS_DTR=$(echo "$FIRST_TABLE" | jq 'has("dead_tuple_ratio")')
+          HAS_DTR=$(echo "$FIRST_TABLE" | jq 'has("dead_tuple_pct")')
           HAS_MSA=$(echo "$FIRST_TABLE" | jq 'has("modifications_since_analyze")')
           HAS_NV=$(echo "$FIRST_TABLE" | jq 'has("needs_vacuum")')
           HAS_NA=$(echo "$FIRST_TABLE" | jq 'has("needs_analyze")')

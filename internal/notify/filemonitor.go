@@ -40,28 +40,28 @@ func (s *NotificationService) SendFileRecoveries(recoveries []FileAlertResult) {
 
 func formatFileAlerts(alerts []FileAlertResult) (subject, body string) {
 	if len(alerts) == 1 {
-		subject = fmt.Sprintf("[FOUT] Bestandscontrole: %s verouderd - Aeron Toolbox", fileLabel(&alerts[0]))
+		subject = fmt.Sprintf("[ERROR] File monitor: %s stale - Aeron Toolbox", fileLabel(&alerts[0]))
 	} else {
-		subject = fmt.Sprintf("[FOUT] Bestandscontrole: %d bestanden verouderd - Aeron Toolbox", len(alerts))
+		subject = fmt.Sprintf("[ERROR] File monitor: %d files stale - Aeron Toolbox", len(alerts))
 	}
 
 	var b strings.Builder
-	b.WriteString("Bestandscontrole mislukt\n\n")
-	fmt.Fprintf(&b, "Tijdstip:  %s\n", alerts[0].CheckedAt.Format(timeFormat))
-	fmt.Fprintf(&b, "Aantal:    %d\n\n", len(alerts))
+	b.WriteString("File monitor failed\n\n")
+	fmt.Fprintf(&b, "Timestamp: %s\n", alerts[0].CheckedAt.Format(timeFormat))
+	fmt.Fprintf(&b, "Count:     %d\n\n", len(alerts))
 
 	for i := range alerts {
 		a := &alerts[i]
 		fmt.Fprintf(&b, "  %s\n", fileLabel(a))
-		fmt.Fprintf(&b, "    Pad:              %s\n", a.Path)
-		fmt.Fprintf(&b, "    Max. leeftijd:    %d minuten\n", a.MaxAgeMinutes)
+		fmt.Fprintf(&b, "    Path:             %s\n", a.Path)
+		fmt.Fprintf(&b, "    Max age:          %d minutes\n", a.MaxAgeMinutes)
 		switch {
 		case a.Error != "":
-			fmt.Fprintf(&b, "    Status:           Fout: %s\n", a.Error)
+			fmt.Fprintf(&b, "    Status:           Error: %s\n", a.Error)
 		case !a.Exists:
-			b.WriteString("    Status:           Bestand niet gevonden\n")
+			b.WriteString("    Status:           File not found\n")
 		default:
-			fmt.Fprintf(&b, "    Huidige leeftijd: %.0f minuten\n", math.Round(a.ActualAge.Minutes()))
+			fmt.Fprintf(&b, "    Current age:      %.0f minutes\n", math.Round(a.ActualAge.Minutes()))
 		}
 		b.WriteString("\n")
 	}
@@ -71,21 +71,21 @@ func formatFileAlerts(alerts []FileAlertResult) (subject, body string) {
 
 func formatFileRecoveries(recoveries []FileAlertResult) (subject, body string) {
 	if len(recoveries) == 1 {
-		subject = fmt.Sprintf("[OK] Bestandscontrole: %s hersteld - Aeron Toolbox", fileLabel(&recoveries[0]))
+		subject = fmt.Sprintf("[OK] File monitor: %s recovered - Aeron Toolbox", fileLabel(&recoveries[0]))
 	} else {
-		subject = fmt.Sprintf("[OK] Bestandscontrole: %d bestanden hersteld - Aeron Toolbox", len(recoveries))
+		subject = fmt.Sprintf("[OK] File monitor: %d files recovered - Aeron Toolbox", len(recoveries))
 	}
 
 	var b strings.Builder
-	b.WriteString("Bestandscontrole hersteld\n\n")
-	fmt.Fprintf(&b, "Tijdstip:  %s\n", recoveries[0].CheckedAt.Format(timeFormat))
-	fmt.Fprintf(&b, "Aantal:    %d\n\n", len(recoveries))
+	b.WriteString("File monitor recovered\n\n")
+	fmt.Fprintf(&b, "Timestamp: %s\n", recoveries[0].CheckedAt.Format(timeFormat))
+	fmt.Fprintf(&b, "Count:     %d\n\n", len(recoveries))
 
 	for i := range recoveries {
 		r := &recoveries[i]
 		fmt.Fprintf(&b, "  %s\n", fileLabel(r))
-		fmt.Fprintf(&b, "    Pad:              %s\n", r.Path)
-		b.WriteString("    Status:           Weer actueel\n\n")
+		fmt.Fprintf(&b, "    Path:             %s\n", r.Path)
+		b.WriteString("    Status:           Current again\n\n")
 	}
 
 	return subject, b.String()

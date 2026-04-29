@@ -1182,7 +1182,7 @@ func TestActiveWindow_StatTimeoutOutsideWindowDoesNotAlert(t *testing.T) {
 
 func TestActiveWindow_RecoveryRespectsWindow(t *testing.T) {
 	// Recovery mails must not fire outside the window. Otherwise an alert
-	// suppressed at 03:00 would still trigger a "[OK] hersteld" mail at 03:30,
+	// suppressed at 03:00 would still trigger a "[OK] recovered" mail at 03:30,
 	// which would be the only thing the operator ever sees about that file.
 
 	// 1) Inside window: become alerting.

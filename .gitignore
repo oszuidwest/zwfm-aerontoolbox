@@ -33,6 +33,7 @@ go.work
 Thumbs.db
 
 # Local config files (keep examples)
+config.json
 config.yaml
 local-config.yaml
 *.local.yaml
