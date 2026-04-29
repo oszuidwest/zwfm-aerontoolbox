@@ -279,7 +279,7 @@ func (s *NotificationService) formatBackupFailure(r *BackupResult) (subject, bod
 		fmt.Fprintf(&b, "Bestandsnaam:   %s\n", r.Filename)
 	}
 	if r.Error != "" {
-		fmt.Fprintf(&b, "Fout:           %s\n", formatEmailError(r.Error))
+		fmt.Fprintf(&b, "Fout:           %s\n", r.Error)
 	}
 
 	return subject, b.String()
@@ -314,7 +314,7 @@ func (s *NotificationService) formatS3Failure(filename string, r *S3SyncResult) 
 		fmt.Fprintf(&b, "Bestandsnaam:   %s\n", filename)
 	}
 	if r.Error != "" {
-		fmt.Fprintf(&b, "Fout:           %s\n", formatEmailError(r.Error))
+		fmt.Fprintf(&b, "Fout:           %s\n", r.Error)
 	}
 
 	return subject, b.String()
