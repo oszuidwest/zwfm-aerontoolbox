@@ -55,7 +55,8 @@ func NewScheduler(ctx context.Context, svc *AeronService) (*Scheduler, error) {
 
 	// Register file monitor job if enabled (cadence from FileMonitor.Interval()).
 	if cfg.FileMonitor.Enabled {
-		if err := s.addJob(fmt.Sprintf("@every %s", cfg.FileMonitor.Interval()), "file-monitor", s.runFileMonitor); err != nil {
+		schedule := fmt.Sprintf("@every %s", cfg.FileMonitor.Interval())
+		if err := s.addJob(schedule, "file-monitor", s.runFileMonitor); err != nil {
 			return nil, err
 		}
 	}

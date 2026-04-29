@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 
 	"github.com/jmoiron/sqlx"
@@ -246,7 +247,9 @@ func (r *Repository) GetPlaylistBlocks(ctx context.Context, date string) ([]Play
 }
 
 // GetPlaylistWithTracks retrieves all blocks with their associated tracks for a date.
-func (r *Repository) GetPlaylistWithTracks(ctx context.Context, date string) ([]PlaylistBlock, map[string][]PlaylistItem, error) {
+func (r *Repository) GetPlaylistWithTracks(
+	ctx context.Context, date string,
+) ([]PlaylistBlock, map[string][]PlaylistItem, error) {
 	blocks, err := r.GetPlaylistBlocks(ctx, date)
 	if err != nil {
 		return nil, nil, err
@@ -276,7 +279,7 @@ func (r *Repository) GetPlaylistWithTracks(ctx context.Context, date string) ([]
 	placeholders := make([]string, len(blockIDs))
 	for i, id := range blockIDs {
 		paramCount++
-		placeholders[i] = fmt.Sprintf("$%d", paramCount)
+		placeholders[i] = "$" + strconv.Itoa(paramCount)
 		params = append(params, id)
 	}
 
@@ -287,7 +290,9 @@ func (r *Repository) GetPlaylistWithTracks(ctx context.Context, date string) ([]
 
 	columns := fmt.Sprintf(playlistItemColumns, types.VoicetrackUserID)
 	joins := fmt.Sprintf(playlistItemJoins, r.schema, r.schema, r.schema)
-	query := fmt.Sprintf("SELECT %s, COALESCE(pi.blockid::text, '') as blockid %s WHERE %s AND pi.blockid IN (%s) ORDER BY pi.blockid, pi.startdatetime",
+	query := fmt.Sprintf(
+		"SELECT %s, COALESCE(pi.blockid::text, '') as blockid %s WHERE %s AND pi.blockid IN (%s)"+
+			" ORDER BY pi.blockid, pi.startdatetime",
 		columns, joins, dateFilter, strings.Join(placeholders, ","))
 
 	var tempItems []playlistItemWithBlockID

@@ -100,7 +100,9 @@ func (o *Optimizer) convertPNGToJPEG(data []byte) (optimized []byte, format, enc
 
 // processImage resizes and encodes an image, returning optimized data if smaller.
 // If the optimized version is not smaller, it returns the original data with its original format.
-func (o *Optimizer) processImage(sourceImage image.Image, originalData []byte, originalFormat, targetFormat string) (optimized []byte, format, encoder string, err error) {
+func (o *Optimizer) processImage(
+	sourceImage image.Image, originalData []byte, originalFormat, targetFormat string,
+) (optimized []byte, format, encoder string, err error) {
 	bounds := sourceImage.Bounds()
 	width, height := bounds.Dx(), bounds.Dy()
 

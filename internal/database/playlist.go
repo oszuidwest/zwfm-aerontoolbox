@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
@@ -76,7 +77,7 @@ func BuildPlaylistQuery(schema string, opts *PlaylistOptions) (query string, par
 
 	nextParam := func() string {
 		paramCount++
-		return fmt.Sprintf("$%d", paramCount)
+		return "$" + strconv.Itoa(paramCount)
 	}
 
 	if opts.BlockID != "" {

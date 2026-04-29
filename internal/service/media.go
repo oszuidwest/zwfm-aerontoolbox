@@ -72,7 +72,11 @@ type ImageUploadResult struct {
 
 // UploadImage downloads, resizes, optimizes, and stores an image for an artist or track.
 func (s *MediaService) UploadImage(ctx context.Context, params *ImageUploadParams) (*ImageUploadResult, error) {
-	slog.Debug("Image upload started", "entityType", params.EntityType, "id", params.ID, "hasURL", params.ImageURL != "", "hasData", len(params.ImageData) > 0)
+	slog.Debug("Image upload started",
+		"entityType", params.EntityType,
+		"id", params.ID,
+		"hasURL", params.ImageURL != "",
+		"hasData", len(params.ImageData) > 0)
 
 	if err := validateImageUploadParams(params); err != nil {
 		return nil, err
@@ -113,13 +117,19 @@ func (s *MediaService) UploadImage(ctx context.Context, params *ImageUploadParam
 		Quality:       s.config.Image.Quality,
 		RejectSmaller: s.config.Image.RejectSmaller,
 	}
-	slog.Debug("Image processing started", "inputSize", len(imageData), "targetWidth", imgConfig.TargetWidth, "targetHeight", imgConfig.TargetHeight)
+	slog.Debug("Image processing started",
+		"inputSize", len(imageData),
+		"targetWidth", imgConfig.TargetWidth,
+		"targetHeight", imgConfig.TargetHeight)
 	processingResult, err := image.Process(imageData, imgConfig)
 	if err != nil {
 		slog.Error("Image processing failed", "error", err)
 		return nil, types.NewValidationError("image", fmt.Sprintf("processing failed: %v", err))
 	}
-	slog.Debug("Image processing completed", "originalSize", processingResult.Original.Size, "optimizedSize", processingResult.Optimized.Size, "savings", processingResult.Savings)
+	slog.Debug("Image processing completed",
+		"originalSize", processingResult.Original.Size,
+		"optimizedSize", processingResult.Optimized.Size,
+		"savings", processingResult.Savings)
 
 	table := types.Table(params.EntityType)
 	if err := s.repo.UpdateImage(ctx, table, params.ID, processingResult.Data); err != nil {
@@ -205,7 +215,9 @@ func DefaultPlaylistOptions() database.PlaylistOptions {
 }
 
 // GetPlaylist retrieves played tracks for a date or block with filtering and pagination.
-func (s *MediaService) GetPlaylist(ctx context.Context, opts *database.PlaylistOptions) ([]database.PlaylistItem, error) {
+func (s *MediaService) GetPlaylist(
+	ctx context.Context, opts *database.PlaylistOptions,
+) ([]database.PlaylistItem, error) {
 	return s.repo.GetPlaylist(ctx, opts)
 }
 
@@ -242,7 +254,8 @@ func (s *MediaService) GetPlaylistWithTracks(ctx context.Context, date string) (
 // validateEntityType ensures the entity type is either artist or track.
 func validateEntityType(entityType types.EntityType) error {
 	if entityType != types.EntityTypeArtist && entityType != types.EntityTypeTrack {
-		return types.NewValidationError("entityType", fmt.Sprintf("invalid type: use '%s' or '%s'", types.EntityTypeArtist, types.EntityTypeTrack))
+		return types.NewValidationError("entityType",
+			fmt.Sprintf("invalid type: use '%s' or '%s'", types.EntityTypeArtist, types.EntityTypeTrack))
 	}
 	return nil
 }

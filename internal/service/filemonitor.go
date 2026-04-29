@@ -195,20 +195,47 @@ func (s *FileMonitorService) executeRun() *FileMonitorStatus {
 	// Always nil: goroutines embed errors in FileCheckResult and never return them.
 	_ = g.Wait()
 
-	var newAlerts []notify.FileAlertResult
-	var newRecoveries []notify.FileAlertResult
+	newAlerts, newRecoveries := s.processAlertStates(checks, results, now)
 
-	// Acquire lock only for alert state updates.
+	// Send batched notifications outside the lock.
+	s.dispatchNotifications(newAlerts, newRecoveries)
+
+	staleCount := 0
+	for _, r := range results {
+		if r.IsStale {
+			staleCount++
+		}
+	}
+
+	slog.Info("File monitor check completed", "total", len(results), "stale", staleCount)
+
+	return &FileMonitorStatus{
+		LastCheckAt: &now,
+		Checks:      results,
+	}
+}
+
+// processAlertStates evaluates check results against alert state under the
+// state lock. It handles the grace run (first run after restart, observe-only),
+// active-window suppression, and alert/recovery transitions. Returns new alerts
+// and recoveries for notification dispatch (which must happen outside the lock).
+func (s *FileMonitorService) processAlertStates(
+	checks []config.FileMonitorCheckConfig,
+	results []FileCheckResult,
+	now time.Time,
+) (newAlerts, newRecoveries []notify.FileAlertResult) {
 	s.stateMu.Lock()
-	isGraceRun := !s.graceRunDone
+	defer s.stateMu.Unlock()
+
+	if !s.graceRunDone {
+		// Grace run: observe only — don't update alert state or send notifications.
+		// This avoids false alerts immediately after a restart.
+		s.graceRunDone = true
+		slog.Info("File monitor grace run completed, alerts will be sent from next check")
+		return nil, nil
+	}
 
 	for i, check := range checks {
-		if isGraceRun {
-			// Grace run: observe only — don't update alert state or send notifications.
-			// This avoids false alerts immediately after a restart.
-			continue
-		}
-
 		// Outside an active window the result still reflects raw staleness
 		// (transparent in /status) but does not flip alert state, send mail,
 		// or trigger a recovery. Suppressing recovery is essential — without
@@ -237,35 +264,24 @@ func (s *FileMonitorService) executeRun() *FileMonitorStatus {
 		}
 	}
 
-	if isGraceRun {
-		s.graceRunDone = true
-		slog.Info("File monitor grace run completed, alerts will be sent from next check")
-	}
+	return newAlerts, newRecoveries
+}
 
-	s.stateMu.Unlock()
-
-	// Send batched notifications outside the lock.
+// dispatchNotifications sends batched alert and recovery notifications.
+func (s *FileMonitorService) dispatchNotifications(
+	newAlerts, newRecoveries []notify.FileAlertResult,
+) {
 	if len(newAlerts) > 0 {
-		slog.Info("File monitor alert dispatch started", "count", len(newAlerts), "paths", alertPaths(newAlerts))
+		slog.Info("File monitor alert dispatch started",
+			"count", len(newAlerts),
+			"paths", alertPaths(newAlerts))
 		s.notify.SendFileAlerts(newAlerts)
 	}
 	if len(newRecoveries) > 0 {
-		slog.Info("File monitor recovery dispatch started", "count", len(newRecoveries), "paths", alertPaths(newRecoveries))
+		slog.Info("File monitor recovery dispatch started",
+			"count", len(newRecoveries),
+			"paths", alertPaths(newRecoveries))
 		s.notify.SendFileRecoveries(newRecoveries)
-	}
-
-	staleCount := 0
-	for _, r := range results {
-		if r.IsStale {
-			staleCount++
-		}
-	}
-
-	slog.Info("File monitor check completed", "total", len(results), "stale", staleCount)
-
-	return &FileMonitorStatus{
-		LastCheckAt: &now,
-		Checks:      results,
 	}
 }
 
@@ -466,7 +482,9 @@ func (s *FileMonitorService) startOrJoinFlight(path string, now time.Time) (*sta
 }
 
 // timeoutResult builds a synthetic stale-with-timeout result for a hung stat.
-func (s *FileMonitorService) timeoutResult(check config.FileMonitorCheckConfig, flight *statInFlight, timeout time.Duration) FileCheckResult {
+func (s *FileMonitorService) timeoutResult(
+	check config.FileMonitorCheckConfig, flight *statInFlight, timeout time.Duration,
+) FileCheckResult {
 	slog.Warn("File monitor: stat timed out (single-flight goroutine still pending OS reply)",
 		"name", check.DisplayName(),
 		"path", check.Path,
@@ -483,7 +501,9 @@ func (s *FileMonitorService) timeoutResult(check config.FileMonitorCheckConfig, 
 }
 
 // buildResult turns an os.Stat outcome into a FileCheckResult.
-func (s *FileMonitorService) buildResult(check config.FileMonitorCheckConfig, info os.FileInfo, err error, now time.Time) FileCheckResult {
+func (s *FileMonitorService) buildResult(
+	check config.FileMonitorCheckConfig, info os.FileInfo, err error, now time.Time,
+) FileCheckResult {
 	result := FileCheckResult{
 		Name:          check.Name,
 		Path:          check.Path,
@@ -541,7 +561,9 @@ func (s *FileMonitorService) buildResult(check config.FileMonitorCheckConfig, in
 }
 
 // toAlertResult converts a check result to a notification alert result.
-func toAlertResult(check config.FileMonitorCheckConfig, result *FileCheckResult, checkedAt time.Time) notify.FileAlertResult {
+func toAlertResult(
+	check config.FileMonitorCheckConfig, result *FileCheckResult, checkedAt time.Time,
+) notify.FileAlertResult {
 	alert := notify.FileAlertResult{
 		Name:          check.Name,
 		Path:          check.Path,
