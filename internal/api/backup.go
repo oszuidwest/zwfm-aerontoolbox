@@ -60,6 +60,7 @@ func (s *Server) handleDownloadBackupFile(w http.ResponseWriter, r *http.Request
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", "attachment; filename="+filename)
 
+	//nolint:gosec // G703: filePath comes from Backup.GetFilePath after filename validation and os.Root lookup.
 	http.ServeFile(w, r, filePath)
 }
 
