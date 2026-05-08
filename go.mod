@@ -1,6 +1,6 @@
 module github.com/oszuidwest/zwfm-aerontoolbox
 
-go 1.26.2
+go 1.26.3
 
 require (
 	github.com/doyensec/safeurl v0.2.2
