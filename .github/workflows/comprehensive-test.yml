@@ -103,7 +103,12 @@ jobs:
           args: --timeout=5m
 
       - name: Check for dead code
-        run: go tool deadcode ./...
+        run: |
+          deadcode_output=$(go tool deadcode ./...)
+          if [ -n "$deadcode_output" ]; then
+            echo "$deadcode_output"
+            exit 1
+          fi
 
       - name: Run govulncheck
         run: go tool govulncheck ./...
