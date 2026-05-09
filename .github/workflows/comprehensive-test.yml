@@ -5,18 +5,7 @@ on:
   pull_request:
     branches: [main]
   workflow_call:
-    inputs:
-      skip_tests:
-        description: 'Skip tests (for edge releases)'
-        type: boolean
-        required: false
-        default: false
   workflow_dispatch:
-    inputs:
-      skip_tests:
-        description: 'Skip tests (for edge releases)'
-        type: boolean
-        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -38,7 +27,6 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
-    if: ${{ inputs.skip_tests != true }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -65,13 +53,11 @@ jobs:
           retention-days: 1
 
   lint:
-    if: ${{ inputs.skip_tests != true }}
     uses: oszuidwest/.github-templates/.github/workflows/go-ci.yml@v1
 
   integration:
     needs: build
     runs-on: ubuntu-latest
-    if: ${{ inputs.skip_tests != true }}
     strategy:
       fail-fast: false
       matrix:
