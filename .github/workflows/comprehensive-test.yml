@@ -65,56 +65,8 @@ jobs:
           retention-days: 1
 
   lint:
-    runs-on: ubuntu-latest
     if: ${{ inputs.skip_tests != true }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: 'go.mod'
-          cache: true
-
-      - name: Download dependencies
-        run: go mod download
-
-      - name: Check formatting (gofmt)
-        run: |
-          UNFORMATTED=$(gofmt -s -l .)
-          if [ -n "$UNFORMATTED" ]; then
-            echo "::error::De volgende bestanden zijn niet correct geformatteerd:"
-            echo "$UNFORMATTED"
-            exit 1
-          fi
-          echo "Alle bestanden zijn correct geformatteerd"
-
-      - name: Run go vet
-        run: go vet ./...
-
-      - name: Run Go tests with race detector
-        run: go test -race ./...
-
-      - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v9
-        with:
-          version: v2.12.1
-          args: --timeout=5m
-
-      - name: Check for dead code
-        run: |
-          deadcode_output=$(go tool deadcode ./...)
-          if [ -n "$deadcode_output" ]; then
-            echo "$deadcode_output"
-            exit 1
-          fi
-
-      - name: Run govulncheck
-        run: go tool govulncheck ./...
-
-      - name: Run staticcheck
-        run: go tool staticcheck ./...
+    uses: oszuidwest/.github-templates/.github/workflows/go-ci.yml@v1
 
   integration:
     needs: build
