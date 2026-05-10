@@ -1,3 +1,11 @@
+---
+# Thin shim — delegates to oszuidwest/.github-templates go-release.yml@v2.
+# Docker publishing is composed via a second job that calls
+# docker-publish.yml@v1 directly, gated on the release outputs.
+# The `body` job exists only to compute the v-stripped version for the
+# `docker pull` line in release notes (GitHub Actions expressions can't slice).
+# `pre-release` is project-specific: gates everything on the existing
+# comprehensive-test workflow before release/docker run.
 name: Release
 
 on:
@@ -28,17 +36,52 @@ jobs:
     uses: ./.github/workflows/comprehensive-test.yml
     secrets: inherit
 
+  body:
+    runs-on: ubuntu-latest
+    outputs:
+      text: ${{ steps.compute.outputs.text }}
+    steps:
+      - id: compute
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          VERSION="${INPUT_VERSION:-$REF_NAME}"
+          VERSION_NO_V="${VERSION#v}"
+          IMAGE="ghcr.io/oszuidwest/zwfm-aerontoolbox:${VERSION_NO_V}"
+          {
+            echo 'text<<RELEASE_BODY_EOF'
+            echo "**Docker**: \`docker pull ${IMAGE}\`"
+            echo ""
+            echo "Binary downloads are available below as release assets."
+            echo 'RELEASE_BODY_EOF'
+          } >> "$GITHUB_OUTPUT"
+
   release:
-    needs: pre-release
+    needs: [pre-release, body]
     # Run when pre-release succeeded OR was skipped (edge build).
     if: ${{ !cancelled() && (needs.pre-release.result == 'success' || needs.pre-release.result == 'skipped') }}
-    uses: oszuidwest/.github-templates/.github/workflows/go-release.yml@v1
+    uses: oszuidwest/.github-templates/.github/workflows/go-release.yml@v2
     with:
       project-name: zwfm-aerontoolbox
       ldflags-target: main
       build-matrix: '[{"os":"linux","arch":"amd64"},{"os":"linux","arch":"arm64"},{"os":"linux","arch":"arm","arm":"7"},{"os":"darwin","arch":"amd64"},{"os":"darwin","arch":"arm64"}]'
       version: ${{ inputs.version }}
-      enable-docker: true
+      release-body: ${{ needs.body.outputs.text }}
     permissions:
       contents: write
+
+  docker:
+    needs: release
+    if: needs.release.outputs.is_release == 'true'
+    uses: oszuidwest/.github-templates/.github/workflows/docker-publish.yml@v1
+    with:
+      version: ${{ needs.release.outputs.version }}
+      image-labels: |
+        org.opencontainers.image.title=ZuidWest FM Aeron Toolbox
+        org.opencontainers.image.description=Headless REST API toolbox for the Aeron radio automation system
+        org.opencontainers.image.vendor=Streekomroep ZuidWest
+        org.opencontainers.image.licenses=MIT
+    permissions:
+      contents: read
       packages: write
