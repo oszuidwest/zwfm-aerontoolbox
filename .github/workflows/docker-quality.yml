@@ -1,17 +1,5 @@
 ---
-# Docker Quality Workflow Template
-# Source: oszuidwest/.github-templates
-#
-# This workflow lints Dockerfiles, validates YAML, and checks Docker Compose files.
-# Copy to: .github/workflows/docker-quality.yml
-#
-# Required config files:
-#   - .hadolint.yaml (at repo root)
-#
-# Customization:
-#   - DOCKERFILE_PATH: Change if Dockerfile is not at root (e.g., "docker/Dockerfile")
-#   - Adjust YAML lint rules in the inline config as needed
-
+# Requires .hadolint.yaml at the repo root.
 name: Docker Quality
 
 on:
@@ -50,7 +38,7 @@ jobs:
             echo "has_dockerfile=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # Configuration in .hadolint.yaml - do NOT duplicate ignore rules here
+      # Ignore rules live in .hadolint.yaml — do not duplicate here.
       - name: Hadolint
         if: steps.check_dockerfile.outputs.has_dockerfile == 'true'
         uses: hadolint/hadolint-action@v3.3.0
@@ -95,7 +83,7 @@ jobs:
             touch .env
           fi
           if ! OUTPUT=$(docker compose config --quiet 2>&1); then
-            # Missing env vars = warning, syntax errors = fail
+            # Missing env vars: warn. Syntax errors: fail.
             if echo "$OUTPUT" | grep -qi "variable is not set"; then
               echo "::warning::Docker Compose validation requires environment variables: $OUTPUT"
             else

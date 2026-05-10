@@ -1,11 +1,6 @@
 ---
-# Thin shim — delegates to oszuidwest/.github-templates go-release.yml@v2.
-# Docker publishing is composed via a second job that calls
-# docker-publish.yml@v2 directly, gated on the release outputs.
-# The `body` job exists only to compute the v-stripped version for the
-# `docker pull` line in release notes (GitHub Actions expressions can't slice).
-# `pre-release` is project-specific: gates everything on the existing
-# comprehensive-test workflow before release/docker run.
+# `body` strips v-prefix for the docker pull line. `pre-release` gates on
+# comprehensive-test. Skipped for edge (artifact-only).
 name: Release
 
 on:
@@ -27,10 +22,6 @@ permissions:
   contents: read
 
 jobs:
-  # Pre-release gate: full integration tests via the project's existing
-  # comprehensive-test workflow (also run on PR). Skipped for edge dispatches
-  # because edge builds produce an artifact only — no GitHub release, nothing
-  # to gate.
   pre-release:
     if: ${{ github.event_name == 'push' || inputs.version != 'edge' }}
     uses: ./.github/workflows/comprehensive-test.yml
@@ -59,7 +50,7 @@ jobs:
 
   release:
     needs: [pre-release, body]
-    # Run when pre-release succeeded OR was skipped (edge build).
+    # Run when pre-release passed OR was skipped (edge).
     if: ${{ !cancelled() && (needs.pre-release.result == 'success' || needs.pre-release.result == 'skipped') }}
     uses: oszuidwest/.github-templates/.github/workflows/go-release.yml@v2
     with:
