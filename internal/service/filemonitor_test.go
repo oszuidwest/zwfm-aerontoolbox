@@ -27,7 +27,7 @@ func (s *FileMonitorService) run() {
 // newTestService creates a FileMonitorService for testing. Variadic for
 // brevity at call sites (all tests pass an inline literal). The notification
 // service has no email configured so it never sends. Constructor errors fail
-// the test — they would always indicate an invalid ActiveWindow in the test
+// the test - they would always indicate an invalid ActiveWindow in the test
 // fixture, never a runtime condition worth proceeding past.
 func newTestService(t *testing.T, checks ...config.FileMonitorCheckConfig) *FileMonitorService {
 	t.Helper()
@@ -116,7 +116,7 @@ func TestGraceRun_NoPhantomRecovery(t *testing.T) {
 		t.Error("file should be fresh after touch")
 	}
 	if status.Checks[0].InAlert {
-		t.Error("expected InAlert=false — no phantom recovery should occur")
+		t.Error("expected InAlert=false - no phantom recovery should occur")
 	}
 }
 
@@ -517,7 +517,7 @@ func TestParallelChecks_FastFailNotBlockedBySlowStat(t *testing.T) {
 
 	// Total should be ~1s (slow timeout), not ~3s (sequential).
 	if elapsed > 1500*time.Millisecond {
-		t.Errorf("Run() took %v, expected ~1s — fast checks appear serialized behind slow stat", elapsed)
+		t.Errorf("Run() took %v, expected ~1s - fast checks appear serialized behind slow stat", elapsed)
 	}
 
 	results := svc.Status().Checks
@@ -831,7 +831,7 @@ func TestTriggerCheck_NoConflictAfterStatusReportsIdle(t *testing.T) {
 	// a client observes Running == false, the next TriggerCheck() must
 	// succeed without 409. Earlier the published "running" was cleared in
 	// publishCompleted (inside fn), but the runner's own Store(false) only
-	// fires in a defer after fn returns — so a brief window let the API
+	// fires in a defer after fn returns - so a brief window let the API
 	// report idle while TryStart() still rejected.
 	path := filepath.Join(t.TempDir(), "news.mp3")
 	touchFile(t, path)
@@ -865,7 +865,7 @@ func TestStatus_NoTornSnapshotUnderConcurrentReads(t *testing.T) {
 	// Why this catches the old bug. The two-lock implementation published
 	// lastCheck under statusMu, then bumped completedRunID under runStateMu
 	// via a separate `defer markCompleted`. A reader landing between those
-	// two unlocks would observe (CompletedRunID=N-1, LastCheckAt=tag[N]) —
+	// two unlocks would observe (CompletedRunID=N-1, LastCheckAt=tag[N]) -
 	// a mismatch this assertion would flag. Under the single-lock fix
 	// (publishCompleted writes both atomically), no such window exists, so
 	// the test passes deterministically.
@@ -891,7 +891,7 @@ func TestStatus_NoTornSnapshotUnderConcurrentReads(t *testing.T) {
 		return t, ok
 	}
 
-	// Pre-run twice so the tag map has entries before the readers start —
+	// Pre-run twice so the tag map has entries before the readers start -
 	// otherwise early reads find no tag and skip the assertion.
 	for range 2 {
 		runID, err := svc.TriggerCheck()
@@ -1073,7 +1073,7 @@ func makeFresh(t *testing.T, path string) {
 }
 
 func TestActiveWindow_NoAlertOutsideWindow(t *testing.T) {
-	// Window 22:00-06:00 (overnight) — at 14:00 we are firmly outside it.
+	// Window 22:00-06:00 (overnight) - at 14:00 we are firmly outside it.
 	pinNow(t, timeAt(14, 0))
 
 	path := filepath.Join(t.TempDir(), "news.mp3")
@@ -1240,7 +1240,7 @@ func TestActiveWindow_RecoveryRespectsWindow(t *testing.T) {
 		t.Errorf("recovery dispatch path = %q, want %q", got, path)
 	}
 
-	// 4) File goes stale again after recovery — a fresh alert must fire exactly
+	// 4) File goes stale again after recovery - a fresh alert must fire exactly
 	// once. This guards the invariant that alertState is cleared by the recovery
 	// dispatch, so the next stale detection starts a new alert cycle.
 	makeStale(t, path, 60*time.Minute)
@@ -1283,7 +1283,7 @@ func TestAlertingCount_ExcludesOutsideWindow(t *testing.T) {
 
 func TestNewFileMonitorService_RejectsInvalidActiveWindow(t *testing.T) {
 	// Tests that bypass config.Load() (i.e. construct Config{} directly, like
-	// newTestService does) must still hit a hard failure on a bad window —
+	// newTestService does) must still hit a hard failure on a bad window -
 	// otherwise an invalid string would silently degrade to "always active".
 	cfg := &config.Config{}
 	cfg.FileMonitor = config.FileMonitorConfig{

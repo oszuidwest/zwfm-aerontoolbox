@@ -45,8 +45,8 @@ type HealthResponse struct {
 //
 // ChecksStale is the raw count from the most recent run (includes stale
 // files outside their configured ActiveWindow) and is preserved for
-// transparency. ChecksAlerting is window-aware — outside-window stales are
-// excluded — and is what drives the overall degraded status.
+// transparency. ChecksAlerting is window-aware - outside-window stales are
+// excluded - and is what drives the overall degraded status.
 type FileMonitorHealth struct {
 	Enabled        bool `json:"enabled"`
 	ChecksTotal    int  `json:"checks_total"`

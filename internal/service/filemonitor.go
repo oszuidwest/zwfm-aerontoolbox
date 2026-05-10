@@ -60,7 +60,7 @@ type statResult struct {
 // (until the OS returns), instead of one per Run() iteration. Joiners share the
 // original timeout budget measured from when statFn actually started (not from
 // when executeRun was called), so a permanently hanging flight only burns one
-// full StatTimeout — subsequent runs return immediately.
+// full StatTimeout - subsequent runs return immediately.
 //
 // startedNano is an atomic int64 (Unix nanoseconds). It is initialised to the
 // executeRun call time as a safe fallback for joiners that race the goroutine
@@ -97,7 +97,7 @@ type FileMonitorService struct {
 	// Published state: lastCheck + run IDs live under one lock so a Status()
 	// snapshot is internally consistent. Writing lastCheck without also bumping
 	// completedRunID (or vice versa) would let a client observe checks from
-	// run N+1 paired with completed_run_id=N — which would falsify the
+	// run N+1 paired with completed_run_id=N - which would falsify the
 	// documented exact-correlation contract.
 	//
 	// Status().Running comes from runner.IsRunning() (atomic) rather than a
@@ -216,7 +216,7 @@ func (s *FileMonitorService) executeRun() *FileMonitorStatus {
 }
 
 // processAlertStates evaluates check results against alert state under the
-// state lock. It handles the grace run (first run after restart, observe-only —
+// state lock. It handles the grace run (first run after restart, observe-only -
 // only graceRunDone is set; per-path alertState is not touched), active-window
 // alert suppression (IsStale is preserved transparently; only alert-state
 // transitions and notifications are suppressed), and alert/recovery transitions.
@@ -232,7 +232,7 @@ func (s *FileMonitorService) processAlertStates(
 	defer s.stateMu.Unlock()
 
 	if !s.graceRunDone {
-		// Grace run: observe only — don't update alert state or send notifications.
+		// Grace run: observe only - don't update alert state or send notifications.
 		// This avoids false alerts immediately after a restart.
 		s.graceRunDone = true
 		slog.Info("File monitor grace run completed, alerts will be sent from next check")
@@ -242,7 +242,7 @@ func (s *FileMonitorService) processAlertStates(
 	for i, check := range checks {
 		// Outside an active window the result still reflects raw staleness
 		// (transparent in /status) but does not flip alert state, send mail,
-		// or trigger a recovery. Suppressing recovery is essential — without
+		// or trigger a recovery. Suppressing recovery is essential - without
 		// it a midnight refresh would mail "[OK] recovered" for an alert the
 		// operator never received.
 		if !s.windows[check.Path].Active(now) {
@@ -294,7 +294,7 @@ func (s *FileMonitorService) dispatchNotifications(
 // Single-lock read: lastCheck and run IDs are written together under
 // publishedMu by publishCompleted, so a snapshot observed here is internally
 // consistent. Concretely, completed_run_id always names the run that
-// produced the visible Checks — clients can rely on the documented
+// produced the visible Checks - clients can rely on the documented
 // `completed_run_id == myRunID` exact-correlation contract.
 //
 // Running is read from the runner's atomic gate, not a mirrored field, so
@@ -335,7 +335,7 @@ func (s *FileMonitorService) StaleCount() int {
 
 // AlertingCount returns the number of checks currently in alert (InAlert==true)
 // in the most recent run. Stale-but-outside-window checks are excluded by
-// construction — Run() never flips InAlert for them — so this is the right
+// construction - Run() never flips InAlert for them - so this is the right
 // signal for /health degraded. Reads under publishedMu so it pairs
 // consistently with the Checks slice published by the same run.
 func (s *FileMonitorService) AlertingCount() int {
@@ -398,7 +398,7 @@ func (s *FileMonitorService) startNewRun() uint64 {
 // publishCompleted atomically publishes the run's result and bumps
 // completedRunID under a single lock. Pairing lastCheck with completedRunID
 // in one critical section is what makes the polling contract
-// `completed_run_id == myRunID` an exact-correlation guarantee — a Status()
+// `completed_run_id == myRunID` an exact-correlation guarantee - a Status()
 // reader can never see lastCheck from run N+1 alongside completedRunID=N.
 func (s *FileMonitorService) publishCompleted(status *FileMonitorStatus, runID uint64) {
 	s.publishedMu.Lock()
@@ -532,7 +532,7 @@ func (s *FileMonitorService) buildResult(
 			result.ErrorKind = FileCheckErrorKindPermission
 			slog.Warn("File monitor: permission denied", "name", label, "path", check.Path, "error", err)
 		default:
-			// FileExists stays nil — we cannot determine existence.
+			// FileExists stays nil - we cannot determine existence.
 			result.Error = err.Error()
 			result.ErrorKind = FileCheckErrorKindStatError
 			slog.Warn("File monitor: file stat error", "name", label, "path", check.Path, "error", err)

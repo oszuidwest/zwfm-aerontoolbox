@@ -81,14 +81,14 @@ func TestGoChild_DoesNotCheckClosed(t *testing.T) {
 	r := New()
 	r.Close()
 
-	// GoChild has no closed gate — it simply calls wg.Go. Calling it after
+	// GoChild has no closed gate - it simply calls wg.Go. Calling it after
 	// Close is a caller contract violation, but it must not panic.
 	done := make(chan struct{})
 	r.GoChild(func() { close(done) })
 
 	select {
 	case <-done:
-		// Goroutine ran — GoChild did not block or panic.
+		// Goroutine ran - GoChild did not block or panic.
 	case <-time.After(time.Second):
 		t.Fatal("GoChild goroutine did not run")
 	}
@@ -113,7 +113,7 @@ func TestTryGoBackground_ReturnsFalseAfterClose(t *testing.T) {
 }
 
 // TestTryGoBackground_WaitedOnByClose verifies that a goroutine started via
-// TryGoBackground before Close is waited on by Close — the same WaitGroup
+// TryGoBackground before Close is waited on by Close - the same WaitGroup
 // guarantee as GoChild.
 func TestTryGoBackground_WaitedOnByClose(t *testing.T) {
 	r := New()

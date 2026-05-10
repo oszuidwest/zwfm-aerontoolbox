@@ -12,7 +12,7 @@ import (
 // A window whose end is earlier than its start wraps around midnight (e.g.
 // 22:00-06:00 is active from 22:00 until 06:00 the next morning). An
 // unconfigured window (zero value) is always active; this is distinct from a
-// parsed window — equal start and end would otherwise be ambiguous, so it is
+// parsed window - equal start and end would otherwise be ambiguous, so it is
 // rejected at parse time and operators must omit the field for always-active
 // behaviour.
 type TimeWindow struct {
@@ -22,7 +22,7 @@ type TimeWindow struct {
 
 // ParseTimeWindow parses "HH:MM-HH:MM". An empty string returns an
 // unconfigured (always-active) window with no error. Equal start and end
-// minutes are rejected — operators should omit the field instead, since
+// minutes are rejected - operators should omit the field instead, since
 // there is no sensible interpretation of a zero-length window.
 func ParseTimeWindow(s string) (TimeWindow, error) {
 	if s == "" {

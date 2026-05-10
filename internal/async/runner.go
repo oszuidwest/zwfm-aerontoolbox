@@ -16,7 +16,7 @@ import (
 //
 //   - GoChild: secondary work spawned from within an active Go() or Done() body.
 //     The primary operation already holds a WaitGroup slot, so Close() is already
-//     blocking — adding a child is always safe and will be waited on.
+//     blocking - adding a child is always safe and will be waited on.
 //
 //   - TryGoBackground: independent background dispatch from outside any active
 //     primary operation (e.g. an HTTP handler, a scheduler job). Returns false
@@ -147,7 +147,7 @@ func (r *Runner) Go(fn func()) {
 //
 // Use this for follow-up work spawned from within an active Go() or Done()
 // body (e.g. async S3 upload after a backup completes). Because the primary
-// operation already holds a WaitGroup slot, Close() is already blocked —
+// operation already holds a WaitGroup slot, Close() is already blocked -
 // adding a child here is always safe and will be waited on.
 //
 // Do NOT use this for independent dispatches from outside a primary operation;
@@ -156,7 +156,7 @@ func (r *Runner) GoChild(fn func()) {
 	r.wg.Go(fn)
 }
 
-// TryGoBackground starts a background goroutine as an independent dispatch —
+// TryGoBackground starts a background goroutine as an independent dispatch -
 // that is, from outside any currently active Go() or Done() body.
 // Returns false and does nothing if Close() has already been called, allowing
 // callers to log the drop explicitly.
