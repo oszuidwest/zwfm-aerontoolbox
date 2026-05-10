@@ -1,7 +1,7 @@
 ---
 # Thin shim — delegates to oszuidwest/.github-templates go-release.yml@v2.
 # Docker publishing is composed via a second job that calls
-# docker-publish.yml@v1 directly, gated on the release outputs.
+# docker-publish.yml@v2 directly, gated on the release outputs.
 # The `body` job exists only to compute the v-stripped version for the
 # `docker pull` line in release notes (GitHub Actions expressions can't slice).
 # `pre-release` is project-specific: gates everything on the existing
@@ -74,7 +74,7 @@ jobs:
   docker:
     needs: release
     if: needs.release.outputs.is_release == 'true'
-    uses: oszuidwest/.github-templates/.github/workflows/docker-publish.yml@v1
+    uses: oszuidwest/.github-templates/.github/workflows/docker-publish.yml@v2
     with:
       version: ${{ needs.release.outputs.version }}
       image-labels: |
