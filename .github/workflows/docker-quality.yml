@@ -1,0 +1,105 @@
+---
+# Docker Quality Workflow Template
+# Source: oszuidwest/.github-templates
+#
+# This workflow lints Dockerfiles, validates YAML, and checks Docker Compose files.
+# Copy to: .github/workflows/docker-quality.yml
+#
+# Required config files:
+#   - .hadolint.yaml (at repo root)
+#
+# Customization:
+#   - DOCKERFILE_PATH: Change if Dockerfile is not at root (e.g., "docker/Dockerfile")
+#   - Adjust YAML lint rules in the inline config as needed
+
+name: Docker Quality
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  DOCKERFILE_PATH: "Dockerfile"
+
+jobs:
+  lint:
+    name: Lint Docker Files
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      - name: Check for Dockerfile
+        id: check_dockerfile
+        run: |
+          if [ -f "${{ env.DOCKERFILE_PATH }}" ]; then
+            echo "has_dockerfile=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_dockerfile=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Configuration in .hadolint.yaml - do NOT duplicate ignore rules here
+      - name: Hadolint
+        if: steps.check_dockerfile.outputs.has_dockerfile == 'true'
+        uses: hadolint/hadolint-action@v3.3.0
+        with:
+          dockerfile: ${{ env.DOCKERFILE_PATH }}
+
+      - name: YAML Lint
+        uses: ibiqlik/action-yamllint@v3.1.1
+        with:
+          config_data: |
+            extends: default
+            rules:
+              line-length:
+                max: 120
+                level: warning
+              comments:
+                min-spaces-from-content: 1
+              truthy:
+                allowed-values: ['true', 'false', 'on', 'off', 'yes', 'no']
+              document-start:
+                present: true
+
+      - name: Check for Docker Compose
+        id: check_compose
+        run: |
+          COMPOSE_FILES=""
+          for f in docker-compose.yml docker-compose.yaml compose.yml compose.yaml; do
+            if [ -f "$f" ]; then
+              COMPOSE_FILES="$COMPOSE_FILES $f"
+            fi
+          done
+          if [ -n "$COMPOSE_FILES" ]; then
+            echo "has_compose=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_compose=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Docker Compose Validation
+        if: steps.check_compose.outputs.has_compose == 'true'
+        run: |
+          if [ ! -f ".env" ]; then
+            touch .env
+          fi
+          if ! OUTPUT=$(docker compose config --quiet 2>&1); then
+            # Missing env vars = warning, syntax errors = fail
+            if echo "$OUTPUT" | grep -qi "variable is not set"; then
+              echo "::warning::Docker Compose validation requires environment variables: $OUTPUT"
+            else
+              echo "::error::Docker Compose validation failed: $OUTPUT"
+              exit 1
+            fi
+          fi

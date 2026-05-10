@@ -1,0 +1,35 @@
+---
+# Hadolint Configuration
+# Source: oszuidwest/.github-templates
+
+failure-threshold: warning
+
+ignored:
+  # DL3008: Pin versions in apt-get install
+  # DL3018: Pin versions in apk add
+  # Often impractical for images that should receive security updates
+  - DL3008
+  - DL3018
+
+  # DL3009: Delete apt-get lists after installing
+  # Usually handled in multi-stage builds or combined RUN statements
+  - DL3009
+
+  # SC3009: Brace expansion is undefined in POSIX sh
+  # Alpine uses busybox ash which supports brace expansion
+  - SC3009
+
+trustedRegistries:
+  - docker.io
+  - ghcr.io
+  - gcr.io
+  - quay.io
+
+override:
+  warning:
+    # Warn instead of error for missing version pins in pip
+    - DL3013
+
+  info:
+    # Info level for MAINTAINER deprecation (use LABEL instead)
+    - DL4000
