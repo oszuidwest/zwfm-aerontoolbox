@@ -38,7 +38,7 @@ jobs:
             echo "has_dockerfile=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # Ignore rules live in .hadolint.yaml — do not duplicate here.
+      # Ignore rules live in .hadolint.yaml - do not duplicate here.
       - name: Hadolint
         if: steps.check_dockerfile.outputs.has_dockerfile == 'true'
         uses: hadolint/hadolint-action@v3.3.0

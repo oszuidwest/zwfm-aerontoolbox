@@ -190,7 +190,7 @@ func TestFileMonitorValidation_ActiveWindow(t *testing.T) {
 }
 
 func TestFileMonitorValidation_ActiveWindow_IncludesIndex(t *testing.T) {
-	// Multiple bad windows must produce distinct, indexed error labels —
+	// Multiple bad windows must produce distinct, indexed error labels -
 	// otherwise an operator with two typos sees the same "active_window"
 	// key twice and cannot tell which checks[] entry needs editing. The
 	// label is the only way to locate the bad row when the parser message

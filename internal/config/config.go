@@ -118,7 +118,7 @@ type FileMonitorConfig struct {
 // FileMonitorCheckConfig defines a single file to monitor for staleness.
 //
 // ActiveWindow is validated by validateFileMonitorConfig (struct-level) so the
-// parser's specific reason — equal start/end, range, format — survives into
+// parser's specific reason - equal start/end, range, format - survives into
 // the error message instead of collapsing to a generic tag string.
 type FileMonitorCheckConfig struct {
 	Name           string `json:"name"`
@@ -412,7 +412,7 @@ func validateFileMonitorConfig(sl validator.StructLevel) {
 	// Encode the slice index in the reported field name (e.g.
 	// "checks[1].active_window") so multiple bad windows produce distinct,
 	// locatable error labels. ReportError otherwise registers at the parent
-	// struct level — every bad check would collapse onto a single
+	// struct level - every bad check would collapse onto a single
 	// "filemonitor.active_window" key, defeating the point of telling the
 	// operator which entry to fix.
 	for i, c := range fm.Checks {
