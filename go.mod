@@ -7,7 +7,7 @@ require (
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/lib/pq v1.12.3
-	golang.org/x/image v0.39.0
+	golang.org/x/image v0.40.0
 )
 
 require (
