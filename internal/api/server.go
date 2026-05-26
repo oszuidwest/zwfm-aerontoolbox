@@ -52,7 +52,6 @@ func (s *Server) router() http.Handler {
 
 	router.Use(middleware.RequestID)
 	router.Use(middleware.Recoverer)
-	router.Use(middleware.ClientIPFromHeader("Cf-Connecting-Ip"))
 	router.Use(middleware.Compress(5))
 
 	router.NotFound(func(w http.ResponseWriter, r *http.Request) {
@@ -146,15 +145,12 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		apiKey := r.Header.Get("X-API-Key")
 
 		if !s.isValidAPIKey(apiKey) {
-			remoteAddr := middleware.GetClientIP(r.Context())
-			if remoteAddr == "" {
-				remoteAddr = r.RemoteAddr
-			}
-			slog.Warn("Authentication failed", //nolint:gosec // G706: logged as structured slog value for security auditing
+			//nolint:gosec // G706: structured auth-failure audit log; remote_addr is the direct peer.
+			slog.Warn("Authentication failed",
 				"reason", "invalid_api_key",
 				"path", r.URL.Path,
 				"method", r.Method,
-				"remote_addr", remoteAddr)
+				"remote_addr", r.RemoteAddr)
 
 			respondError(w, http.StatusUnauthorized, "Unauthorized: invalid or missing API key")
 			return
