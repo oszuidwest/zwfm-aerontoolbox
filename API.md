@@ -65,7 +65,7 @@ De Aeron Toolbox API biedt RESTful-endpoints voor het Aeron-radioautomatiserings
 
 ## Authenticatie
 
-Wanneer authenticatie is ingeschakeld in de configuratie, vereisen alle endpoints (behalve `/health`) een API-sleutel.
+Wanneer authenticatie is ingeschakeld in de configuratie, vereisen alle endpoints (behalve `GET /api/health`) een API-sleutel.
 
 **Header:** `X-API-Key: jouw-api-sleutel`
 
@@ -1577,7 +1577,7 @@ Het gedrag van de API kan worden geconfigureerd via `config.json`:
   - `path`: Absoluut pad naar het bestand.
   - `max_age_minutes`: Maximaal toegestane leeftijd in minuten (minimaal 1).
   - `stat_timeout_seconds`: Maximale tijd in seconden voor `os.Stat` (standaard 5; `0` of weglaten = standaard). Beschermt tegen vastgelopen NFS- of SMB-mounts.
-  - `active_window`: Optioneel tijdvenster `"HH:MM-HH:MM"` waarin alerts en `/health degraded` actief zijn. Buiten dit venster blijft `is_stale` zichtbaar in `/status`, maar wordt er geen alert- of herstelmail verstuurd en blijft `/health` gezond. Een eindtijd vóór de starttijd betekent dat het venster over middernacht heen loopt, bijvoorbeeld `"22:00-06:00"`. Gelijke start- en eindtijd zijn ongeldig; laat het veld weg voor altijd actief.
+  - `active_window`: Optioneel tijdvenster `"HH:MM-HH:MM"` waarin alerts en `GET /api/health`-degradatie actief zijn. Buiten dit venster blijft `is_stale` zichtbaar in `GET /api/file-monitor/status`, maar wordt er geen alert- of herstelmail verstuurd en blijft `GET /api/health` gezond. Een eindtijd vóór de starttijd betekent dat het venster over middernacht heen loopt, bijvoorbeeld `"22:00-06:00"`. Gelijke start- en eindtijd zijn ongeldig; laat het veld weg voor altijd actief.
 
 Het controle-interval staat los van `max_age_minutes` en wordt geconfigureerd via `interval_seconds` (standaard 60 s).
 
