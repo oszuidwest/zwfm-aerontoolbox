@@ -30,7 +30,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
     -o zwfm-aerontoolbox .
 
 # Runtime stage
-FROM alpine:3.23
+FROM alpine:3.24
 
 LABEL org.opencontainers.image.source="https://github.com/oszuidwest/zwfm-aerontoolbox"
 LABEL org.opencontainers.image.description="Headless REST API toolbox for the Aeron radio automation system"
