@@ -7,14 +7,14 @@ require (
 	github.com/go-chi/chi/v5 v5.3.0
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/lib/pq v1.12.3
-	golang.org/x/image v0.42.0
+	golang.org/x/image v0.43.0
 )
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.42.0
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.24
-	github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager v0.2.10
-	github.com/aws/aws-sdk-go-v2/service/s3 v1.103.3
+	github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager v0.2.11
+	github.com/aws/aws-sdk-go-v2/service/s3 v1.104.0
 	github.com/go-playground/validator/v10 v10.30.3
 	github.com/netresearch/go-cron v0.15.0
 	golang.org/x/oauth2 v0.36.0
