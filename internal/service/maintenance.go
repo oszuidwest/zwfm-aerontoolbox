@@ -221,11 +221,11 @@ func (s *MaintenanceService) getConnectionUsage(ctx context.Context) (active, ma
 func (s *MaintenanceService) getLongRunningQueries(ctx context.Context) ([]types.LongRunningQuery, error) {
 	threshold := s.config.Maintenance.GetLongQueryThresholdSeconds()
 
-	query := `
+	query := fmt.Sprintf(`
 		SELECT
 			pid,
 			(now() - query_start)::text AS duration,
-			LEFT(query, 200) AS query,
+			%s AS query,
 			state
 		FROM pg_stat_activity
 		WHERE state != 'idle'
@@ -234,7 +234,7 @@ func (s *MaintenanceService) getLongRunningQueries(ctx context.Context) ([]types
 			AND datname = current_database()
 			AND pid != pg_backend_pid()
 		ORDER BY query_start ASC
-	`
+	`, longRunningQueryTextExpr(s.config.Maintenance.ExposeLongRunningQueryText))
 
 	var queries []types.LongRunningQuery
 	if err := s.repo.DB().SelectContext(ctx, &queries, query, threshold); err != nil {
@@ -242,6 +242,13 @@ func (s *MaintenanceService) getLongRunningQueries(ctx context.Context) ([]types
 	}
 
 	return queries, nil
+}
+
+func longRunningQueryTextExpr(expose bool) string {
+	if expose {
+		return "LEFT(query, 200)"
+	}
+	return "''"
 }
 
 // getTableHealth retrieves maintenance statistics for all user tables in schema.

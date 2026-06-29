@@ -670,6 +670,7 @@ De health check kan automatisch worden uitgevoerd via de ingebouwde scheduler. B
   "dead_tuple_threshold": 10000,
   "connection_usage_threshold_pct": 80,
   "long_query_threshold_seconds": 10,
+  "expose_long_running_query_text": false,
   "scheduler": {
     "enabled": true,
     "schedule": "0 4 * * 0"
@@ -682,6 +683,7 @@ De health check kan automatisch worden uitgevoerd via de ingebouwde scheduler. B
 - `dead_tuple_threshold`: Absoluut aantal dead tuples waarboven een waarschuwing wordt gegeven
 - `connection_usage_threshold_pct`: Percentage connectiegebruik waarboven een waarschuwing wordt gegeven (standaard: 80)
 - `long_query_threshold_seconds`: Drempel in seconden waarboven een query als langlopend wordt beschouwd (standaard: 10)
+- `expose_long_running_query_text`: Toon SQL-fragmenten voor langlopende queries in de authenticated maintenance response (standaard: `false`)
 - `scheduler.enabled`: Schakel automatische health checks in/uit
 - `scheduler.schedule`: Cron-expressie (zie backup-sectie voor voorbeelden)
 
