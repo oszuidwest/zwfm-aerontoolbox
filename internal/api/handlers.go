@@ -3,6 +3,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -296,8 +297,15 @@ func (s *Server) handleImageUpload(entityType types.EntityType) http.HandlerFunc
 			return
 		}
 
+		r.Body = http.MaxBytesReader(w, r.Body, s.service.Config().API.GetMaxUploadBodyBytes())
+
 		var req ImageUploadRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			var maxBytesErr *http.MaxBytesError
+			if errors.As(err, &maxBytesErr) {
+				respondError(w, http.StatusRequestEntityTooLarge, "Request body too large")
+				return
+			}
 			respondError(w, http.StatusBadRequest, "Invalid request content")
 			return
 		}

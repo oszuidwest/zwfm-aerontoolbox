@@ -21,7 +21,11 @@
   "api": {
     "enabled": false,
     "keys": [],
-    "request_timeout_seconds": 30
+    "request_timeout_seconds": 30,
+    "read_timeout_seconds": 30,
+    "write_timeout_seconds": 60,
+    "idle_timeout_seconds": 120,
+    "max_upload_body_bytes": 73400320
   },
   "maintenance": {
     "bloat_threshold": 10.0,

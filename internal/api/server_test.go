@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/config"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/service"
@@ -89,5 +91,71 @@ func TestFileMonitorRoutesEnabledPassThrough(t *testing.T) {
 	}
 	if !got.Success {
 		t.Fatalf("success = false, want true; error: %s", got.Error)
+	}
+}
+
+func TestHTTPServerUsesConfiguredTimeouts(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.API.ReadTimeoutSeconds = 12
+	cfg.API.WriteTimeoutSeconds = 34
+	cfg.API.IdleTimeoutSeconds = 56
+
+	svc, err := service.New(nil, cfg)
+	if err != nil {
+		t.Fatalf("service.New: %v", err)
+	}
+	t.Cleanup(svc.Close)
+
+	server := New(svc, "test").newHTTPServer("8080", http.NotFoundHandler())
+
+	if got, want := server.ReadHeaderTimeout, 10*time.Second; got != want {
+		t.Fatalf("ReadHeaderTimeout = %s, want %s", got, want)
+	}
+	if got, want := server.ReadTimeout, 12*time.Second; got != want {
+		t.Fatalf("ReadTimeout = %s, want %s", got, want)
+	}
+	if got, want := server.WriteTimeout, 34*time.Second; got != want {
+		t.Fatalf("WriteTimeout = %s, want %s", got, want)
+	}
+	if got, want := server.IdleTimeout, 56*time.Second; got != want {
+		t.Fatalf("IdleTimeout = %s, want %s", got, want)
+	}
+}
+
+func TestImageUploadRejectsOversizedRequestBody(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.API.MaxUploadBodyBytes = 8
+
+	svc, err := service.New(nil, cfg)
+	if err != nil {
+		t.Fatalf("service.New: %v", err)
+	}
+	t.Cleanup(svc.Close)
+
+	handler := New(svc, "test").router()
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/artists/123e4567-e89b-42d3-a456-426614174000/image",
+		strings.NewReader(`{"image":"this request is too large"}`),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status code = %d, want %d; body: %s",
+			rec.Code, http.StatusRequestEntityTooLarge, rec.Body.String())
+	}
+
+	var got Response
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got.Success {
+		t.Fatal("success = true, want false")
+	}
+	if got.Error != "Request body too large" {
+		t.Fatalf("error = %q, want %q", got.Error, "Request body too large")
 	}
 }

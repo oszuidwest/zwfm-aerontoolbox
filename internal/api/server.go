@@ -32,14 +32,21 @@ func New(svc *service.AeronService, version string) *Server {
 // Start serves the API on port until shutdown or listener failure.
 func (s *Server) Start(port string) error {
 	router := s.router()
-
-	s.server = &http.Server{
-		Addr:              ":" + port,
-		Handler:           router,
-		ReadHeaderTimeout: 10 * time.Second,
-	}
+	s.server = s.newHTTPServer(port, router)
 
 	return s.server.ListenAndServe()
+}
+
+func (s *Server) newHTTPServer(port string, handler http.Handler) *http.Server {
+	apiCfg := s.service.Config().API
+	return &http.Server{
+		Addr:              ":" + port,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       apiCfg.GetReadTimeout(),
+		WriteTimeout:      apiCfg.GetWriteTimeout(),
+		IdleTimeout:       apiCfg.GetIdleTimeout(),
+	}
 }
 
 // router builds the public health route and authenticated API surface.

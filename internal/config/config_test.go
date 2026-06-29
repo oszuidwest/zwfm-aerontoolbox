@@ -97,6 +97,52 @@ func TestInterval_ZeroFallsBackToDefault(t *testing.T) {
 	}
 }
 
+func TestAPIConfigDefaults(t *testing.T) {
+	cfg := &APIConfig{}
+
+	if got, want := cfg.GetRequestTimeout(), 30*time.Second; got != want {
+		t.Errorf("GetRequestTimeout() = %s, want %s", got, want)
+	}
+	if got, want := cfg.GetReadTimeout(), 30*time.Second; got != want {
+		t.Errorf("GetReadTimeout() = %s, want %s", got, want)
+	}
+	if got, want := cfg.GetWriteTimeout(), 60*time.Second; got != want {
+		t.Errorf("GetWriteTimeout() = %s, want %s", got, want)
+	}
+	if got, want := cfg.GetIdleTimeout(), 120*time.Second; got != want {
+		t.Errorf("GetIdleTimeout() = %s, want %s", got, want)
+	}
+	if got, want := cfg.GetMaxUploadBodyBytes(), int64(70*1024*1024); got != want {
+		t.Errorf("GetMaxUploadBodyBytes() = %d, want %d", got, want)
+	}
+}
+
+func TestAPIConfigRespectsConfiguredValues(t *testing.T) {
+	cfg := &APIConfig{
+		RequestTimeoutSeconds: 11,
+		ReadTimeoutSeconds:    12,
+		WriteTimeoutSeconds:   13,
+		IdleTimeoutSeconds:    14,
+		MaxUploadBodyBytes:    15,
+	}
+
+	if got, want := cfg.GetRequestTimeout(), 11*time.Second; got != want {
+		t.Errorf("GetRequestTimeout() = %s, want %s", got, want)
+	}
+	if got, want := cfg.GetReadTimeout(), 12*time.Second; got != want {
+		t.Errorf("GetReadTimeout() = %s, want %s", got, want)
+	}
+	if got, want := cfg.GetWriteTimeout(), 13*time.Second; got != want {
+		t.Errorf("GetWriteTimeout() = %s, want %s", got, want)
+	}
+	if got, want := cfg.GetIdleTimeout(), 14*time.Second; got != want {
+		t.Errorf("GetIdleTimeout() = %s, want %s", got, want)
+	}
+	if got, want := cfg.GetMaxUploadBodyBytes(), int64(15); got != want {
+		t.Errorf("GetMaxUploadBodyBytes() = %d, want %d", got, want)
+	}
+}
+
 func TestFileMonitorValidation_DuplicatePaths(t *testing.T) {
 	cfg := minimalConfig()
 	cfg.FileMonitor.Enabled = true
