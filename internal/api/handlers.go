@@ -162,20 +162,23 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	resp.Status = overallHealthStatus(dbConnected, notifyExpiresSoon, fmAlerting, mediaProblems)
+	resp.Status = overallHealthStatus(dbConnected, notifyExpiresSoon || fmAlerting > 0 || mediaProblems > 0)
 	respondJSON(w, http.StatusOK, resp)
 }
 
-// overallHealthStatus returns the highest-severity status given component states.
-// Severity order: "unhealthy" > "degraded" > "healthy".
-func overallHealthStatus(dbConnected, notifyExpiresSoon bool, fmAlerting, mediaProblems int) string {
-	if !dbConnected {
+// overallHealthStatus returns the highest-severity status given the database
+// connectivity and whether any component reported a degraded signal. Callers OR
+// their per-component signals into degraded, so adding a component never changes
+// this signature. Severity order: "unhealthy" > "degraded" > "healthy".
+func overallHealthStatus(dbConnected, degraded bool) string {
+	switch {
+	case !dbConnected:
 		return "unhealthy"
-	}
-	if notifyExpiresSoon || fmAlerting > 0 || mediaProblems > 0 {
+	case degraded:
 		return "degraded"
+	default:
+		return "healthy"
 	}
-	return "healthy"
 }
 
 func (s *Server) handleStats(entityType types.EntityType) http.HandlerFunc {

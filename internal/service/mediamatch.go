@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/oszuidwest/zwfm-aerontoolbox/internal/util"
 )
 
 // MediaFileStatus classifies the on-disk outcome for a single playlist item.
@@ -100,8 +102,7 @@ func baseName(p string) string {
 // stem returns a filename with its extension removed. Names without an
 // extension are returned unchanged.
 func stem(name string) string {
-	ext := filepath.Ext(name)
-	return name[:len(name)-len(ext)]
+	return strings.TrimSuffix(name, filepath.Ext(name))
 }
 
 // foldKey lowercases s when matching is case-insensitive, so lookups ignore the
@@ -248,21 +249,10 @@ func (in *matchInput) dbReference() string {
 	case in.AudioName != "":
 		return "name: " + in.AudioName
 	case in.Artist != "" || in.TrackTitle != "":
-		return "metadata: " + metadataLabel(in.Artist, in.TrackTitle)
+		return "metadata: " + util.FormatArtistTitle(in.Artist, in.TrackTitle)
 	default:
 		return ""
 	}
-}
-
-// metadataLabel renders the "artist - title" (or bare title) label.
-func metadataLabel(artist, title string) string {
-	if artist != "" && title != "" {
-		return artist + " - " + title
-	}
-	if title != "" {
-		return title
-	}
-	return artist
 }
 
 // winRefs returns the distinct full Windows-path references for an item.

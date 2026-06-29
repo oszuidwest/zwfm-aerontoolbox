@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/oszuidwest/zwfm-aerontoolbox/internal/util"
 )
 
 // MediaCheckProblem describes a single problematic playlist item (a file that is
@@ -86,16 +88,11 @@ func formatMediaCheckRecovery(r *MediaCheckResult) (subject, body string) {
 // problemLabel renders a short "artist - title" label, falling back to the
 // reference when metadata is absent.
 func problemLabel(p *MediaCheckProblem) string {
-	switch {
-	case p.Artist != "" && p.TrackTitle != "":
-		return p.Artist + " - " + p.TrackTitle
-	case p.TrackTitle != "":
-		return p.TrackTitle
-	case p.Artist != "":
-		return p.Artist
-	case p.DBReference != "":
-		return p.DBReference
-	default:
-		return "unknown item"
+	if label := util.FormatArtistTitle(p.Artist, p.TrackTitle); label != "" {
+		return label
 	}
+	if p.DBReference != "" {
+		return p.DBReference
+	}
+	return "unknown item"
 }

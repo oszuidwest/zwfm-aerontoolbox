@@ -2,6 +2,19 @@ package util
 
 import "fmt"
 
+// FormatArtistTitle renders an "artist - title" label, falling back to whichever
+// of the two is present (title preferred) and to "" when both are empty.
+func FormatArtistTitle(artist, title string) string {
+	switch {
+	case artist != "" && title != "":
+		return artist + " - " + title
+	case title != "":
+		return title
+	default:
+		return artist
+	}
+}
+
 // FormatBytes converts bytes to a human-readable string with binary prefixes.
 func FormatBytes(bytes int64) string {
 	const (

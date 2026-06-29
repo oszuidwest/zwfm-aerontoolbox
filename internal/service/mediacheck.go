@@ -197,10 +197,11 @@ func (s *MediaFileCheckService) executeRun(ctx context.Context, opts *database.M
 			return nil
 		})
 	}
-	if err := g.Wait(); err != nil {
-		result.Error = err.Error()
-	}
-	if err := ctx.Err(); err != nil && result.Error == "" {
+	// Workers embed their verdict in results and never return an error, so Wait
+	// only blocks for completion. A run-level failure surfaces as a context error
+	// (timeout/cancel) or an index-build error, in that precedence.
+	_ = g.Wait()
+	if err := ctx.Err(); err != nil {
 		result.Error = err.Error()
 	}
 	if err := matcher.indexErr(); err != nil && result.Error == "" {
