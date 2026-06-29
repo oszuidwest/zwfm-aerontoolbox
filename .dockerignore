@@ -5,9 +5,8 @@
 # GitHub files
 .github/
 
-# Go build cache
-/aeron-imgman
-*.exe
+# Go build artifacts
+/zwfm-aerontoolbox
 
 # Test files
 *_test.go
@@ -17,9 +16,10 @@ tests/
 *.md
 LICENSE
 
-# Configuration files (will be mounted)
-config.yaml
-*.yaml
+# Local configuration files (will be mounted)
+config.json
+config.*.json
+!config.example.json
 
 # Temporary files
 *.tmp
