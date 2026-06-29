@@ -56,8 +56,7 @@ RUN mkdir -p /backups && chown aeron:aeron /backups
 # Copy binary from builder
 COPY --from=builder /app/zwfm-aerontoolbox /app/zwfm-aerontoolbox
 
-# Copy config file (if exists)
-COPY --chown=aeron:aeron config.json* /app/
+# Runtime config is mounted at /app/config.json; never bake local config into the image.
 
 # Change ownership
 RUN chown -R aeron:aeron /app
