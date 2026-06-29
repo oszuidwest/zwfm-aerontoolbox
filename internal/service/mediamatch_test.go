@@ -2,8 +2,11 @@ package service
 
 import (
 	"context"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -265,6 +268,40 @@ func TestMatch_StatErrorWinsOverIndexFallback(t *testing.T) {
 	}
 }
 
+func TestMatch_StatTimeoutUsesSingleFlight(t *testing.T) {
+	prev := mediaRootStat
+	block := make(chan struct{})
+	t.Cleanup(func() { mediaRootStat = prev })
+	t.Cleanup(func() { close(block) })
+
+	var starts atomic.Int32
+	mediaRootStat = func(_ *os.Root, _ string) (os.FileInfo, error) {
+		starts.Add(1)
+		<-block
+		return nil, os.ErrNotExist
+	}
+
+	svc := &MediaFileCheckService{
+		statInflight: make(map[string]*statInFlight),
+	}
+	m := buildTestMatcher(t, map[string]string{"O:": t.TempDir()}, nil, true)
+	m.statTimeout = 10 * time.Millisecond
+	m.startStatFlight = svc.startOrJoinMediaStatFlight
+
+	out := m.match(&matchInput{FilePath: `O:\Audio\frozen.wav`})
+	if out.Status != MediaStatusStatError || !strings.Contains(out.Error, "stat timeout") {
+		t.Fatalf("first status=%q error=%q, want stat timeout", out.Status, out.Error)
+	}
+
+	out = m.match(&matchInput{FilePath: `O:\Audio\frozen.wav`})
+	if out.Status != MediaStatusStatError || !strings.Contains(out.Error, "stat timeout") {
+		t.Fatalf("second status=%q error=%q, want stat timeout", out.Status, out.Error)
+	}
+	if got := starts.Load(); got != 1 {
+		t.Fatalf("mediaRootStat starts = %d, want 1 shared in-flight stat", got)
+	}
+}
+
 func TestMatch_DriveMappingPrefersExactOverIndex(t *testing.T) {
 	// A correct exact path must win even when an index also has the basename.
 	driveDir := t.TempDir()
@@ -285,6 +322,46 @@ func TestBuildFileIndexRecordsWalkError(t *testing.T) {
 
 	if err := idx.err(); err == nil {
 		t.Fatal("expected index error for missing root, got nil")
+	}
+}
+
+func TestGetIndexTimeoutUsesSingleFlight(t *testing.T) {
+	prev := mediaWalkDir
+	block := make(chan struct{})
+	t.Cleanup(func() { mediaWalkDir = prev })
+	t.Cleanup(func() { close(block) })
+
+	var starts atomic.Int32
+	mediaWalkDir = func(_ string, _ fs.WalkDirFunc) error {
+		starts.Add(1)
+		<-block
+		return nil
+	}
+
+	svc := &MediaFileCheckService{
+		indexInflight: make(map[string]*indexInFlight),
+	}
+	newMatcher := func() *mediaMatcher {
+		return &mediaMatcher{
+			searchDirs:       []string{"/frozen-share"},
+			caseInsensitive:  true,
+			indexTimeout:     10 * time.Millisecond,
+			ctx:              context.Background(),
+			startIndexFlight: svc.startOrJoinMediaIndexFlight,
+		}
+	}
+
+	idx := newMatcher().getIndex()
+	if err := idx.err(); err == nil || !strings.Contains(err.Error(), "media file index timeout") {
+		t.Fatalf("first index error = %v, want timeout", err)
+	}
+
+	idx = newMatcher().getIndex()
+	if err := idx.err(); err == nil || !strings.Contains(err.Error(), "media file index timeout") {
+		t.Fatalf("second index error = %v, want timeout", err)
+	}
+	if got := starts.Load(); got != 1 {
+		t.Fatalf("mediaWalkDir starts = %d, want 1 shared in-flight index build", got)
 	}
 }
 

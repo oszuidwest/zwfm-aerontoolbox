@@ -99,6 +99,12 @@ type MediaFileCheckService struct {
 
 	runner *async.Runner
 
+	statInflightMu sync.Mutex
+	statInflight   map[string]*statInFlight
+
+	indexInflightMu sync.Mutex
+	indexInflight   map[string]*indexInFlight
+
 	publishedMu    sync.RWMutex
 	lastResult     *MediaCheckResult
 	lastScheduled  *MediaCheckResult
@@ -112,10 +118,12 @@ func newMediaFileCheckService(
 	repo *database.Repository, cfg *config.Config, notifySvc *notify.NotificationService,
 ) *MediaFileCheckService {
 	return &MediaFileCheckService{
-		repo:   repo,
-		config: cfg,
-		notify: notifySvc,
-		runner: async.New(),
+		repo:          repo,
+		config:        cfg,
+		notify:        notifySvc,
+		runner:        async.New(),
+		statInflight:  make(map[string]*statInFlight),
+		indexInflight: make(map[string]*indexInFlight),
 	}
 }
 
@@ -242,11 +250,14 @@ func (s *MediaFileCheckService) buildMatcher(ctx context.Context) (matcher *medi
 	}
 
 	matcher = &mediaMatcher{
-		driveRoots:      driveRoots,
-		searchDirs:      mfc.SearchDirs,
-		caseInsensitive: mfc.IsCaseInsensitive(),
-		statTimeout:     mfc.StatTimeout(),
-		ctx:             ctx,
+		driveRoots:       driveRoots,
+		searchDirs:       mfc.SearchDirs,
+		caseInsensitive:  mfc.IsCaseInsensitive(),
+		statTimeout:      mfc.StatTimeout(),
+		indexTimeout:     mediaCheckRunTimeout,
+		ctx:              ctx,
+		startStatFlight:  s.startOrJoinMediaStatFlight,
+		startIndexFlight: s.startOrJoinMediaIndexFlight,
 	}
 
 	cleanup = func() {
@@ -259,6 +270,75 @@ func (s *MediaFileCheckService) buildMatcher(ctx context.Context) (matcher *medi
 		}
 	}
 	return matcher, cleanup
+}
+
+func (s *MediaFileCheckService) startOrJoinMediaStatFlight(
+	key string,
+	now time.Time,
+	statFn func() (os.FileInfo, error),
+) (*statInFlight, bool) {
+	s.statInflightMu.Lock()
+	defer s.statInflightMu.Unlock()
+
+	if s.statInflight == nil {
+		s.statInflight = make(map[string]*statInFlight)
+	}
+	if existing, ok := s.statInflight[key]; ok {
+		return existing, false
+	}
+
+	flight := &statInFlight{done: make(chan struct{})}
+	flight.startedNano.Store(now.UnixNano())
+	s.statInflight[key] = flight
+
+	go func() {
+		flight.startedNano.Store(time.Now().UnixNano())
+		info, err := statFn()
+		flight.result = statResult{info: info, err: err}
+		close(flight.done)
+
+		s.statInflightMu.Lock()
+		if s.statInflight[key] == flight {
+			delete(s.statInflight, key)
+		}
+		s.statInflightMu.Unlock()
+	}()
+
+	return flight, true
+}
+
+func (s *MediaFileCheckService) startOrJoinMediaIndexFlight(
+	key string,
+	now time.Time,
+	buildFn func() *fileIndex,
+) (*indexInFlight, bool) {
+	s.indexInflightMu.Lock()
+	defer s.indexInflightMu.Unlock()
+
+	if s.indexInflight == nil {
+		s.indexInflight = make(map[string]*indexInFlight)
+	}
+	if existing, ok := s.indexInflight[key]; ok {
+		return existing, false
+	}
+
+	flight := &indexInFlight{done: make(chan struct{})}
+	flight.startedNano.Store(now.UnixNano())
+	s.indexInflight[key] = flight
+
+	go func() {
+		flight.startedNano.Store(time.Now().UnixNano())
+		flight.index = buildFn()
+		close(flight.done)
+
+		s.indexInflightMu.Lock()
+		if s.indexInflight[key] == flight {
+			delete(s.indexInflight, key)
+		}
+		s.indexInflightMu.Unlock()
+	}()
+
+	return flight, true
 }
 
 // Status returns a consistent snapshot of run-state plus the most recent result.
