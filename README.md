@@ -72,6 +72,7 @@ Kopieer [`config.example.json`](config.example.json) naar `config.json`. De bela
 | `file_monitor` | Signaleert verouderde of ontbrekende bestanden op schijf |
 | `media_file_check` | Controleert database-gestuurd of playlist-audio op schijf staat (exacte `drive_mounts` + `search_dirs` als fallback) |
 | `notifications` | E-mailmeldingen via Microsoft Graph API |
+| `metrics` | Optionele Prometheus-compatible metrics-endpoint |
 | `log` | Logniveau (`debug`, `info`, `warn`, `error`) en formaat (`text`, `json`) |
 
 ### Backupfunctionaliteit
@@ -130,11 +131,44 @@ De applicatie stuurt:
 
 Test de configuratie via `POST /api/notifications/test-email`.
 
+### Metrics
+
+Prometheus-compatible metrics staan standaard uit. Zet ze expliciet aan wanneer
+de endpoint bereikbaar mag zijn voor je monitoring-netwerk:
+
+```json
+"metrics": {
+  "enabled": true,
+  "path": "/metrics"
+}
+```
+
+Voorbeeld scrape-configuratie:
+
+```yaml
+scrape_configs:
+  - job_name: "aeron-toolbox"
+    metrics_path: "/metrics"
+    static_configs:
+      - targets: ["localhost:8080"]
+```
+
+De endpoint bevat geen secrets, bestandsnamen of ruwe foutmeldingen. Bruikbare
+alerts zijn bijvoorbeeld:
+- `aeron_toolbox_database_connected == 0`
+- `aeron_toolbox_backup_enabled == 1 and aeron_toolbox_backup_last_completed == 1 and aeron_toolbox_backup_last_success == 0`
+- `aeron_toolbox_file_monitor_checks_alerting > 0`
+- `aeron_toolbox_media_file_check_problems > 0`
+- `aeron_toolbox_notifications_last_error == 1`
+
 ## Voorbeelden
 
 ```bash
 # Health check
 curl http://localhost:8080/api/health
+
+# Metrics ophalen wanneer metrics.enabled=true
+curl http://localhost:8080/metrics
 
 # Artiestafbeelding uploaden (via URL)
 curl -X POST http://localhost:8080/api/artists/{id}/image \

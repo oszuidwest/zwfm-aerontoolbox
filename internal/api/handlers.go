@@ -2,6 +2,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -106,9 +107,13 @@ func (s *Server) validateAndGetEntityID(w http.ResponseWriter, r *http.Request, 
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	respondJSON(w, http.StatusOK, s.collectHealth(r.Context()))
+}
+
+func (s *Server) collectHealth(ctx context.Context) HealthResponse {
 	dbStatus := "connected"
 	dbConnected := true
-	if err := s.service.Repository().Ping(r.Context()); err != nil {
+	if err := s.service.Repository().Ping(ctx); err != nil {
 		dbStatus = "disconnected"
 		dbConnected = false
 		slog.Warn("Database health check failed", "error", err)
@@ -160,7 +165,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp.Status = overallHealthStatus(dbConnected, notifyExpiresSoon || fmAlerting > 0 || mediaProblems > 0)
-	respondJSON(w, http.StatusOK, resp)
+	return resp
 }
 
 // overallHealthStatus returns the highest-severity status given the database

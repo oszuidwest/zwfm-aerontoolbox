@@ -109,6 +109,10 @@
       "recipients": ""
     }
   },
+  "metrics": {
+    "enabled": false,
+    "path": "/metrics"
+  },
   "log": {
     "level": "info",
     "format": "text"

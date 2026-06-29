@@ -100,6 +100,12 @@ type NotificationsConfig struct {
 	Email GraphConfig `json:"email"`
 }
 
+// MetricsConfig controls the optional Prometheus-compatible metrics endpoint.
+type MetricsConfig struct {
+	Enabled bool   `json:"enabled"`
+	Path    string `json:"path"`
+}
+
 // GraphConfig configures Microsoft Graph email delivery.
 type GraphConfig struct {
 	TenantID     string `json:"tenant_id" validate:"omitempty,guid"`
@@ -234,6 +240,7 @@ type Config struct {
 	FileMonitor    FileMonitorConfig    `json:"file_monitor"`
 	MediaFileCheck MediaFileCheckConfig `json:"media_file_check"`
 	Notifications  NotificationsConfig  `json:"notifications"`
+	Metrics        MetricsConfig        `json:"metrics"`
 	Log            LogConfig            `json:"log"`
 }
 
@@ -257,6 +264,7 @@ const (
 	DefaultBackupCompression           = 9
 	DefaultBackupPath                  = "./backups"
 	DefaultBackupTimeoutMinutes        = 30
+	DefaultMetricsPath                 = "/metrics"
 )
 
 // GetMaxDownloadBytes returns the configured image download cap or its default.
@@ -366,6 +374,17 @@ func (c *S3Config) GetPathPrefix() string {
 		prefix += "/"
 	}
 	return prefix
+}
+
+// GetPath returns the scrape path for the metrics endpoint.
+func (c *MetricsConfig) GetPath() string {
+	if c.Path == "" {
+		return DefaultMetricsPath
+	}
+	if strings.HasPrefix(c.Path, "/") {
+		return c.Path
+	}
+	return "/" + c.Path
 }
 
 // GetLevel returns the configured log level as an slog.Level.

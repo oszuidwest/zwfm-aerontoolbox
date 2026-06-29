@@ -16,16 +16,18 @@ import (
 
 // Server owns the HTTP routing, middleware, and listener lifecycle.
 type Server struct {
-	service *service.AeronService
-	version string
-	server  *http.Server
+	service     *service.AeronService
+	version     string
+	server      *http.Server
+	httpMetrics *httpMetrics
 }
 
 // New returns a Server bound to the service layer and build version.
 func New(svc *service.AeronService, version string) *Server {
 	return &Server{
-		service: svc,
-		version: version,
+		service:     svc,
+		version:     version,
+		httpMetrics: newHTTPMetrics(),
 	}
 }
 
@@ -45,6 +47,9 @@ func (s *Server) Start(port string) error {
 // router builds the public health route and authenticated API surface.
 func (s *Server) router() http.Handler {
 	router := chi.NewRouter()
+	if s.httpMetrics == nil {
+		s.httpMetrics = newHTTPMetrics()
+	}
 
 	cop := http.NewCrossOriginProtection()
 	router.Use(func(next http.Handler) http.Handler {
@@ -53,12 +58,17 @@ func (s *Server) router() http.Handler {
 
 	router.Use(middleware.RequestID)
 	router.Use(middleware.Recoverer)
+	router.Use(s.httpMetrics.middleware)
 	router.Use(middleware.Compress(5))
 
 	router.NotFound(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		respondError(w, http.StatusNotFound, "Endpoint not found")
 	})
+
+	if cfg := s.service.Config().Metrics; cfg.Enabled {
+		router.Get(cfg.GetPath(), s.handleMetrics)
+	}
 
 	router.Route("/api", func(r chi.Router) {
 		r.Use(middleware.SetHeader("Content-Type", "application/json; charset=utf-8"))
