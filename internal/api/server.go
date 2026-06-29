@@ -62,6 +62,9 @@ func (s *Server) router() http.Handler {
 
 	router.Route("/api", func(r chi.Router) {
 		r.Use(middleware.SetHeader("Content-Type", "application/json; charset=utf-8"))
+		if limiter := newAPIRateLimiter(&s.service.Config().API); limiter != nil {
+			r.Use(s.rateLimitMiddleware(limiter))
+		}
 
 		r.NotFound(func(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusNotFound, "Endpoint not found")

@@ -44,9 +44,12 @@ type ImageConfig struct {
 
 // APIConfig controls API authentication and request timeouts.
 type APIConfig struct {
-	Enabled               bool     `json:"enabled"`
-	Keys                  []string `json:"keys" validate:"required_if=Enabled true,dive,required"`
-	RequestTimeoutSeconds int      `json:"request_timeout_seconds" validate:"gte=0"`
+	Enabled                bool     `json:"enabled"`
+	Keys                   []string `json:"keys" validate:"required_if=Enabled true,dive,required"`
+	RequestTimeoutSeconds  int      `json:"request_timeout_seconds" validate:"gte=0"`
+	RateLimitEnabled       bool     `json:"rate_limit_enabled"`
+	RateLimitRequests      int      `json:"rate_limit_requests" validate:"gte=0"`
+	RateLimitWindowSeconds int      `json:"rate_limit_window_seconds" validate:"gte=0"`
 }
 
 // MaintenanceConfig holds thresholds used by database health checks.
@@ -243,6 +246,8 @@ const (
 	DefaultConnMaxLifetimeMinutes      = 5
 	DefaultMaxImageDownloadSizeBytes   = 50 * 1024 * 1024
 	DefaultRequestTimeoutSeconds       = 30
+	DefaultRateLimitRequests           = 120
+	DefaultRateLimitWindowSeconds      = 60
 	DefaultBloatThreshold              = 10.0
 	DefaultDeadTupleThreshold          = 10000
 	DefaultVacuumStalenessDays         = 7
@@ -267,6 +272,16 @@ func (c *ImageConfig) GetMaxDownloadBytes() int64 {
 // GetRequestTimeout returns the configured HTTP timeout or its default.
 func (c *APIConfig) GetRequestTimeout() time.Duration {
 	return time.Duration(cmp.Or(c.RequestTimeoutSeconds, DefaultRequestTimeoutSeconds)) * time.Second
+}
+
+// GetRateLimitRequests returns the configured request cap or its default.
+func (c *APIConfig) GetRateLimitRequests() int {
+	return cmp.Or(c.RateLimitRequests, DefaultRateLimitRequests)
+}
+
+// GetRateLimitWindow returns the configured rate-limit window or its default.
+func (c *APIConfig) GetRateLimitWindow() time.Duration {
+	return time.Duration(cmp.Or(c.RateLimitWindowSeconds, DefaultRateLimitWindowSeconds)) * time.Second
 }
 
 // GetMaxOpenConns returns the configured open-connection cap or its default.

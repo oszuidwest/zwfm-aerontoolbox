@@ -21,7 +21,10 @@
   "api": {
     "enabled": false,
     "keys": [],
-    "request_timeout_seconds": 30
+    "request_timeout_seconds": 30,
+    "rate_limit_enabled": false,
+    "rate_limit_requests": 120,
+    "rate_limit_window_seconds": 60
   },
   "maintenance": {
     "bloat_threshold": 10.0,

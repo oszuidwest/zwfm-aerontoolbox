@@ -63,6 +63,76 @@ func TestFileMonitorRoutesDisabledReturnNotFound(t *testing.T) {
 	}
 }
 
+func TestRateLimiterLimitsAuthenticatedProtectedRequests(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.API.Enabled = true
+	cfg.API.Keys = []string{"test-api-key"}
+	cfg.API.RateLimitEnabled = true
+	cfg.API.RateLimitRequests = 1
+	cfg.API.RateLimitWindowSeconds = 60
+	cfg.FileMonitor.Enabled = true
+
+	svc, err := service.New(nil, cfg)
+	if err != nil {
+		t.Fatalf("service.New: %v", err)
+	}
+	t.Cleanup(svc.Close)
+
+	handler := New(svc, "test").router()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/file-monitor/check", http.NoBody)
+	req.Header.Set("X-API-Key", "test-api-key")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("first status code = %d, want %d; body: %s", rec.Code, http.StatusAccepted, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/file-monitor/check", http.NoBody)
+	req.Header.Set("X-API-Key", "test-api-key")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("second status code = %d, want %d; body: %s", rec.Code, http.StatusTooManyRequests, rec.Body.String())
+	}
+	if rec.Header().Get("Retry-After") == "" {
+		t.Fatal("Retry-After header is empty")
+	}
+}
+
+func TestRateLimiterLimitsInvalidAPIKeyProbesByRemoteAddress(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.API.Enabled = true
+	cfg.API.Keys = []string{"test-api-key"}
+	cfg.API.RateLimitEnabled = true
+	cfg.API.RateLimitRequests = 1
+	cfg.API.RateLimitWindowSeconds = 60
+
+	svc, err := service.New(nil, cfg)
+	if err != nil {
+		t.Fatalf("service.New: %v", err)
+	}
+	t.Cleanup(svc.Close)
+
+	handler := New(svc, "test").router()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/playlist", http.NoBody)
+	req.Header.Set("X-API-Key", "wrong-key-1")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("first status code = %d, want %d; body: %s", rec.Code, http.StatusUnauthorized, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/playlist", http.NoBody)
+	req.Header.Set("X-API-Key", "wrong-key-2")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("second status code = %d, want %d; body: %s", rec.Code, http.StatusTooManyRequests, rec.Body.String())
+	}
+}
+
 func TestFileMonitorRoutesEnabledPassThrough(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.FileMonitor.Enabled = true

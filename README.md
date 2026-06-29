@@ -66,13 +66,15 @@ Kopieer [`config.example.json`](config.example.json) naar `config.json`. De bela
 |--------|---------------------|
 | `database` | PostgreSQL-verbinding (host, poort, inloggegevens, schema) |
 | `image` | Doelafmetingen en JPEG-kwaliteit voor geüploade afbeeldingen |
-| `api` | API-sleutels voor authenticatie |
+| `api` | API-sleutels voor authenticatie en optionele rate limiting |
 | `maintenance` | Drempelwaarden en automatische scheduler voor database health checks |
 | `backup` | Pad naar backups, retentie, scheduler en optionele S3-sync |
 | `file_monitor` | Signaleert verouderde of ontbrekende bestanden op schijf |
 | `media_file_check` | Controleert database-gestuurd of playlist-audio op schijf staat (exacte `drive_mounts` + `search_dirs` als fallback) |
 | `notifications` | E-mailmeldingen via Microsoft Graph API |
 | `log` | Logniveau (`debug`, `info`, `warn`, `error`) en formaat (`text`, `json`) |
+
+Voor rate limiting kun je `api.rate_limit_enabled` aanzetten. `rate_limit_requests` requests per `rate_limit_window_seconds` worden dan toegestaan per API-sleutel, of per remote adres wanneer geen sleutel is meegestuurd.
 
 ### Backupfunctionaliteit
 

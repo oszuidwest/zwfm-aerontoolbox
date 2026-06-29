@@ -73,6 +73,8 @@ Wanneer authenticatie is ingeschakeld in de configuratie, vereisen alle endpoint
 
 **Header:** `X-API-Key: jouw-api-sleutel`
 
+Optionele rate limiting kan worden ingeschakeld met `api.rate_limit_enabled`. De limiter telt per API-sleutel, of per remote adres wanneer geen sleutel is meegestuurd.
+
 **Response bij ontbrekende autorisatie:**
 ```json
 {
@@ -1673,7 +1675,10 @@ Het gedrag van de API kan worden geconfigureerd via `config.json`:
   "api": {
     "enabled": true,
     "keys": ["jouw-veilige-api-sleutel-hier"],
-    "request_timeout_seconds": 30
+    "request_timeout_seconds": 30,
+    "rate_limit_enabled": false,
+    "rate_limit_requests": 120,
+    "rate_limit_window_seconds": 60
   },
   "maintenance": {
     "bloat_threshold": 10.0,
