@@ -695,7 +695,7 @@ Bij detectie van problemen (hoge bloat, veel connecties, langlopende queries) wo
 > Backup-endpoints zijn alleen beschikbaar indien `backup.enabled: true` in de configuratie.
 
 > [!IMPORTANT]
-> **Systeemvereisten:** Bij het opstarten valideert de applicatie of `pg_dump` en `pg_restore` beschikbaar zijn. Zonder deze tools weigert de applicatie te starten. Zie de README voor installatie-instructies.
+> **Systeemvereisten:** Bij het opstarten valideert de applicatie of `pg_dump` en `pg_restore` beschikbaar zijn. Zonder deze tools weigert de applicatie te starten. De client-major moet gelijk zijn aan of nieuwer zijn dan de PostgreSQL server-major; zie de README voor installatie- en Docker-build-instructies.
 
 ### Backup workflow
 

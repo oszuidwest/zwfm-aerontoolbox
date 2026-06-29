@@ -91,6 +91,10 @@ brew install libpq
 
 De applicatie valideert bij het opstarten of deze tools beschikbaar zijn wanneer `backup.enabled: true`.
 
+De `pg_dump`/`pg_restore` client-major moet gelijk zijn aan of nieuwer zijn dan de PostgreSQL server-major; PostgreSQL weigert dumps vanaf een nieuwere server met een oudere client.
+
+De standaard Docker image installeert `postgresql16-client`. Gebruik bij een nieuwere database bijvoorbeeld `docker build --build-arg POSTGRESQL_CLIENT_PACKAGE=postgresql17-client ...` zodra Alpine die clientversie aanbiedt, of configureer `backup.pg_dump_path` en `backup.pg_restore_path` naar passende binaries.
+
 ### Automatische health checks
 
 Database health checks kunnen automatisch worden uitgevoerd. Bij problemen (hoge bloat, veel connecties, langlopende queries) wordt een e-mailmelding verstuurd:
