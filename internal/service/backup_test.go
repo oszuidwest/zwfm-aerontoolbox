@@ -9,6 +9,7 @@ import (
 
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/async"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/config"
+	"github.com/oszuidwest/zwfm-aerontoolbox/internal/notify"
 )
 
 type fakeBackupObjectStore struct {
@@ -102,6 +103,38 @@ func TestDeleteTracksS3DeleteAsBackgroundWork(t *testing.T) {
 	case <-closeDone:
 	case <-time.After(time.Second):
 		t.Fatal("Close did not return after S3 delete completed")
+	}
+}
+
+func TestNewBackupServiceLeavesObjectStoreNilWhenS3Disabled(t *testing.T) {
+	dir := t.TempDir()
+	pgDumpPath := filepath.Join(dir, "pg_dump")
+	pgRestorePath := filepath.Join(dir, "pg_restore")
+	for _, path := range []string{pgDumpPath, pgRestorePath} {
+		if err := os.WriteFile(path, []byte("test tool"), 0o600); err != nil {
+			t.Fatalf("WriteFile(%s): %v", path, err)
+		}
+	}
+
+	cfg := &config.Config{
+		Backup: config.BackupConfig{
+			Enabled:       true,
+			Path:          filepath.Join(dir, "backups"),
+			RetentionDays: 30,
+			MaxBackups:    5,
+			PgDumpPath:    pgDumpPath,
+			PgRestorePath: pgRestorePath,
+		},
+	}
+
+	svc, err := newBackupService(nil, cfg, notify.New(cfg))
+	if err != nil {
+		t.Fatalf("newBackupService: %v", err)
+	}
+	defer svc.Close()
+
+	if svc.s3 != nil {
+		t.Fatal("s3 object store is non-nil when S3 is disabled")
 	}
 }
 

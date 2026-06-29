@@ -95,7 +95,9 @@ func newBackupService(
 		if err != nil {
 			return nil, err
 		}
-		svc.s3 = s3svc
+		if s3svc != nil {
+			svc.s3 = s3svc
+		}
 	}
 
 	return svc, nil
