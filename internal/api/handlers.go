@@ -2,6 +2,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -31,7 +32,14 @@ type ImageStatsResponse struct {
 	WithoutImages int `json:"without_images"`
 }
 
-// HealthResponse is returned by the public health endpoint.
+// PublicHealthResponse is returned by the unauthenticated health endpoint.
+type PublicHealthResponse struct {
+	Status         string `json:"status"`
+	Version        string `json:"version"`
+	DatabaseStatus string `json:"database_status"`
+}
+
+// HealthResponse is returned by the authenticated detailed health endpoint.
 type HealthResponse struct {
 	Status         string                `json:"status"`
 	Version        string                `json:"version"`
@@ -106,13 +114,17 @@ func (s *Server) validateAndGetEntityID(w http.ResponseWriter, r *http.Request, 
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	dbStatus := "connected"
-	dbConnected := true
-	if err := s.service.Repository().Ping(r.Context()); err != nil {
-		dbStatus = "disconnected"
-		dbConnected = false
-		slog.Warn("Database health check failed", "error", err)
-	}
+	dbStatus, dbConnected := s.databaseStatus(r.Context())
+
+	respondJSON(w, http.StatusOK, PublicHealthResponse{
+		Status:         overallHealthStatus(dbConnected, false),
+		Version:        s.version,
+		DatabaseStatus: dbStatus,
+	})
+}
+
+func (s *Server) handleHealthDetails(w http.ResponseWriter, r *http.Request) {
+	dbStatus, dbConnected := s.databaseStatus(r.Context())
 
 	resp := HealthResponse{
 		Version:        s.version,
@@ -161,6 +173,17 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 	resp.Status = overallHealthStatus(dbConnected, notifyExpiresSoon || fmAlerting > 0 || mediaProblems > 0)
 	respondJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) databaseStatus(ctx context.Context) (string, bool) {
+	dbStatus := "connected"
+	dbConnected := true
+	if err := s.service.Repository().Ping(ctx); err != nil {
+		dbStatus = "disconnected"
+		dbConnected = false
+		slog.Warn("Database health check failed", "error", err)
+	}
+	return dbStatus, dbConnected
 }
 
 // overallHealthStatus returns the highest-severity status given the database

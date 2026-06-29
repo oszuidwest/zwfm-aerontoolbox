@@ -32,6 +32,7 @@ De Aeron Toolbox API biedt RESTful-endpoints voor het Aeron-radioautomatiserings
 |----------|---------|--------------|------|
 | **Algemeen** |
 | `/api/health` | GET | API-status controleren | Nee |
+| `/api/health/details` | GET | Gedetailleerde health en operationele signalen | Ja |
 | **Artiesten** |
 | `/api/artists` | GET | Statistieken over artiesten | Ja |
 | `/api/artists/{id}` | GET | Specifieke artiest ophalen | Ja |
@@ -132,10 +133,29 @@ Alle fouten volgen dit formaat:
 
 ### Statuscontrole
 
-Controleer de status van de API.
+Controleer de publieke liveness/readiness-status van de API. Deze endpoint is bewust minimaal zodat load balancers en container health checks geen operationele details nodig hebben.
 
 **Endpoint:** `GET /api/health`
 **Authenticatie:** Niet vereist
+
+**Response:** `200 OK`
+```json
+{
+  "success": true,
+  "data": {
+    "status": "healthy",
+    "version": "dev",
+    "database_status": "connected"
+  }
+}
+```
+
+### Gedetailleerde statuscontrole
+
+Controleer de gedetailleerde operationele status.
+
+**Endpoint:** `GET /api/health/details`
+**Authenticatie:** Vereist
 
 **Response:** `200 OK`
 ```json

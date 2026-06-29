@@ -73,6 +73,8 @@ func (s *Server) router() http.Handler {
 			r.Use(s.authMiddleware)
 			r.Use(middleware.Timeout(s.service.Config().API.GetRequestTimeout()))
 
+			r.Get("/health/details", s.handleHealthDetails)
+
 			s.setupEntityRoutes(r, "/artists", types.EntityTypeArtist)
 			s.setupEntityRoutes(r, "/tracks", types.EntityTypeTrack)
 
