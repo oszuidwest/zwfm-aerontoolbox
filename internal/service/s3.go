@@ -15,6 +15,11 @@ import (
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
 )
 
+type backupObjectStore interface {
+	upload(ctx context.Context, filename, localPath string) error
+	delete(ctx context.Context, filename string) error
+}
+
 // s3Service syncs managed backup files to S3-compatible storage.
 type s3Service struct {
 	tm     *transfermanager.Client

@@ -28,7 +28,7 @@ type BackupService struct {
 	repo       *database.Repository
 	config     *config.Config
 	backupRoot *os.Root
-	s3         *s3Service // nil if S3 is disabled
+	s3         backupObjectStore // nil if S3 is disabled
 	runner     *async.Runner
 	notify     *notify.NotificationService
 
@@ -518,8 +518,10 @@ func (s *BackupService) List() (*BackupListResponse, error) {
 	}, nil
 }
 
-// Delete removes a managed backup locally and schedules remote deletion.
-func (s *BackupService) Delete(filename string) error {
+// delete removes a managed backup locally and lets the caller choose how S3
+// deletion is scheduled. HTTP handlers use TryGoBackground; retention cleanup
+// runs inside the primary backup run and uses GoChild.
+func (s *BackupService) delete(filename string, scheduleS3Delete func(string)) error {
 	if err := s.ensureBackupFile(filename); err != nil {
 		return err
 	}
@@ -530,22 +532,45 @@ func (s *BackupService) Delete(filename string) error {
 
 	slog.Info("Backup deleted", "filename", filename)
 
-	// Delete from S3 asynchronously. TryGoBackground is used because Delete()
-	// is called from an HTTP handler, not from within an active primary run.
 	if s.s3 != nil {
-		if !s.runner.TryGoBackground(func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-
-			if err := s.s3.delete(ctx, filename); err != nil {
-				slog.Warn("Failed to delete S3 backup", "filename", filename, "error", err)
-			}
-		}) {
-			slog.Warn("S3 deletion skipped: backup service is closed", "filename", filename)
-		}
+		scheduleS3Delete(filename)
 	}
 
 	return nil
+}
+
+// Delete removes a managed backup from an HTTP-handler path and schedules
+// remote deletion as independent background work.
+func (s *BackupService) Delete(filename string) error {
+	return s.delete(filename, s.scheduleS3DeleteBackground)
+}
+
+// deleteDuringRun removes a managed backup from inside the primary backup run.
+func (s *BackupService) deleteDuringRun(filename string) error {
+	return s.delete(filename, s.scheduleS3DeleteChild)
+}
+
+func (s *BackupService) scheduleS3DeleteBackground(filename string) {
+	if !s.runner.TryGoBackground(func() {
+		s.deleteS3Backup(filename)
+	}) {
+		slog.Warn("S3 deletion skipped: backup service is closed", "filename", filename)
+	}
+}
+
+func (s *BackupService) scheduleS3DeleteChild(filename string) {
+	s.runner.GoChild(func() {
+		s.deleteS3Backup(filename)
+	})
+}
+
+func (s *BackupService) deleteS3Backup(filename string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := s.s3.delete(ctx, filename); err != nil {
+		slog.Warn("Failed to delete S3 backup", "filename", filename, "error", err)
+	}
 }
 
 // GetFilePath validates filename and returns its absolute local path.
@@ -604,7 +629,7 @@ func (s *BackupService) cleanupOldBackups() {
 
 	for _, backup := range backups.Backups {
 		if backup.CreatedAt.Before(cutoff) {
-			if err := s.Delete(backup.Filename); err != nil {
+			if err := s.deleteDuringRun(backup.Filename); err != nil {
 				slog.Warn("Failed to delete backup (retention)", "filename", backup.Filename, "error", err)
 			} else {
 				deleted++
@@ -620,7 +645,7 @@ func (s *BackupService) cleanupOldBackups() {
 	}
 	if len(backups.Backups) > maxBackups {
 		for i := maxBackups; i < len(backups.Backups); i++ {
-			if err := s.Delete(backups.Backups[i].Filename); err != nil {
+			if err := s.deleteDuringRun(backups.Backups[i].Filename); err != nil {
 				slog.Warn("Failed to delete backup (max_backups)", "filename", backups.Backups[i].Filename, "error", err)
 			} else {
 				deleted++
