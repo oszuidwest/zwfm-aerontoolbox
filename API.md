@@ -811,7 +811,7 @@ Een nieuwe databasebackup starten op de achtergrond.
 ```
 
 **Parameters:**
-- `compression` (optioneel): Compressieniveau 0-9 (standaard: 9)
+- `compression` (optioneel): Laat weg of zet op `0` om `backup.default_compression` te gebruiken; expliciete pg_dump-compressieniveaus zijn `1-9`.
 
 **Response:** `202 Accepted`
 ```json

@@ -108,6 +108,8 @@ func (s *BackupService) Close() {
 
 // BackupRequest selects optional backup parameters.
 type BackupRequest struct {
+	// Compression uses 0 as "use configured default"; explicit pg_dump
+	// compression levels are 1-9 because JSON omission also decodes to 0.
 	Compression int `json:"compression"`
 }
 
@@ -201,14 +203,15 @@ func (s *BackupService) buildPgDumpArgs(compression int) []string {
 	}
 }
 
-// compressionLevel applies the default and validates the 0-9 pg_dump range.
+// compressionLevel applies the default and validates the pg_dump range.
 func (s *BackupService) compressionLevel(requested int) (int, error) {
 	level := requested
 	if level == 0 {
 		level = s.config.Backup.GetDefaultCompression()
 	}
 	if level < 0 || level > 9 {
-		return 0, types.NewValidationError("compression", fmt.Sprintf("invalid compression value: %d (use 0-9)", level))
+		return 0, types.NewValidationError("compression",
+			fmt.Sprintf("invalid compression value: %d (use 0 for default, or 1-9)", level))
 	}
 	return level, nil
 }
