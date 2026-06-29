@@ -631,6 +631,16 @@ type ValidationResult struct {
 
 // Validate checks a managed backup with pg_restore --list.
 func (s *BackupService) Validate(filename string) (*ValidationResult, error) {
+	file, _, err := s.OpenFile(filename)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			slog.Warn("Failed to close backup validation file", "filename", filename, "error", closeErr)
+		}
+	}()
+
 	result := &ValidationResult{
 		Filename: filename,
 	}
@@ -638,7 +648,7 @@ func (s *BackupService) Validate(filename string) (*ValidationResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := s.validateManagedBackupFile(ctx, filename); err != nil {
+	if err := s.validateBackupFile(ctx, file); err != nil {
 		result.Valid = false
 		result.Error = err.Error()
 	} else {

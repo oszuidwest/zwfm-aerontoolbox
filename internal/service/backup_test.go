@@ -10,6 +10,7 @@ import (
 
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/async"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/config"
+	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
 )
 
 const testBackupFilename = "aeron-backup-2026-01-02-030405.dump"
@@ -47,7 +48,11 @@ func TestBackupServiceOpenFileReadsManagedBackup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenFile: %v", err)
 	}
-	defer file.Close()
+	defer func() {
+		if err := file.Close(); err != nil {
+			t.Fatalf("close opened backup: %v", err)
+		}
+	}()
 
 	if info.Size() != int64(len("backup-data")) {
 		t.Fatalf("file size = %d, want %d", info.Size(), len("backup-data"))
@@ -123,8 +128,11 @@ if [ "$input" != "backup-data" ]; then
   exit 4
 fi
 `
-	if err := os.WriteFile(pgRestorePath, []byte(script), 0o700); err != nil {
+	if err := os.WriteFile(pgRestorePath, []byte(script), 0o600); err != nil {
 		t.Fatalf("write pg_restore helper: %v", err)
+	}
+	if err := os.Chmod(pgRestorePath, 0o700); err != nil { //nolint:gosec // test helper script must be executable.
+		t.Fatalf("chmod pg_restore helper: %v", err)
 	}
 
 	svc := newBackupTestService(t, backupPath)
@@ -137,6 +145,23 @@ fi
 	}
 	if !result.Valid {
 		t.Fatalf("validation result = invalid: %s", result.Error)
+	}
+}
+
+func TestBackupServiceValidateMissingFileReturnsError(t *testing.T) {
+	svc := newBackupTestService(t, t.TempDir())
+	t.Cleanup(svc.Close)
+
+	result, err := svc.Validate(testBackupFilename)
+	if err == nil {
+		t.Fatal("Validate returned nil error for missing backup")
+	}
+	if result != nil {
+		t.Fatalf("Validate result = %#v, want nil on missing backup", result)
+	}
+	var notFound *types.NotFoundError
+	if !errors.As(err, &notFound) {
+		t.Fatalf("Validate error = %T %[1]v, want *types.NotFoundError", err)
 	}
 }
 

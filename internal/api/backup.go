@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -56,7 +57,11 @@ func (s *Server) handleDownloadBackupFile(w http.ResponseWriter, r *http.Request
 		respondError(w, statusCode, err.Error())
 		return
 	}
-	defer file.Close()
+	defer func() {
+		if err := file.Close(); err != nil {
+			slog.Debug("Failed to close backup download file", "filename", filename, "error", err)
+		}
+	}()
 
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", "attachment; filename="+filename)
