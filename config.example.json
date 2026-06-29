@@ -94,6 +94,7 @@
     "max_range_days": 31,
     "case_insensitive": true,
     "include_voicetracks": false,
+    "lookahead_days": 7,
     "scheduler": {
       "enabled": false,
       "schedule": "0 6 * * *"

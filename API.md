@@ -1402,7 +1402,7 @@ Toont de runstatus plus het resultaat van de meest recente run.
 
 **Velden in `result`:**
 - `checked_at`: Tijdstip waarop de run de items verwerkte.
-- `scope`: De toegepaste scope (`date`, `from`, `to`, `block_id`, `limit`, `exclude_voicetracks`).
+- `scope`: De toegepaste scope (`date`, `from`, `to`, `block_id`, `lookahead_days`, `limit`, `exclude_voicetracks`).
 - `summary`: Tellingen per status (`total`, `present`, `missing`, `ambiguous`, `no_reference`, `errors`).
 - `items`: Resultaat per playlistitem.
 - `error`: Aanwezig wanneer de run zelf mislukte (bijvoorbeeld een databasefout).
@@ -1420,7 +1420,7 @@ Toont de runstatus plus het resultaat van de meest recente run.
 
 ### Geplande controle en e-mailnotificaties
 
-Met `media_file_check.scheduler` draait de controle automatisch op een cron-schema (scope: vandaag). Als e-mailnotificaties zijn geconfigureerd, stuurt een geplande run een alert wanneer er problemen (`missing`, `ambiguous` of `stat_error`) worden gevonden, en een herstelmelding zodra een volgende run weer schoon is. Handmatige API-runs versturen geen e-mail, zodat ad-hoc scopes de alert-status niet verstoren.
+Met `media_file_check.scheduler` draait de controle automatisch op een cron-schema. De geplande run controleert standaard **vandaag**; met `media_file_check.lookahead_days` kun je vooruitkijken — bij `lookahead_days: 2` checkt de run vandaag t/m overmorgen (inclusief), zodat ontbrekende bestanden opvallen vóórdat ze worden uitgezonden. `0` (standaard) is alleen vandaag. Handmatige API-runs gebruiken hun eigen `from`/`to`-bereik en negeren deze instelling. Als e-mailnotificaties zijn geconfigureerd, stuurt een geplande run een alert wanneer er problemen (`missing`, `ambiguous` of `stat_error`) worden gevonden, en een herstelmelding zodra een volgende run weer schoon is. Handmatige API-runs versturen geen e-mail, zodat ad-hoc scopes de alert-status niet verstoren.
 
 ### Integratie met de health-endpoint (mediabestandcontrole)
 

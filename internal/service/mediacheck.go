@@ -38,6 +38,7 @@ type MediaCheckScope struct {
 	From               string `json:"from,omitempty"`
 	To                 string `json:"to,omitempty"`
 	BlockID            string `json:"block_id,omitempty"`
+	LookaheadDays      int    `json:"lookahead_days,omitempty"`
 	Limit              int    `json:"limit,omitempty"`
 	ExcludeVoicetracks bool   `json:"exclude_voicetracks"`
 }
@@ -139,10 +140,11 @@ func (s *MediaFileCheckService) TriggerScheduled() (uint64, error) {
 	return s.trigger(&opts, true)
 }
 
-// scheduledOptions builds the default scope for scheduled runs: the current day,
-// honouring the configured voicetrack policy.
+// scheduledOptions builds the scope for scheduled runs: today (optionally
+// extended by LookaheadDays), honouring the configured voicetrack policy.
 func (s *MediaFileCheckService) scheduledOptions() database.MediaCheckOptions {
 	return database.MediaCheckOptions{
+		LookaheadDays:      s.config.MediaFileCheck.LookaheadDays,
 		IncludeVoicetracks: s.config.MediaFileCheck.IncludeVoicetracks,
 	}
 }
@@ -383,6 +385,7 @@ func scopeFromOptions(opts *database.MediaCheckOptions) MediaCheckScope {
 		From:               opts.From,
 		To:                 opts.To,
 		BlockID:            opts.BlockID,
+		LookaheadDays:      opts.LookaheadDays,
 		Limit:              opts.Limit,
 		ExcludeVoicetracks: !opts.IncludeVoicetracks,
 	}
@@ -431,6 +434,8 @@ func scopeDescription(scope *MediaCheckScope) string {
 		parts = append(parts, "date "+scope.Date)
 	case scope.From != "" || scope.To != "":
 		parts = append(parts, fmt.Sprintf("range %s..%s", scope.From, scope.To))
+	case scope.LookaheadDays > 0:
+		parts = append(parts, fmt.Sprintf("today +%d days", scope.LookaheadDays))
 	default:
 		parts = append(parts, "today")
 	}

@@ -84,6 +84,19 @@ func TestMediaFileCheck_DriveMappingRelativeTarget(t *testing.T) {
 	}
 }
 
+func TestMediaFileCheck_NegativeLookaheadRejected(t *testing.T) {
+	cfg := minimalConfig()
+	cfg.MediaFileCheck = MediaFileCheckConfig{
+		Enabled:       true,
+		SearchDirs:    []string{"/mnt/aeron-audio"},
+		LookaheadDays: -1,
+	}
+
+	if err := validate(cfg); err == nil {
+		t.Fatal("expected error for negative lookahead_days, got nil")
+	}
+}
+
 func TestMediaFileCheck_Defaults(t *testing.T) {
 	cfg := MediaFileCheckConfig{}
 

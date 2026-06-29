@@ -42,6 +42,10 @@ type MediaCheckOptions struct {
 	To                 string
 	Limit              int
 	IncludeVoicetracks bool
+	// LookaheadDays widens the default (today) scope to today through
+	// today+LookaheadDays inclusive. Only set by the scheduled run; ignored when
+	// BlockID/Date/From/To already select an explicit scope.
+	LookaheadDays int
 }
 
 // mediaCheckColumns selects the playlist item, track, audio and block fields.
@@ -94,6 +98,13 @@ func BuildMediaCheckQuery(schema string, opts *MediaCheckOptions) (query string,
 		if opts.To != "" {
 			conditions = append(conditions, fmt.Sprintf("pi.startdatetime < %s::date + INTERVAL '1 day'", nextParam(opts.To)))
 		}
+	case opts.LookaheadDays > 0:
+		// Today through today+LookaheadDays inclusive. The date math runs in the
+		// database (CURRENT_DATE + N) so it stays consistent with the today-scope
+		// regardless of the app's timezone.
+		conditions = append(conditions, fmt.Sprintf(
+			"pi.startdatetime >= CURRENT_DATE AND pi.startdatetime < CURRENT_DATE + %s::int",
+			nextParam(opts.LookaheadDays+1)))
 	default:
 		conditions = append(conditions,
 			"pi.startdatetime >= CURRENT_DATE AND pi.startdatetime < CURRENT_DATE + INTERVAL '1 day'")

@@ -184,7 +184,12 @@ type MediaFileCheckConfig struct {
 	MaxRangeDays       int               `json:"max_range_days" validate:"gte=0"`
 	CaseInsensitive    *bool             `json:"case_insensitive"`
 	IncludeVoicetracks bool              `json:"include_voicetracks"`
-	Scheduler          SchedulerConfig   `json:"scheduler"`
+	// LookaheadDays extends the scheduled run beyond today: it checks today
+	// through today+LookaheadDays (inclusive), so missing files surface before
+	// they air. 0 (default) checks only today. Manual API runs use their own
+	// from/to range and ignore this.
+	LookaheadDays int             `json:"lookahead_days" validate:"gte=0"`
+	Scheduler     SchedulerConfig `json:"scheduler"`
 }
 
 // DefaultMediaFileCheckStatTimeoutSeconds is the default per-stat timeout for media file checks.

@@ -74,6 +74,30 @@ func TestBuildMediaCheckQuery_Range(t *testing.T) {
 	}
 }
 
+func TestBuildMediaCheckQuery_Lookahead(t *testing.T) {
+	query, params, err := BuildMediaCheckQuery("aeron", &MediaCheckOptions{LookaheadDays: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(query, "CURRENT_DATE + $1::int") {
+		t.Errorf("expected lookahead upper bound, got: %s", query)
+	}
+	// LookaheadDays=2 → today through today+2 inclusive → upper bound CURRENT_DATE + 3.
+	if params[0] != 3 {
+		t.Errorf("params[0] = %v, want 3 (lookahead+1)", params[0])
+	}
+}
+
+func TestBuildMediaCheckQuery_DateIgnoresLookahead(t *testing.T) {
+	query, _, err := BuildMediaCheckQuery("aeron", &MediaCheckOptions{Date: "2026-06-29", LookaheadDays: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(query, "::int") {
+		t.Errorf("explicit date scope must ignore lookahead, got: %s", query)
+	}
+}
+
 func TestBuildMediaCheckQuery_IncludeVoicetracks(t *testing.T) {
 	query, params, err := BuildMediaCheckQuery("aeron", &MediaCheckOptions{IncludeVoicetracks: true})
 	if err != nil {
