@@ -22,15 +22,6 @@ const timeFormat = "2006-01-02 15:04:05"
 func errorSubject(summary string) string { return "[ERROR] " + summary + " - Aeron Toolbox" }
 func okSubject(summary string) string    { return "[OK] " + summary + " - Aeron Toolbox" }
 
-// pluralize returns one when n == 1, otherwise many. It keeps each formatter's
-// singular/plural subject choice to a single expression.
-func pluralize(n int, one, many string) string {
-	if n == 1 {
-		return one
-	}
-	return many
-}
-
 // BackupResult is the notification payload for a backup run.
 type BackupResult struct {
 	Success   bool

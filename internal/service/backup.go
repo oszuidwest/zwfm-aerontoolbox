@@ -168,11 +168,9 @@ func validateBackupFilename(filename string) error {
 	return nil
 }
 
-// ensureBackupFile is the shared preamble for operations on an existing backup:
-// it checks the feature is enabled, validates the filename, and confirms the
-// file is present. A missing file maps to NotFoundError; any other stat failure
-// (e.g. permission denied) maps to OperationError rather than being treated as
-// "present", which the previous os.IsNotExist-only check did silently.
+// ensureBackupFile checks the feature is enabled, validates the filename, and
+// confirms the file is present. A missing file maps to NotFoundError; any other
+// stat error (e.g. permission denied) maps to OperationError.
 func (s *BackupService) ensureBackupFile(filename string) error {
 	if err := s.checkEnabled(); err != nil {
 		return err

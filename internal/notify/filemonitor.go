@@ -39,9 +39,11 @@ func (s *NotificationService) SendFileRecoveries(recoveries []FileAlertResult) {
 }
 
 func formatFileAlerts(alerts []FileAlertResult) (subject, body string) {
-	subject = errorSubject("File monitor: " + pluralize(len(alerts),
-		fileLabel(&alerts[0])+" stale",
-		fmt.Sprintf("%d files stale", len(alerts))))
+	if len(alerts) == 1 {
+		subject = errorSubject("File monitor: " + fileLabel(&alerts[0]) + " stale")
+	} else {
+		subject = errorSubject(fmt.Sprintf("File monitor: %d files stale", len(alerts)))
+	}
 
 	var b strings.Builder
 	b.WriteString("File monitor failed\n\n")
@@ -68,9 +70,11 @@ func formatFileAlerts(alerts []FileAlertResult) (subject, body string) {
 }
 
 func formatFileRecoveries(recoveries []FileAlertResult) (subject, body string) {
-	subject = okSubject("File monitor: " + pluralize(len(recoveries),
-		fileLabel(&recoveries[0])+" recovered",
-		fmt.Sprintf("%d files recovered", len(recoveries))))
+	if len(recoveries) == 1 {
+		subject = okSubject("File monitor: " + fileLabel(&recoveries[0]) + " recovered")
+	} else {
+		subject = okSubject(fmt.Sprintf("File monitor: %d files recovered", len(recoveries)))
+	}
 
 	var b strings.Builder
 	b.WriteString("File monitor recovered\n\n")

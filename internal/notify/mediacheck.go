@@ -38,9 +38,11 @@ func (s *NotificationService) NotifyMediaCheckResult(r *MediaCheckResult) {
 }
 
 func formatMediaCheckFailure(r *MediaCheckResult) (subject, body string) {
-	subject = errorSubject("Media file check: " + pluralize(len(r.Problems),
-		problemLabel(&r.Problems[0]),
-		fmt.Sprintf("%d problems", len(r.Problems))))
+	if len(r.Problems) == 1 {
+		subject = errorSubject("Media file check: " + problemLabel(&r.Problems[0]))
+	} else {
+		subject = errorSubject(fmt.Sprintf("Media file check: %d problems", len(r.Problems)))
+	}
 
 	var b strings.Builder
 	b.WriteString("Media file check found problems\n\n")
