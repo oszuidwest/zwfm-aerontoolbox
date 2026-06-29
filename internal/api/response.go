@@ -9,14 +9,14 @@ import (
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
 )
 
-// Response is the standard response format for all API endpoints.
+// Response wraps every API payload with a success flag and optional error.
 type Response struct {
 	Success bool   `json:"success"`
 	Data    any    `json:"data,omitempty"`
 	Error   string `json:"error,omitempty"`
 }
 
-// AsyncStartResponse is the response for async operations (backup).
+// AsyncStartResponse points clients to the status endpoint for async work.
 type AsyncStartResponse struct {
 	Message string `json:"message"`
 	Check   string `json:"check"`

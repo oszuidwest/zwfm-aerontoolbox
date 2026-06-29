@@ -12,16 +12,14 @@ import (
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
 )
 
-// Scheduler manages cron-based scheduled jobs for the application.
-// It consolidates all scheduled tasks into a single cron instance.
+// Scheduler runs all enabled cron jobs on one shared cron instance.
 type Scheduler struct {
 	cron    *cron.Cron
 	service *AeronService
 	jobs    []string // names of registered jobs for logging
 }
 
-// NewScheduler creates a scheduler and registers all enabled scheduled jobs.
-// The scheduler uses the system's local timezone (set via TZ environment variable).
+// NewScheduler registers enabled jobs using the local system timezone (TZ).
 func NewScheduler(ctx context.Context, svc *AeronService) (*Scheduler, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -39,21 +37,18 @@ func NewScheduler(ctx context.Context, svc *AeronService) (*Scheduler, error) {
 
 	s := &Scheduler{cron: c, service: svc}
 
-	// Register backup job if enabled
 	if cfg.Backup.Enabled && cfg.Backup.Scheduler.Enabled {
 		if err := s.addJob(cfg.Backup.Scheduler.Schedule, "backup", s.runBackup); err != nil {
 			return nil, err
 		}
 	}
 
-	// Register health check job if enabled
 	if cfg.Maintenance.Scheduler.Enabled {
 		if err := s.addJob(cfg.Maintenance.Scheduler.Schedule, "health-check", s.runHealthCheck); err != nil {
 			return nil, err
 		}
 	}
 
-	// Register file monitor job if enabled (cadence from FileMonitor.Interval()).
 	if cfg.FileMonitor.Enabled {
 		schedule := fmt.Sprintf("@every %s", cfg.FileMonitor.Interval())
 		if err := s.addJob(schedule, "file-monitor", s.runFileMonitor); err != nil {
@@ -61,7 +56,6 @@ func NewScheduler(ctx context.Context, svc *AeronService) (*Scheduler, error) {
 		}
 	}
 
-	// Register media file check job if enabled.
 	if cfg.MediaFileCheck.Enabled && cfg.MediaFileCheck.Scheduler.Enabled {
 		if err := s.addJob(cfg.MediaFileCheck.Scheduler.Schedule, "media-file-check", s.runMediaFileCheck); err != nil {
 			return nil, err
@@ -71,7 +65,7 @@ func NewScheduler(ctx context.Context, svc *AeronService) (*Scheduler, error) {
 	return s, nil
 }
 
-// addJob registers a context-aware scheduled job with a name for observability.
+// addJob registers a named job whose context follows the scheduler lifecycle.
 // The context passed to the job function is derived from the cron's base context,
 // enabling graceful shutdown propagation to running jobs.
 func (s *Scheduler) addJob(schedule, name string, job func(context.Context)) error {
@@ -84,7 +78,7 @@ func (s *Scheduler) addJob(schedule, name string, job func(context.Context)) err
 	return nil
 }
 
-// Start activates all scheduled jobs.
+// Start activates the cron runner when at least one job is registered.
 func (s *Scheduler) Start() {
 	if len(s.jobs) == 0 {
 		return
@@ -93,7 +87,7 @@ func (s *Scheduler) Start() {
 	slog.Info("Scheduler started", "jobs", s.jobs)
 }
 
-// Stop halts the scheduler and waits for running jobs to finish.
+// Stop halts the cron runner and returns a context that closes after jobs drain.
 func (s *Scheduler) Stop() context.Context {
 	if len(s.jobs) == 0 {
 		return context.Background()
@@ -102,7 +96,7 @@ func (s *Scheduler) Stop() context.Context {
 	return s.cron.Stop()
 }
 
-// HasJobs returns true if any jobs are registered.
+// HasJobs reports whether the scheduler has registered work.
 func (s *Scheduler) HasJobs() bool {
 	return len(s.jobs) > 0
 }
@@ -158,7 +152,7 @@ func (s *Scheduler) runMediaFileCheck(_ context.Context) {
 // healthCheckTimeout is the maximum time allowed for a scheduled health check.
 const healthCheckTimeout = 2 * time.Minute
 
-// runHealthCheck performs a scheduled database health check and sends alerts if issues are detected.
+// runHealthCheck runs the scheduled database health check and alert pass.
 func (s *Scheduler) runHealthCheck(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, healthCheckTimeout)
 	defer cancel()

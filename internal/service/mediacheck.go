@@ -26,13 +26,12 @@ const mediaCheckParallelism = 8
 // against individually frozen files.
 const mediaCheckRunTimeout = 30 * time.Minute
 
-// mediaCheckNotifier is the slice of the notification service used by the media
-// file check. Defined as an interface so the service can be tested with a fake.
+// mediaCheckNotifier is the notification subset required by the media file check.
 type mediaCheckNotifier interface {
 	NotifyMediaCheckResult(*notify.MediaCheckResult)
 }
 
-// MediaCheckScope echoes the resolved scope of a check run.
+// MediaCheckScope echoes the effective scope of a check run.
 type MediaCheckScope struct {
 	Date               string `json:"date,omitempty"`
 	From               string `json:"from,omitempty"`
@@ -53,7 +52,7 @@ type MediaCheckSummary struct {
 	Errors      int `json:"errors"`
 }
 
-// MediaCheckItemResult is the per-item outcome reported to operators.
+// MediaCheckItemResult is one operator-facing item verdict.
 type MediaCheckItemResult struct {
 	TrackID      string          `json:"trackid"`
 	Artist       string          `json:"artist"`
@@ -69,7 +68,7 @@ type MediaCheckItemResult struct {
 	Error        string          `json:"error,omitempty"`
 }
 
-// MediaCheckResult is the full result of one check run.
+// MediaCheckResult is the published result of one check run.
 type MediaCheckResult struct {
 	CheckedAt time.Time              `json:"checked_at"`
 	Scope     MediaCheckScope        `json:"scope"`
@@ -91,9 +90,8 @@ type MediaCheckStatus struct {
 	Result         *MediaCheckResult `json:"result"`
 }
 
-// MediaFileCheckService verifies that audio files referenced by the playlist
-// exist on disk. Runs are single-flighted through a Runner so a manual API
-// trigger and a scheduled run can never overlap.
+// MediaFileCheckService verifies that playlist audio references exist on disk.
+// Runs are single-flighted so manual and scheduled checks cannot overlap.
 type MediaFileCheckService struct {
 	repo   *database.Repository
 	config *config.Config
@@ -109,7 +107,7 @@ type MediaFileCheckService struct {
 	completedRunID uint64
 }
 
-// newMediaFileCheckService constructs the service.
+// newMediaFileCheckService returns a media file check service.
 func newMediaFileCheckService(
 	repo *database.Repository, cfg *config.Config, notifySvc *notify.NotificationService,
 ) *MediaFileCheckService {
@@ -140,8 +138,7 @@ func (s *MediaFileCheckService) TriggerScheduled() (uint64, error) {
 	return s.trigger(&opts, true)
 }
 
-// scheduledOptions builds the scope for scheduled runs: today (optionally
-// extended by LookaheadDays), honouring the configured voicetrack policy.
+// scheduledOptions builds the default scheduled scope and voicetrack policy.
 func (s *MediaFileCheckService) scheduledOptions() database.MediaCheckOptions {
 	return database.MediaCheckOptions{
 		LookaheadDays:      s.config.MediaFileCheck.LookaheadDays,
@@ -312,8 +309,6 @@ func (s *MediaFileCheckService) publishCompleted(result *MediaCheckResult, runID
 	}
 	s.completedRunID = runID
 }
-
-// Helpers (pure).
 
 func toMatchInput(item *database.MediaCheckItem) *matchInput {
 	return &matchInput{

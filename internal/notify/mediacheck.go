@@ -8,8 +8,7 @@ import (
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/util"
 )
 
-// MediaCheckProblem describes a single problematic playlist item (a file that is
-// missing, ambiguous, or could not be checked).
+// MediaCheckProblem is a missing, ambiguous, or unchecked playlist item.
 type MediaCheckProblem struct {
 	Artist      string
 	TrackTitle  string
@@ -19,8 +18,7 @@ type MediaCheckProblem struct {
 	DBReference string
 }
 
-// MediaCheckResult contains the information needed to send a media file check
-// notification.
+// MediaCheckResult is the notification payload for scheduled media file checks.
 type MediaCheckResult struct {
 	CheckedAt time.Time
 	Scope     string
@@ -28,8 +26,7 @@ type MediaCheckResult struct {
 	Problems  []MediaCheckProblem
 }
 
-// NotifyMediaCheckResult sends a failure email when a scheduled check finds
-// problems and a recovery email on the first clean run afterwards.
+// NotifyMediaCheckResult updates the media-file alert/recovery state.
 func (s *NotificationService) NotifyMediaCheckResult(r *MediaCheckResult) {
 	if r == nil {
 		return

@@ -23,7 +23,7 @@ import (
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/util"
 )
 
-// BackupService handles database backup operations.
+// BackupService creates, validates, lists, and deletes PostgreSQL backups.
 type BackupService struct {
 	repo       *database.Repository
 	config     *config.Config
@@ -39,7 +39,7 @@ type BackupService struct {
 	status   *BackupStatus
 }
 
-// BackupStatus represents the status of the last backup operation.
+// BackupStatus is the latest backup run snapshot.
 type BackupStatus struct {
 	Running   bool          `json:"running"`
 	StartedAt *time.Time    `json:"started_at,omitempty"`
@@ -50,13 +50,13 @@ type BackupStatus struct {
 	S3Sync    *S3SyncStatus `json:"s3_sync,omitempty"`
 }
 
-// S3SyncStatus represents the status of S3 synchronization.
+// S3SyncStatus is the latest remote sync result for a backup.
 type S3SyncStatus struct {
 	Synced bool   `json:"synced"`
 	Error  string `json:"error,omitempty"`
 }
 
-// newBackupService creates a BackupService with resolved tool paths and optional S3 client.
+// newBackupService resolves backup tooling and optional S3 state.
 func newBackupService(
 	repo *database.Repository, cfg *config.Config, notifySvc *notify.NotificationService,
 ) (*BackupService, error) {
@@ -68,7 +68,6 @@ func newBackupService(
 	}
 
 	if cfg.Backup.Enabled {
-		// Resolve required external tools at startup
 		pgDumpPath, err := resolveToolPath(cfg.Backup.PgDumpPath, "pg_dump")
 		if err != nil {
 			return nil, err
@@ -92,7 +91,6 @@ func newBackupService(
 		}
 		svc.backupRoot = root
 
-		// Initialize S3 backend if configured
 		s3svc, err := newS3Service(&cfg.Backup.S3)
 		if err != nil {
 			return nil, err
@@ -103,19 +101,17 @@ func newBackupService(
 	return svc, nil
 }
 
-// Close stops the backup service and waits for any running backup to complete.
+// Close waits for any running backup or tracked follow-up work.
 func (s *BackupService) Close() {
 	s.runner.Close()
 }
 
-// Types.
-
-// BackupRequest represents the request body for backup operations.
+// BackupRequest selects optional backup parameters.
 type BackupRequest struct {
 	Compression int `json:"compression"`
 }
 
-// BackupInfo represents metadata about an existing backup file.
+// BackupInfo describes one local backup file.
 type BackupInfo struct {
 	Filename      string    `json:"filename"`
 	Size          int64     `json:"size_bytes"`
@@ -123,14 +119,12 @@ type BackupInfo struct {
 	CreatedAt     time.Time `json:"created_at"`
 }
 
-// BackupListResponse represents the response for listing backups.
+// BackupListResponse is the backup directory summary.
 type BackupListResponse struct {
 	Backups    []BackupInfo `json:"backups"`
 	TotalSize  int64        `json:"total_size_bytes"`
 	TotalCount int          `json:"total_count"`
 }
-
-// Helpers.
 
 const (
 	backupPrefix = "aeron-backup-"
@@ -139,7 +133,7 @@ const (
 
 var safeBackupFilenamePattern = regexp.MustCompile(`^[a-zA-Z0-9_\-.]+$`)
 
-// resolveToolPath returns the absolute path to an external tool, checking custom paths first.
+// resolveToolPath returns the configured tool path or resolves toolName from PATH.
 func resolveToolPath(customPath, toolName string) (string, error) {
 	if customPath != "" {
 		if _, err := os.Stat(customPath); err != nil {
@@ -155,7 +149,7 @@ func resolveToolPath(customPath, toolName string) (string, error) {
 	return path, nil
 }
 
-// checkEnabled returns an error if backup functionality is disabled.
+// checkEnabled rejects backup operations when backup support is not initialized.
 func (s *BackupService) checkEnabled() error {
 	if !s.config.Backup.Enabled || s.backupRoot == nil {
 		return types.NewConfigError("backup.enabled", "backup functionality is not enabled")
@@ -163,7 +157,7 @@ func (s *BackupService) checkEnabled() error {
 	return nil
 }
 
-// validateBackupFilename ensures the filename has valid characters, expected prefix and .dump extension.
+// validateBackupFilename accepts only managed .dump backup filenames.
 func validateBackupFilename(filename string) error {
 	if !safeBackupFilenamePattern.MatchString(filename) {
 		return types.NewValidationError("filename", "invalid filename")
@@ -174,7 +168,7 @@ func validateBackupFilename(filename string) error {
 	return nil
 }
 
-// buildPgDumpArgs constructs pg_dump command-line arguments for the given settings.
+// buildPgDumpArgs constructs the pg_dump arguments for the configured database.
 func (s *BackupService) buildPgDumpArgs(compression int) []string {
 	return []string{
 		"--format=custom",
@@ -188,7 +182,7 @@ func (s *BackupService) buildPgDumpArgs(compression int) []string {
 	}
 }
 
-// compressionLevel returns a valid compression level (0-9), applying defaults and validation.
+// compressionLevel applies the default and validates the 0-9 pg_dump range.
 func (s *BackupService) compressionLevel(requested int) (int, error) {
 	level := requested
 	if level == 0 {
@@ -200,9 +194,9 @@ func (s *BackupService) compressionLevel(requested int) (int, error) {
 	return level, nil
 }
 
-// validateBackupFile checks backup file integrity using pg_restore --list.
+// validateBackupFile checks backup integrity with pg_restore --list.
 func (s *BackupService) validateBackupFile(ctx context.Context, filePath string) error {
-	//nolint:gosec // pgRestorePath is from validated config
+	//nolint:gosec // G204: pgRestorePath is resolved from config/PATH at startup.
 	cmd := exec.CommandContext(ctx, s.pgRestorePath, "--list", filePath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -215,13 +209,13 @@ func (s *BackupService) validateBackupFile(ctx context.Context, filePath string)
 	return nil
 }
 
-// generateBackupFilename creates a timestamped filename with .dump extension.
+// generateBackupFilename returns a managed timestamped .dump filename.
 func generateBackupFilename() string {
 	timestamp := time.Now().Format("2006-01-02-150405")
 	return fmt.Sprintf("%s%s%s", backupPrefix, timestamp, backupSuffix)
 }
 
-// executePgDump runs pg_dump and returns file info on success, cleaning up on failure.
+// executePgDump runs pg_dump and removes the partial file on failure.
 func (s *BackupService) executePgDump(
 	ctx context.Context, pgDumpPath, filename, fullPath string, args []string,
 ) (os.FileInfo, time.Duration, error) {
@@ -266,8 +260,6 @@ func (s *BackupService) executePgDump(
 	return fileInfo, duration, nil
 }
 
-// Public methods.
-
 // Start initiates a database backup in the background. Returns an error if
 // validation fails or a backup is already running.
 func (s *BackupService) Start(req BackupRequest) error {
@@ -282,7 +274,7 @@ func (s *BackupService) Start(req BackupRequest) error {
 		return types.NewConflictError("backup", "backup already in progress")
 	}
 
-	// Initialize status before spawning goroutine to prevent race condition
+	// Initialize status before spawning the goroutine to avoid a race.
 	s.setStatusStarted()
 
 	s.runner.Go(func() {
@@ -295,7 +287,7 @@ func (s *BackupService) Start(req BackupRequest) error {
 	return nil
 }
 
-// Run executes a database backup synchronously, blocking until completion.
+// Run executes a database backup synchronously.
 func (s *BackupService) Run(ctx context.Context, req BackupRequest) error {
 	if !s.runner.TryStart() {
 		return types.NewConflictError("backup", "backup already in progress")
@@ -307,8 +299,8 @@ func (s *BackupService) Run(ctx context.Context, req BackupRequest) error {
 	return s.execute(ctx, req)
 }
 
-// execute creates a database backup and synchronizes it to S3 if configured.
-// Note: Caller must call setStatusStarted() before invoking this method.
+// execute creates a backup and starts optional S3 synchronization.
+// The caller must publish the started status first.
 func (s *BackupService) execute(ctx context.Context, req BackupRequest) error {
 	if err := s.checkEnabled(); err != nil {
 		s.setStatusDone(false, "", err.Error())
@@ -337,7 +329,6 @@ func (s *BackupService) execute(ctx context.Context, req BackupRequest) error {
 		return err
 	}
 
-	// Validate backup file integrity
 	slog.Info("Validating backup", "filename", filename)
 
 	validateCtx, validateCancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -387,7 +378,7 @@ func (s *BackupService) execute(ctx context.Context, req BackupRequest) error {
 	return nil
 }
 
-// Status returns the current state and result of the last backup operation.
+// Status returns a snapshot of the latest backup state.
 func (s *BackupService) Status() *BackupStatus {
 	s.statusMu.RLock()
 	defer s.statusMu.RUnlock()
@@ -439,7 +430,7 @@ func (s *BackupService) setS3SyncStatus(synced bool, errMsg string) {
 	}
 }
 
-// notifyBackup sends a backup notification based on the current status.
+// notifyBackup sends the current backup status to the notifier.
 func (s *BackupService) notifyBackup() {
 	st := s.Status()
 	s.notify.NotifyBackupResult(&notify.BackupResult{
@@ -451,7 +442,7 @@ func (s *BackupService) notifyBackup() {
 	})
 }
 
-// List returns metadata for all backup files in the backup directory.
+// List returns metadata for managed backup files in the backup directory.
 func (s *BackupService) List() (*BackupListResponse, error) {
 	if err := s.checkEnabled(); err != nil {
 		return nil, err
@@ -508,7 +499,7 @@ func (s *BackupService) List() (*BackupListResponse, error) {
 	}, nil
 }
 
-// Delete removes a backup file from local storage and S3 if configured.
+// Delete removes a managed backup locally and schedules remote deletion.
 func (s *BackupService) Delete(filename string) error {
 	if err := s.checkEnabled(); err != nil {
 		return err
@@ -546,7 +537,7 @@ func (s *BackupService) Delete(filename string) error {
 	return nil
 }
 
-// GetFilePath returns the absolute path to a backup file.
+// GetFilePath validates filename and returns its absolute local path.
 func (s *BackupService) GetFilePath(filename string) (string, error) {
 	if err := s.checkEnabled(); err != nil {
 		return "", err
@@ -563,14 +554,14 @@ func (s *BackupService) GetFilePath(filename string) (string, error) {
 	return filepath.Join(s.config.Backup.GetPath(), filename), nil
 }
 
-// ValidationResult represents the result of on-demand backup validation.
+// ValidationResult is the on-demand backup validation result.
 type ValidationResult struct {
 	Filename string `json:"filename"`
 	Valid    bool   `json:"valid"`
 	Error    string `json:"error,omitempty"`
 }
 
-// Validate checks backup file integrity using pg_restore --list.
+// Validate checks a managed backup with pg_restore --list.
 func (s *BackupService) Validate(filename string) (*ValidationResult, error) {
 	fullPath, err := s.GetFilePath(filename)
 	if err != nil {
@@ -594,9 +585,7 @@ func (s *BackupService) Validate(filename string) (*ValidationResult, error) {
 	return result, nil
 }
 
-// Background cleanup.
-
-// cleanupOldBackups removes files exceeding retention days or max backup count.
+// cleanupOldBackups removes backups exceeding age or count retention.
 func (s *BackupService) cleanupOldBackups() {
 	backups, err := s.List()
 	if err != nil {

@@ -29,7 +29,7 @@ type MediaCheckItem struct {
 	AudioName  string `db:"audioname"`
 }
 
-// MediaCheckOptions contains the scope filters for a media file check query.
+// MediaCheckOptions defines the playlist scope for a media file check query.
 //
 // Filter precedence mirrors the playlist endpoint: a BlockID selects a single
 // block; otherwise Date selects one calendar day; otherwise From/To select a
@@ -68,9 +68,9 @@ const mediaCheckJoins = `
 	LEFT JOIN %s.audio au ON t.audioid = au.audioid
 	LEFT JOIN %s.playlistblock pb ON pi.blockid = pb.blockid`
 
-// BuildMediaCheckQuery generates a parameterized query selecting playlist items
-// with their audio references for the given scope. The schema is validated as an
-// identifier; all user-supplied values are bound as parameters.
+// BuildMediaCheckQuery builds a parameterized playlist-audio query for the
+// requested scope. The schema is validated as an identifier; user values are
+// always bound as parameters.
 func BuildMediaCheckQuery(schema string, opts *MediaCheckOptions) (query string, params []any, err error) {
 	if !types.IsValidIdentifier(schema) {
 		return "", nil, types.NewValidationError("schema", fmt.Sprintf("invalid schema name: %s", schema))
@@ -126,8 +126,7 @@ func BuildMediaCheckQuery(schema string, opts *MediaCheckOptions) (query string,
 	return query, params, nil
 }
 
-// GetMediaCheckItems returns playlist items with their audio references for the
-// given scope.
+// GetMediaCheckItems returns playlist items and audio references for opts.
 func (r *Repository) GetMediaCheckItems(ctx context.Context, opts *MediaCheckOptions) ([]MediaCheckItem, error) {
 	query, params, err := BuildMediaCheckQuery(r.schema, opts)
 	if err != nil {

@@ -1,4 +1,4 @@
-// Package types provides shared type definitions used across the application.
+// Package types defines shared API, database, and error contracts.
 package types
 
 import (
@@ -29,7 +29,7 @@ func (e *NotFoundError) Error() string {
 // StatusCode implements HTTPError.
 func (e *NotFoundError) StatusCode() int { return http.StatusNotFound }
 
-// NewNotFoundError creates a NotFoundError for the specified resource type and ID.
+// NewNotFoundError returns a 404-mapped error for resource and id.
 func NewNotFoundError(resource, id string) *NotFoundError {
 	return &NotFoundError{Resource: resource, ID: id}
 }
@@ -51,7 +51,7 @@ func (e *ValidationError) Error() string {
 // StatusCode implements HTTPError.
 func (e *ValidationError) StatusCode() int { return http.StatusBadRequest }
 
-// NewValidationError creates a ValidationError for the specified field.
+// NewValidationError returns a 400-mapped error for a field-level problem.
 func NewValidationError(field, message string) *ValidationError {
 	return &ValidationError{Field: field, Message: message}
 }
@@ -78,7 +78,7 @@ func (e *OperationError) Unwrap() error {
 // StatusCode implements HTTPError.
 func (e *OperationError) StatusCode() int { return http.StatusInternalServerError }
 
-// NewOperationError creates an OperationError wrapping the given error.
+// NewOperationError wraps err with an operation label.
 func NewOperationError(operation string, err error) *OperationError {
 	return &OperationError{Operation: operation, Err: err}
 }
@@ -97,7 +97,7 @@ func (e *ConflictError) Error() string {
 // StatusCode implements HTTPError.
 func (e *ConflictError) StatusCode() int { return http.StatusConflict }
 
-// NewConflictError creates a ConflictError for the specified resource.
+// NewConflictError returns a 409-mapped error for a conflicting resource action.
 func NewConflictError(resource, message string) *ConflictError {
 	return &ConflictError{Resource: resource, Message: message}
 }
@@ -116,7 +116,7 @@ func (e *ConfigError) Error() string {
 // StatusCode implements HTTPError.
 func (e *ConfigError) StatusCode() int { return http.StatusInternalServerError }
 
-// NewConfigError creates a ConfigError for the specified configuration field.
+// NewConfigError returns a configuration error for field.
 func NewConfigError(field, message string) *ConfigError {
 	return &ConfigError{Field: field, Message: message}
 }

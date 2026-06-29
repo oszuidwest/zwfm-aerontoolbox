@@ -16,7 +16,7 @@ import (
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/util"
 )
 
-// MediaFileStatus classifies the on-disk outcome for a single playlist item.
+// MediaFileStatus classifies the on-disk verdict for a playlist item.
 type MediaFileStatus string
 
 const (
@@ -32,7 +32,7 @@ const (
 	MediaStatusStatError MediaFileStatus = "stat_error"
 )
 
-// Match strategy labels reported in MediaCheckItemResult.MatchType.
+// Match strategy labels stored in MediaCheckItemResult.MatchType.
 const (
 	matchTypeExactPath     = "exact_path"
 	matchTypeFilename      = "filename"
@@ -41,8 +41,8 @@ const (
 
 const maxFileIndexErrors = 5
 
-// normalizeDriveKey turns a Windows drive prefix ("O:", "o:\", "O") into the
-// canonical "O:" form. It returns "" when s is not a single-letter drive.
+// normalizeDriveKey converts a Windows drive prefix to canonical "O:" form.
+// It returns "" when s is not a single-letter drive.
 func normalizeDriveKey(s string) string {
 	s = strings.TrimSpace(s)
 	s = strings.TrimSuffix(s, `\`)
@@ -57,8 +57,7 @@ func normalizeDriveKey(s string) string {
 	return strings.ToUpper(s) + ":"
 }
 
-// driveOf returns the canonical drive prefix of a Windows path, or "" if the
-// path has no drive letter.
+// driveOf returns the canonical drive prefix of a Windows path.
 func driveOf(winPath string) string {
 	if len(winPath) < 2 || winPath[1] != ':' {
 		return ""
@@ -66,9 +65,8 @@ func driveOf(winPath string) string {
 	return normalizeDriveKey(winPath[:2])
 }
 
-// winPathComponents strips the drive prefix from a Windows path and splits the
-// remainder into path components on either separator. Empty components and "."
-// are dropped. It returns nil when the path escapes its root via "..".
+// winPathComponents splits a Windows path into safe relative components.
+// It returns nil when the path escapes its root via "..".
 func winPathComponents(winPath string) []string {
 	rest := winPath
 	if d := driveOf(winPath); d != "" {
@@ -105,8 +103,7 @@ func stem(name string) string {
 	return strings.TrimSuffix(name, filepath.Ext(name))
 }
 
-// foldKey lowercases s when matching is case-insensitive, so lookups ignore the
-// casing differences between Windows references and a case-sensitive host FS.
+// foldKey lowercases s when lookups should ignore host filesystem casing.
 func foldKey(s string, caseInsensitive bool) string {
 	if caseInsensitive {
 		return strings.ToLower(s)
@@ -124,10 +121,8 @@ type fileIndex struct {
 	errors []string
 }
 
-// buildFileIndex walks each search dir recursively and indexes every regular
-// file by filename and by stem. Per-file walk errors are logged and skipped so
-// one unreadable subtree does not abort the whole index. The walk aborts early
-// if ctx is cancelled.
+// buildFileIndex indexes regular files by full filename and stem.
+// Per-file walk errors are logged and skipped; ctx cancellation aborts the walk.
 func buildFileIndex(ctx context.Context, dirs []string, caseInsensitive bool) *fileIndex {
 	idx := &fileIndex{
 		byName: make(map[string][]string),
@@ -219,8 +214,7 @@ type mediaMatcher struct {
 	indexOnce sync.Once
 }
 
-// matchInput is the per-item data the matcher classifies. It is decoupled from
-// the database row so the matcher can be unit-tested without a database.
+// matchInput is the database-free item data classified by mediaMatcher.
 type matchInput struct {
 	FilePath   string // audio.filepath (full Windows path)
 	FileName   string // audio.filename (full Windows path)
@@ -229,7 +223,7 @@ type matchInput struct {
 	TrackTitle string
 }
 
-// matchOutcome is the matcher's verdict for one item.
+// matchOutcome is the matcher verdict for one item.
 type matchOutcome struct {
 	Status       MediaFileStatus
 	DBReference  string
@@ -347,9 +341,8 @@ func finishIndexMatch(out *matchOutcome, matches []string, matchType string) {
 	}
 }
 
-// statDriveMapped translates a Windows reference through the drive mappings and
-// stats the resulting host path. It returns ("", false, nil) when no mapping
-// applies to the reference's drive.
+// statDriveMapped maps a Windows reference to a host path and stats it.
+// It returns ("", false, nil) when no drive mapping applies.
 func (m *mediaMatcher) statDriveMapped(ref string) (candidate string, exists bool, err error) {
 	drive := driveOf(ref)
 	if drive == "" {

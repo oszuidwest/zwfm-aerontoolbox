@@ -13,14 +13,14 @@ import (
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
 )
 
-// Server represents the HTTP API server for the Aeron radio automation system.
+// Server owns the HTTP routing, middleware, and listener lifecycle.
 type Server struct {
 	service *service.AeronService
 	version string
 	server  *http.Server
 }
 
-// New creates a new Server instance.
+// New returns a Server bound to the service layer and build version.
 func New(svc *service.AeronService, version string) *Server {
 	return &Server{
 		service: svc,
@@ -28,7 +28,7 @@ func New(svc *service.AeronService, version string) *Server {
 	}
 }
 
-// Start initializes and starts the HTTP server on the specified port.
+// Start serves the API on port until shutdown or listener failure.
 func (s *Server) Start(port string) error {
 	router := s.router()
 
@@ -41,7 +41,7 @@ func (s *Server) Start(port string) error {
 	return s.server.ListenAndServe()
 }
 
-// router builds the HTTP handler tree.
+// router builds the public health route and authenticated API surface.
 func (s *Server) router() http.Handler {
 	router := chi.NewRouter()
 
@@ -68,7 +68,6 @@ func (s *Server) router() http.Handler {
 
 		r.Get("/health", s.handleHealth)
 
-		// Authenticated routes with standard request timeout
 		r.Group(func(r chi.Router) {
 			r.Use(s.authMiddleware)
 			r.Use(middleware.Timeout(s.service.Config().API.GetRequestTimeout()))
@@ -79,12 +78,10 @@ func (s *Server) router() http.Handler {
 			r.Get("/playlist", s.handlePlaylist)
 
 			r.Route("/db", func(r chi.Router) {
-				// Maintenance endpoints
 				r.Route("/maintenance", func(r chi.Router) {
 					r.Get("/health", s.handleDatabaseHealth)
 				})
 
-				// Backup endpoints (guarded: 404 when backup is disabled)
 				r.Group(func(r chi.Router) {
 					r.Use(s.requireBackupEnabled)
 					r.Post("/backup", s.handleCreateBackup)
@@ -96,14 +93,12 @@ func (s *Server) router() http.Handler {
 				})
 			})
 
-			// File monitor endpoints (guarded: 404 when file monitor is disabled)
 			r.Group(func(r chi.Router) {
 				r.Use(s.requireFileMonitorEnabled)
 				r.Get("/file-monitor/status", s.handleFileMonitorStatus)
 				r.Post("/file-monitor/check", s.handleFileMonitorCheck)
 			})
 
-			// Media file check endpoints (guarded: 404 when disabled)
 			r.Group(func(r chi.Router) {
 				r.Use(s.requireMediaFileCheckEnabled)
 				r.Post("/media/files/check", s.handleMediaFileCheck)
@@ -117,7 +112,7 @@ func (s *Server) router() http.Handler {
 	return router
 }
 
-// Shutdown gracefully shuts down the server.
+// Shutdown gracefully stops the active HTTP server. It is a no-op before Start.
 func (s *Server) Shutdown(ctx context.Context) error {
 	if s.server == nil {
 		return nil

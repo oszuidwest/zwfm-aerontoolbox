@@ -1,7 +1,7 @@
 package api
 
-// Note: handleHealth itself is not unit-tested here because it requires a live
-// database for the Repository().Ping() call; it is smoke-tested by CI.
+// handleHealth itself is not unit-tested here because it requires a live
+// database for Repository().Ping(); it is smoke-tested by CI.
 // The status precedence logic is extracted into overallHealthStatus and tested below.
 
 import "testing"

@@ -8,7 +8,7 @@ import (
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
 )
 
-// HealthAlertResult contains the information needed to send a health check notification.
+// HealthAlertResult is the notification payload for database health checks.
 type HealthAlertResult struct {
 	Recommendations    []string
 	ActiveConnections  int
@@ -18,13 +18,13 @@ type HealthAlertResult struct {
 	CheckedAt          time.Time
 }
 
-// HasIssues returns true if the health check found any problems.
+// HasIssues reports whether the check should keep the alert state active.
 func (r *HealthAlertResult) HasIssues() bool {
 	return len(r.Recommendations) > 0 || len(r.LongRunningQueries) > 0
 }
 
-// NotifyHealthCheckError sends an alert when the health check itself fails (e.g. database unreachable).
-// Uses the same state tracking as NotifyHealthAlert so a recovery email is sent when the next check succeeds.
+// NotifyHealthCheckError opens the health alert state when the check itself fails.
+// The next successful clean check will emit the matching recovery email.
 func (s *NotificationService) NotifyHealthCheckError(err error) {
 	if !IsConfigured(&s.config.Notifications.Email) || err == nil {
 		return
@@ -45,7 +45,7 @@ func (s *NotificationService) NotifyHealthCheckError(err error) {
 	s.sendAsync(subject, b.String())
 }
 
-// NotifyHealthAlert sends a failure or recovery email based on the health check result.
+// NotifyHealthAlert updates the database-health alert/recovery state.
 func (s *NotificationService) NotifyHealthAlert(r *HealthAlertResult) {
 	if r == nil {
 		return

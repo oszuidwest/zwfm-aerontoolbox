@@ -15,13 +15,13 @@ import (
 )
 
 const (
-	// expiryWarningDays is the number of days before expiration to show a warning.
+	// expiryWarningDays is the warning threshold for client secret expiry.
 	expiryWarningDays = 30
-	// expiryCacheTTL is how long to cache the expiry info before re-checking.
+	// expiryCacheTTL is the maximum age of cached expiry data.
 	expiryCacheTTL = 1 * time.Hour
 )
 
-// SecretExpiryInfo contains information about client secret expiration.
+// SecretExpiryInfo is the health payload for Graph client secret expiry.
 type SecretExpiryInfo struct {
 	ExpiresAt   string `json:"expires_at,omitempty"`
 	ExpiresSoon bool   `json:"expires_soon"`
@@ -29,7 +29,7 @@ type SecretExpiryInfo struct {
 	Error       string `json:"error,omitempty"`
 }
 
-// SecretExpiryChecker checks client secret expiration via Microsoft Graph API.
+// SecretExpiryChecker caches Microsoft Graph client secret expiry.
 type SecretExpiryChecker struct {
 	mu         sync.RWMutex
 	cfg        *config.GraphConfig
@@ -39,7 +39,7 @@ type SecretExpiryChecker struct {
 	refreshing bool // prevents multiple concurrent refreshes
 }
 
-// NewSecretExpiryChecker creates a new expiry checker for the given config.
+// NewSecretExpiryChecker returns an expiry checker for cfg.
 func NewSecretExpiryChecker(cfg *config.GraphConfig) *SecretExpiryChecker {
 	return &SecretExpiryChecker{
 		cfg:        cfg,
@@ -47,8 +47,7 @@ func NewSecretExpiryChecker(cfg *config.GraphConfig) *SecretExpiryChecker {
 	}
 }
 
-// Info returns the secret expiry information, using a cached value if fresh enough.
-// If the cache is stale, it triggers an async refresh and returns the stale cached value.
+// Info returns cached expiry information and refreshes stale data asynchronously.
 // Only one refresh runs at a time to prevent thundering herd during outages.
 func (c *SecretExpiryChecker) Info() SecretExpiryInfo {
 	c.mu.RLock()
@@ -57,20 +56,18 @@ func (c *SecretExpiryChecker) Info() SecretExpiryInfo {
 	c.mu.RUnlock()
 
 	if needsRefresh {
-		// refresh() has its own guard to prevent concurrent refreshes
 		go c.refresh()
 	}
 
 	return cached
 }
 
-// refresh fetches fresh expiry information from the Graph API and updates the cache.
+// refresh fetches expiry information from Graph and updates the cache.
 func (c *SecretExpiryChecker) refresh() {
-	// Set refreshing flag and ensure it's cleared when done
 	c.mu.Lock()
 	if c.refreshing {
 		c.mu.Unlock()
-		return // Another refresh is already in progress
+		return
 	}
 	c.refreshing = true
 	cfg := c.cfg
@@ -97,7 +94,7 @@ func (c *SecretExpiryChecker) refresh() {
 	c.mu.Unlock()
 }
 
-// applicationResponse represents a Microsoft Graph application response.
+// applicationResponse is the subset of the Graph application payload we need.
 type applicationResponse struct {
 	PasswordCredentials []passwordCredential `json:"passwordCredentials"`
 }
@@ -106,7 +103,7 @@ type passwordCredential struct {
 	EndDateTime string `json:"endDateTime"`
 }
 
-// fetchExpiryInfo queries the Graph API for credential expiry information.
+// fetchExpiryInfo queries Graph for the earliest non-expired client secret.
 func (c *SecretExpiryChecker) fetchExpiryInfo(cfg *config.GraphConfig) (SecretExpiryInfo, error) {
 	ctx, cancel := context.WithTimeoutCause(
 		context.Background(),
@@ -149,7 +146,6 @@ func (c *SecretExpiryChecker) fetchExpiryInfo(cfg *config.GraphConfig) (SecretEx
 		return SecretExpiryInfo{}, fmt.Errorf("parse response: %w", err)
 	}
 
-	// Find the earliest non-expired credential
 	now := time.Now()
 	var earliest time.Time
 	for _, cred := range appResp.PasswordCredentials {
@@ -161,7 +157,7 @@ func (c *SecretExpiryChecker) fetchExpiryInfo(cfg *config.GraphConfig) (SecretEx
 			continue
 		}
 		if expiry.Before(now) {
-			continue // Skip already-expired credentials
+			continue
 		}
 		if earliest.IsZero() || expiry.Before(earliest) {
 			earliest = expiry

@@ -1,4 +1,4 @@
-// Package image provides image processing and optimization functionality.
+// Package image validates, resizes, and re-encodes uploaded artwork.
 package image
 
 import (
@@ -13,7 +13,7 @@ import (
 	"golang.org/x/image/draw"
 )
 
-// Config contains image processing settings.
+// Config controls image dimensions, quality, and minimum-size policy.
 type Config struct {
 	TargetWidth   int
 	TargetHeight  int
@@ -21,7 +21,7 @@ type Config struct {
 	RejectSmaller bool
 }
 
-// ProcessingResult contains the results of image processing operations.
+// ProcessingResult reports original and stored image characteristics.
 type ProcessingResult struct {
 	Data      []byte
 	Format    string
@@ -31,7 +31,7 @@ type ProcessingResult struct {
 	Savings   float64
 }
 
-// Info contains image metadata.
+// Info is decoded image metadata.
 type Info struct {
 	Format string
 	Width  int
@@ -39,17 +39,17 @@ type Info struct {
 	Size   int
 }
 
-// Optimizer handles image optimization operations.
+// Optimizer applies configured resize and encoding rules.
 type Optimizer struct {
 	Config Config
 }
 
-// NewOptimizer returns an Optimizer configured with the specified settings.
+// NewOptimizer returns an Optimizer for config.
 func NewOptimizer(config Config) *Optimizer {
 	return &Optimizer{Config: config}
 }
 
-// DownloadImage downloads an image from a URL with SSRF protection.
+// DownloadImage fetches a remote image through the shared SSRF guard.
 func DownloadImage(urlString string, maxSize int64) ([]byte, error) {
 	return util.ValidateAndDownloadImage(urlString, maxSize)
 }
@@ -63,7 +63,7 @@ func getImageInfo(data []byte) (format string, width, height int, err error) {
 	return format, config.Width, config.Height, nil
 }
 
-// OptimizeImage processes and optimizes image data according to the configured settings.
+// OptimizeImage resizes and re-encodes supported image data when beneficial.
 // The format parameter is the already-detected image format (e.g. "jpeg", "png").
 func (o *Optimizer) OptimizeImage(data []byte, format string) (optimized []byte, outFormat, encoder string, err error) {
 	switch format {
@@ -145,7 +145,7 @@ func (o *Optimizer) resizeImage(sourceImage image.Image, maxWidth, maxHeight int
 	return dst
 }
 
-// Process is the main entry point for image processing.
+// Process validates imageData and returns the bytes that should be stored.
 func Process(imageData []byte, config Config) (*ProcessingResult, error) {
 	originalInfo, err := extractImageInfo(imageData)
 	if err != nil {

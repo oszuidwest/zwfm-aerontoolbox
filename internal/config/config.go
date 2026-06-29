@@ -1,4 +1,4 @@
-// Package config provides application configuration management.
+// Package config loads, defaults, and validates JSON configuration for the API server.
 package config
 
 import (
@@ -19,7 +19,7 @@ import (
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/util"
 )
 
-// DatabaseConfig contains PostgreSQL database connection parameters.
+// DatabaseConfig holds PostgreSQL connection settings.
 type DatabaseConfig struct {
 	Host                   string `json:"host" validate:"required"`
 	Port                   string `json:"port" validate:"required"`
@@ -33,7 +33,7 @@ type DatabaseConfig struct {
 	ConnMaxLifetimeMinutes int    `json:"conn_max_lifetime_minutes" validate:"gte=0"`
 }
 
-// ImageConfig contains image processing and optimization settings.
+// ImageConfig controls image validation and optimization.
 type ImageConfig struct {
 	TargetWidth               int   `json:"target_width" validate:"required,gt=0"`
 	TargetHeight              int   `json:"target_height" validate:"required,gt=0"`
@@ -42,14 +42,14 @@ type ImageConfig struct {
 	MaxImageDownloadSizeBytes int64 `json:"max_image_download_size_bytes" validate:"gte=0"`
 }
 
-// APIConfig contains API authentication and server settings.
+// APIConfig controls API authentication and request timeouts.
 type APIConfig struct {
 	Enabled               bool     `json:"enabled"`
 	Keys                  []string `json:"keys" validate:"required_if=Enabled true,dive,required"`
 	RequestTimeoutSeconds int      `json:"request_timeout_seconds" validate:"gte=0"`
 }
 
-// MaintenanceConfig contains thresholds and settings for database health monitoring.
+// MaintenanceConfig holds thresholds used by database health checks.
 type MaintenanceConfig struct {
 	BloatThreshold              float64         `json:"bloat_threshold" validate:"gte=0,lte=100"`
 	DeadTupleThreshold          int64           `json:"dead_tuple_threshold" validate:"gte=0"`
@@ -63,13 +63,13 @@ type MaintenanceConfig struct {
 	Scheduler                   SchedulerConfig `json:"scheduler"`
 }
 
-// SchedulerConfig contains settings for individual scheduled operations.
+// SchedulerConfig controls a single cron-backed operation.
 type SchedulerConfig struct {
 	Enabled  bool   `json:"enabled"`
 	Schedule string `json:"schedule" validate:"required_if=Enabled true"`
 }
 
-// S3Config contains settings for S3-compatible storage synchronization.
+// S3Config configures optional S3-compatible backup synchronization.
 type S3Config struct {
 	Enabled         bool   `json:"enabled"`
 	Bucket          string `json:"bucket" validate:"required_if=Enabled true"`
@@ -81,7 +81,7 @@ type S3Config struct {
 	ForcePathStyle  bool   `json:"force_path_style"`
 }
 
-// BackupConfig contains settings for database backup functionality.
+// BackupConfig configures local and optional remote database backups.
 type BackupConfig struct {
 	Enabled            bool            `json:"enabled"`
 	Path               string          `json:"path" validate:"required_if=Enabled true"`
@@ -95,21 +95,21 @@ type BackupConfig struct {
 	S3                 S3Config        `json:"s3"`
 }
 
-// NotificationsConfig contains notification settings.
+// NotificationsConfig groups all notification providers.
 type NotificationsConfig struct {
 	Email GraphConfig `json:"email"`
 }
 
-// GraphConfig contains Microsoft Graph API settings for email notifications.
+// GraphConfig configures Microsoft Graph email delivery.
 type GraphConfig struct {
 	TenantID     string `json:"tenant_id" validate:"omitempty,guid"`
 	ClientID     string `json:"client_id" validate:"omitempty,guid"`
-	ClientSecret string `json:"client_secret"` //nolint:gosec // Configuration field, not a credential
+	ClientSecret string `json:"client_secret"` //nolint:gosec // G101: user-supplied config secret, not a hardcoded credential
 	FromAddress  string `json:"from_address"`
 	Recipients   string `json:"recipients"`
 }
 
-// FileMonitorConfig contains settings for monitoring file freshness on disk.
+// FileMonitorConfig configures freshness checks for files on disk.
 type FileMonitorConfig struct {
 	Enabled         bool                     `json:"enabled"`
 	IntervalSeconds int                      `json:"interval_seconds" validate:"gte=0"`
@@ -129,7 +129,7 @@ type FileMonitorCheckConfig struct {
 	ActiveWindow   string `json:"active_window"`
 }
 
-// DisplayName returns the check name if set, otherwise the file path.
+// DisplayName returns the configured label, falling back to the file path.
 func (c *FileMonitorCheckConfig) DisplayName() string {
 	if c.Name != "" {
 		return c.Name
@@ -161,8 +161,7 @@ func (c *FileMonitorConfig) Interval() time.Duration {
 	return time.Duration(c.IntervalSeconds) * time.Second
 }
 
-// MediaFileCheckConfig contains settings for verifying that audio files
-// referenced by the playlist actually exist on disk.
+// MediaFileCheckConfig configures playlist audio verification against disk files.
 //
 // The Aeron database stores Windows paths (e.g. O:\Audio\85\Artist - Title.wav)
 // while this service typically runs on Linux. Two complementary strategies map a
@@ -184,10 +183,8 @@ type MediaFileCheckConfig struct {
 	MaxRangeDays       int               `json:"max_range_days" validate:"gte=0"`
 	CaseInsensitive    *bool             `json:"case_insensitive"`
 	IncludeVoicetracks bool              `json:"include_voicetracks"`
-	// LookaheadDays extends the scheduled run beyond today: it checks today
-	// through today+LookaheadDays (inclusive), so missing files surface before
-	// they air. 0 (default) checks only today. Manual API runs use their own
-	// from/to range and ignore this.
+	// LookaheadDays extends scheduled runs from today through today+N
+	// inclusive. A zero value checks only today; manual API runs ignore this.
 	LookaheadDays int             `json:"lookahead_days" validate:"gte=0"`
 	Scheduler     SchedulerConfig `json:"scheduler"`
 }
@@ -207,7 +204,7 @@ func (c *MediaFileCheckConfig) StatTimeout() time.Duration {
 	return time.Duration(c.StatTimeoutSec) * time.Second
 }
 
-// GetMaxRangeDays returns the maximum allowed from/to span in days.
+// GetMaxRangeDays returns the configured from/to span cap or its default.
 func (c *MediaFileCheckConfig) GetMaxRangeDays() int {
 	return cmp.Or(c.MaxRangeDays, DefaultMediaFileCheckMaxRangeDays)
 }
@@ -221,13 +218,13 @@ func (c *MediaFileCheckConfig) IsCaseInsensitive() bool {
 	return *c.CaseInsensitive
 }
 
-// LogConfig contains logging configuration.
+// LogConfig configures global structured logging.
 type LogConfig struct {
 	Level  string `json:"level" validate:"omitempty,oneof=debug info warn error"`
 	Format string `json:"format" validate:"omitempty,oneof=text json"`
 }
 
-// Config represents the complete application configuration.
+// Config is the fully loaded application configuration.
 type Config struct {
 	Database       DatabaseConfig       `json:"database"`
 	Image          ImageConfig          `json:"image"`
@@ -262,27 +259,27 @@ const (
 	DefaultBackupTimeoutMinutes        = 30
 )
 
-// GetMaxDownloadBytes returns the maximum allowed image download size in bytes.
+// GetMaxDownloadBytes returns the configured image download cap or its default.
 func (c *ImageConfig) GetMaxDownloadBytes() int64 {
 	return cmp.Or(c.MaxImageDownloadSizeBytes, DefaultMaxImageDownloadSizeBytes)
 }
 
-// GetRequestTimeout returns the HTTP request timeout as a Duration.
+// GetRequestTimeout returns the configured HTTP timeout or its default.
 func (c *APIConfig) GetRequestTimeout() time.Duration {
 	return time.Duration(cmp.Or(c.RequestTimeoutSeconds, DefaultRequestTimeoutSeconds)) * time.Second
 }
 
-// GetMaxOpenConns returns the maximum number of open database connections.
+// GetMaxOpenConns returns the configured open-connection cap or its default.
 func (c *DatabaseConfig) GetMaxOpenConns() int {
 	return cmp.Or(c.MaxOpenConns, DefaultMaxOpenConnections)
 }
 
-// GetMaxIdleConns returns the maximum number of idle database connections.
+// GetMaxIdleConns returns the configured idle-connection cap or its default.
 func (c *DatabaseConfig) GetMaxIdleConns() int {
 	return cmp.Or(c.MaxIdleConns, DefaultMaxIdleConnections)
 }
 
-// GetConnMaxLifetime returns the maximum lifetime of database connections as a Duration.
+// GetConnMaxLifetime returns the configured connection lifetime or its default.
 func (c *DatabaseConfig) GetConnMaxLifetime() time.Duration {
 	return time.Duration(cmp.Or(c.ConnMaxLifetimeMinutes, DefaultConnMaxLifetimeMinutes)) * time.Minute
 }
@@ -337,32 +334,32 @@ func (c *MaintenanceConfig) GetLongQueryThresholdSeconds() int {
 	return cmp.Or(c.LongQueryThresholdSeconds, DefaultLongQueryThresholdSeconds)
 }
 
-// GetPath returns the directory path where backup files are stored.
+// GetPath returns the backup directory or its default.
 func (c *BackupConfig) GetPath() string {
 	return cmp.Or(c.Path, DefaultBackupPath)
 }
 
-// GetRetentionDays returns the number of days to keep backup files before automatic deletion.
+// GetRetentionDays returns the backup age limit or its default.
 func (c *BackupConfig) GetRetentionDays() int {
 	return cmp.Or(c.RetentionDays, DefaultBackupRetentionDays)
 }
 
-// GetMaxBackups returns the maximum number of backup files to retain.
+// GetMaxBackups returns the backup count limit or its default.
 func (c *BackupConfig) GetMaxBackups() int {
 	return cmp.Or(c.MaxBackups, DefaultBackupMaxBackups)
 }
 
-// GetDefaultCompression returns the compression level (0-9) for backups.
+// GetDefaultCompression returns the backup compression level, capped at 9.
 func (c *BackupConfig) GetDefaultCompression() int {
 	return min(cmp.Or(c.DefaultCompression, DefaultBackupCompression), 9)
 }
 
-// GetTimeout returns the maximum duration for backup operations.
+// GetTimeout returns the backup timeout or its default.
 func (c *BackupConfig) GetTimeout() time.Duration {
 	return time.Duration(cmp.Or(c.TimeoutMinutes, DefaultBackupTimeoutMinutes)) * time.Minute
 }
 
-// GetPathPrefix returns the S3 path prefix for constructing object keys.
+// GetPathPrefix returns the S3 object prefix with a trailing slash when set.
 func (c *S3Config) GetPathPrefix() string {
 	prefix := c.PathPrefix
 	if prefix != "" && !strings.HasSuffix(prefix, "/") {
@@ -393,7 +390,7 @@ func (c *LogConfig) GetFormat() string {
 	return "text"
 }
 
-// Load loads and validates application configuration from a JSON file.
+// Load reads JSON configuration, applies environment overrides, and validates it.
 func Load(configPath string) (*Config, error) {
 	config := &Config{}
 
@@ -560,7 +557,7 @@ func formatErrors(err error) error {
 
 	var msgs []string
 	for _, e := range ve {
-		field := strings.ToLower(e.Namespace()[7:]) // Strip "Config." prefix
+		field := strings.ToLower(e.Namespace()[7:]) // strip "Config." prefix
 		msgs = append(msgs, fmt.Sprintf("%s %s", field, tagMessage(e.Tag(), e.Param())))
 	}
 

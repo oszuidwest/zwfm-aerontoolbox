@@ -15,7 +15,7 @@ import (
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
 )
 
-// s3Service manages uploads and deletions of backup files to S3-compatible storage.
+// s3Service syncs managed backup files to S3-compatible storage.
 type s3Service struct {
 	tm     *transfermanager.Client
 	client *s3.Client
@@ -23,8 +23,8 @@ type s3Service struct {
 	prefix string
 }
 
-// newS3Service creates an S3 client for backup synchronization, or returns nil if disabled.
-func newS3Service(cfg *config.S3Config) (*s3Service, error) { //nolint:unparam // error return kept for future use
+// newS3Service returns an S3 sync client, or nil when disabled.
+func newS3Service(cfg *config.S3Config) (*s3Service, error) { //nolint:unparam // error result reserved for future client validation
 	if !cfg.Enabled {
 		return nil, nil
 	}
@@ -54,7 +54,7 @@ func newS3Service(cfg *config.S3Config) (*s3Service, error) { //nolint:unparam /
 	}, nil
 }
 
-// ptrOrNil returns nil for empty strings, otherwise a pointer to the string.
+// ptrOrNil returns nil for an empty string and an AWS string pointer otherwise.
 func ptrOrNil(s string) *string {
 	if s == "" {
 		return nil
@@ -62,9 +62,9 @@ func ptrOrNil(s string) *string {
 	return aws.String(s)
 }
 
-// upload transfers a backup file to S3 storage.
+// upload streams one local backup file to remote storage.
 func (s *s3Service) upload(ctx context.Context, filename, localPath string) (err error) {
-	file, err := os.Open(localPath) //nolint:gosec // localPath is constructed from validated backup filename
+	file, err := os.Open(localPath) //nolint:gosec // G304: localPath is built from a validated managed backup filename
 	if err != nil {
 		return types.NewOperationError("S3 upload", fmt.Errorf("open file: %w", err))
 	}
@@ -93,7 +93,7 @@ func (s *s3Service) upload(ctx context.Context, filename, localPath string) (err
 	return nil
 }
 
-// delete removes a backup file from S3 storage.
+// delete removes one backup object from remote storage.
 func (s *s3Service) delete(ctx context.Context, filename string) error {
 	key := s.prefix + filename
 

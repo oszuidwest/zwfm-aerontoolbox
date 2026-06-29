@@ -1,4 +1,4 @@
-// Package util provides utility functions for input validation and HTTP operations.
+// Package util groups validation, formatting, and guarded HTTP helpers.
 package util
 
 import (
@@ -18,15 +18,15 @@ import (
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
 )
 
-// uuidRegex is a lazily-initialized pattern for validating UUID v4 format.
+// uuidRegex lazily compiles the UUID v4 validator.
 var uuidRegex = sync.OnceValue(func() *regexp.Regexp {
 	return regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 })
 
-// GUIDPattern matches the standard GUID format (less strict than UUID v4).
+// GUIDPattern matches the standard GUID shape without UUID-version checks.
 var GUIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
-// ValidateEntityID validates that an ID is a proper UUID v4 format.
+// ValidateEntityID rejects empty or non-UUID-v4 entity IDs.
 func ValidateEntityID(id, entityLabel string) error {
 	if id == "" {
 		return types.NewValidationError("id", fmt.Sprintf("invalid %s ID: must not be empty", entityLabel))
@@ -39,13 +39,13 @@ func ValidateEntityID(id, entityLabel string) error {
 	return nil
 }
 
-// safeHTTPClient returns a reusable HTTP client with SSRF protection.
+// safeHTTPClient returns the shared SSRF-protected HTTP client.
 var safeHTTPClient = sync.OnceValue(func() *safeurl.WrappedClient {
 	cfg := safeurl.GetConfigBuilder().Build()
 	return safeurl.Client(cfg)
 })
 
-// ValidateURL validates a URL for allowed schemes and hostname presence.
+// ValidateURL allows only HTTP(S) URLs with a hostname.
 func ValidateURL(urlString string) error {
 	if urlString == "" {
 		return types.NewValidationError("url", "empty URL")
@@ -67,7 +67,7 @@ func ValidateURL(urlString string) error {
 	return nil
 }
 
-// ValidateContentType validates that a Content-Type header indicates an image.
+// ValidateContentType rejects non-image Content-Type values when present.
 func ValidateContentType(contentType string) error {
 	if contentType != "" && !strings.HasPrefix(contentType, "image/") {
 		return types.NewValidationError("image", fmt.Sprintf("not an image content-type: %s", contentType))
@@ -75,7 +75,7 @@ func ValidateContentType(contentType string) error {
 	return nil
 }
 
-// ValidateImageData validates that byte data represents a valid image.
+// ValidateImageData rejects empty or undecodable image bytes.
 func ValidateImageData(data []byte) error {
 	if len(data) == 0 {
 		return types.NewValidationError("image", "image is empty")
@@ -89,7 +89,7 @@ func ValidateImageData(data []byte) error {
 	return nil
 }
 
-// ValidateImageFormat validates that an image format is supported.
+// ValidateImageFormat rejects formats outside types.SupportedFormats.
 func ValidateImageFormat(format string) error {
 	if !slices.Contains(types.SupportedFormats, format) {
 		return types.NewValidationError("image",
@@ -98,7 +98,7 @@ func ValidateImageFormat(format string) error {
 	return nil
 }
 
-// ValidateAndDownloadImage validates and securely downloads an image from a URL.
+// ValidateAndDownloadImage validates, downloads, and decodes a remote image.
 func ValidateAndDownloadImage(urlString string, maxSize int64) ([]byte, error) {
 	if err := ValidateURL(urlString); err != nil {
 		return nil, err

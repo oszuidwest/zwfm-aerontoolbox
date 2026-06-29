@@ -1,4 +1,4 @@
-// Package async provides utilities for managing async operations with graceful shutdown.
+// Package async implements single-flight background runners with shutdown tracking.
 package async
 
 import (
@@ -8,9 +8,7 @@ import (
 	"time"
 )
 
-// Runner manages a single async operation with graceful shutdown support.
-// It ensures only one operation runs at a time and provides context integration
-// for timeout and shutdown signaling.
+// Runner gates one primary async operation and tracks related goroutines.
 //
 // There are two patterns for background goroutines, with different shutdown semantics:
 //
@@ -44,17 +42,17 @@ type Runner struct {
 	closed  bool
 }
 
-// New creates a new Runner.
+// New returns an idle Runner.
 func New() *Runner {
 	return &Runner{
 		done: make(chan struct{}),
 	}
 }
 
-// Close signals shutdown and waits for any running operations to complete.
+// Close signals shutdown and waits for tracked work to finish.
 // After Close returns, all subsequent TryStart() and TryGoBackground() calls
-// will return false. The context returned by Context() will be cancelled.
-// Safe to call more than once; the done channel is closed exactly once.
+// return false. Contexts returned by Context() are cancelled.
+// Close is safe to call repeatedly.
 func (r *Runner) Close() {
 	r.closeOnce.Do(func() {
 		r.closeMu.Lock()
@@ -65,7 +63,7 @@ func (r *Runner) Close() {
 	r.wg.Wait()
 }
 
-// IsRunning returns true if an operation is currently running.
+// IsRunning reports whether the primary operation is active.
 func (r *Runner) IsRunning() bool {
 	return r.running.Load()
 }
@@ -84,7 +82,7 @@ func (r *Runner) tryReserve() bool {
 	return true
 }
 
-// TryStart attempts to start a new operation.
+// TryStart reserves the single primary-operation slot.
 // Returns false if an operation is already running or Close() has been called.
 // On success it reserves a WaitGroup slot before returning, so a concurrent
 // Close() calling wg.Wait() will block until the paired Go() or Done() call
@@ -100,17 +98,13 @@ func (r *Runner) TryStart() bool {
 	return true
 }
 
-// Done marks the current operation as complete and releases the WaitGroup
-// slot reserved by TryStart(). Use this for synchronous operations that
-// don't use Go().
+// Done releases the TryStart slot for synchronous operations that do not call Go.
 func (r *Runner) Done() {
 	r.running.Store(false)
 	r.wg.Done()
 }
 
-// Context returns a context that is cancelled when either:
-// - The timeout expires
-// - Close() is called (shutdown requested)
+// Context returns a context cancelled by timeout or Runner shutdown.
 //
 // The caller must call the returned cancel function when done.
 // The internal goroutine is tracked by the Runner's WaitGroup to ensure
@@ -130,7 +124,7 @@ func (r *Runner) Context(timeout time.Duration) (context.Context, context.Cancel
 	return ctx, cancel
 }
 
-// Go starts the primary operation in a goroutine.
+// Go runs the reserved primary operation in a goroutine.
 // The running flag is automatically cleared when fn returns.
 // Must be called after a successful TryStart(); it consumes the WaitGroup
 // slot reserved by TryStart().
@@ -156,10 +150,8 @@ func (r *Runner) GoChild(fn func()) {
 	r.wg.Go(fn)
 }
 
-// TryGoBackground starts a background goroutine as an independent dispatch -
-// that is, from outside any currently active Go() or Done() body.
-// Returns false and does nothing if Close() has already been called, allowing
-// callers to log the drop explicitly.
+// TryGoBackground starts independent background work outside a primary run.
+// It returns false without spawning if Close() has already started.
 func (r *Runner) TryGoBackground(fn func()) bool {
 	if !r.tryReserve() {
 		return false

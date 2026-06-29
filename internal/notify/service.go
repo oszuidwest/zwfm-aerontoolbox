@@ -13,12 +13,10 @@ import (
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/config"
 )
 
-// timeFormat is the standard timestamp format for notification emails.
+// timeFormat is the timestamp layout used in notification emails.
 const timeFormat = "2006-01-02 15:04:05"
 
-// Input types for notification methods (avoids circular dependency with service package).
-
-// BackupResult contains the information needed to send a backup notification.
+// BackupResult is the notification payload for a backup run.
 type BackupResult struct {
 	Success   bool
 	StartedAt *time.Time
@@ -27,13 +25,13 @@ type BackupResult struct {
 	Error     string
 }
 
-// S3SyncResult contains the information needed to send an S3 sync notification.
+// S3SyncResult is the notification payload for S3 backup synchronization.
 type S3SyncResult struct {
 	Synced bool
 	Error  string
 }
 
-// NotificationService handles email notifications for backup, health check, and S3 sync events.
+// NotificationService sends transition-based operational email alerts.
 type NotificationService struct {
 	config     *config.Config
 	runner     *async.Runner
@@ -60,7 +58,7 @@ type NotificationService struct {
 	expiryChecker *SecretExpiryChecker
 }
 
-// New creates a new NotificationService.
+// New returns a notification service for cfg.
 func New(cfg *config.Config) *NotificationService {
 	emailCfg := &cfg.Notifications.Email
 	svc := &NotificationService{
@@ -79,8 +77,7 @@ func New(cfg *config.Config) *NotificationService {
 	return svc
 }
 
-// notifyOnTransition sends a failure email on first failure, and a recovery email on first success
-// after a failure. The prevFailed pointer tracks the state for this notification type.
+// notifyOnTransition sends first-failure and first-recovery emails for one signal.
 func (s *NotificationService) notifyOnTransition(
 	prevFailed *bool,
 	isFailing bool,
@@ -113,7 +110,7 @@ func (s *NotificationService) notifyOnTransition(
 	s.stateMu.Unlock()
 }
 
-// NotifyBackupResult sends a failure or recovery email based on the backup result.
+// NotifyBackupResult updates the backup alert/recovery state.
 func (s *NotificationService) NotifyBackupResult(r *BackupResult) {
 	if r == nil {
 		return
@@ -124,7 +121,7 @@ func (s *NotificationService) NotifyBackupResult(r *BackupResult) {
 	)
 }
 
-// NotifyS3SyncResult sends a failure or recovery email based on the S3 sync result.
+// NotifyS3SyncResult updates the S3 sync alert/recovery state.
 func (s *NotificationService) NotifyS3SyncResult(filename string, r *S3SyncResult) {
 	if r == nil {
 		return
@@ -142,9 +139,8 @@ func (s *NotificationService) LastError() (string, *time.Time) {
 	return s.lastError, s.lastErrorAt
 }
 
-// SecretExpiry returns the cached secret expiry information, or nil if not configured.
-// This method never blocks on external API calls - it returns cached data and triggers
-// an async refresh if the cache is stale.
+// SecretExpiry returns cached secret-expiry information, or nil when disabled.
+// It never blocks on Graph API calls; stale cache data triggers an async refresh.
 func (s *NotificationService) SecretExpiry() *SecretExpiryInfo {
 	if s.expiryChecker == nil {
 		return nil
@@ -153,15 +149,14 @@ func (s *NotificationService) SecretExpiry() *SecretExpiryInfo {
 	return &info
 }
 
-// StartExpiryChecker triggers an initial background refresh of the secret expiry info.
-// Call this at startup to populate the cache before the first health check.
+// StartExpiryChecker warms the secret-expiry cache in the background.
 func (s *NotificationService) StartExpiryChecker() {
 	if s.expiryChecker != nil {
 		go s.expiryChecker.refresh()
 	}
 }
 
-// ValidateAuth verifies that the notification credentials are valid.
+// ValidateAuth verifies Microsoft Graph credentials and mailbox access.
 func (s *NotificationService) ValidateAuth() error {
 	client, err := s.getOrCreateClient()
 	if err != nil {
@@ -170,7 +165,7 @@ func (s *NotificationService) ValidateAuth() error {
 	return client.ValidateAuth()
 }
 
-// SendTestEmail sends a synchronous test email to validate the notification setup.
+// SendTestEmail sends a synchronous probe message to all configured recipients.
 // The context controls cancellation of the request.
 func (s *NotificationService) SendTestEmail(ctx context.Context) error {
 	client, err := s.getOrCreateClient()
@@ -187,14 +182,12 @@ func (s *NotificationService) SendTestEmail(ctx context.Context) error {
 	return client.SendMail(ctx, s.recipients, subject, body)
 }
 
-// Close stops the notification service runner.
+// Close waits for tracked background notification work to finish.
 func (s *NotificationService) Close() {
 	s.runner.Close()
 }
 
-// Internal methods.
-
-// getOrCreateClient returns a cached or newly created GraphClient.
+// getOrCreateClient returns the cached Graph client or builds one for current config.
 func (s *NotificationService) getOrCreateClient() (*GraphClient, error) {
 	s.clientMu.Lock()
 	defer s.clientMu.Unlock()
@@ -233,7 +226,7 @@ func (s *NotificationService) sendAsync(subject, body string) {
 // sendTimeout is the maximum time allowed for sending a notification email.
 const sendTimeout = 2 * time.Minute
 
-// send sends an email and tracks any errors.
+// send delivers one email and records the last failure for health reporting.
 func (s *NotificationService) send(subject, body string) {
 	client, err := s.getOrCreateClient()
 	if err != nil {
@@ -262,8 +255,6 @@ func (s *NotificationService) trackError(err error) {
 	now := time.Now()
 	s.lastErrorAt = &now
 }
-
-// Email formatting.
 
 func (s *NotificationService) formatBackupFailure(r *BackupResult) (subject, body string) {
 	subject = "[ERROR] Backup failed - Aeron Toolbox"
