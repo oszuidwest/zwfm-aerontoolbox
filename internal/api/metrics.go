@@ -198,7 +198,8 @@ type metricsSnapshot struct {
 
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-	_, _ = w.Write([]byte(formatPrometheusMetrics(s.collectMetrics(r.Context()))))
+	snapshot := s.collectMetrics(r.Context())
+	_, _ = w.Write([]byte(formatPrometheusMetrics(&snapshot)))
 }
 
 func (s *Server) collectMetrics(ctx context.Context) metricsSnapshot {
@@ -247,7 +248,7 @@ func (s *Server) collectMetrics(ctx context.Context) metricsSnapshot {
 	return snapshot
 }
 
-func formatPrometheusMetrics(snapshot metricsSnapshot) string {
+func formatPrometheusMetrics(snapshot *metricsSnapshot) string {
 	var b strings.Builder
 
 	writeGauge(&b, "aeron_toolbox_up", "Whether the Aeron Toolbox process is running.", 1)

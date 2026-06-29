@@ -15,7 +15,7 @@ func TestFormatPrometheusMetrics(t *testing.T) {
 		buckets[i] = 3
 	}
 
-	got := formatPrometheusMetrics(metricsSnapshot{
+	got := formatPrometheusMetrics(&metricsSnapshot{
 		HealthStatus:        "degraded",
 		DatabaseConnected:   true,
 		BackupEnabled:       true,
