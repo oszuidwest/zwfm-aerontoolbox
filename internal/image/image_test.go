@@ -81,7 +81,11 @@ func pngWithDimensions(t *testing.T, width, height uint32) []byte {
 func writePNGChunk(t *testing.T, dst *bytes.Buffer, chunkType string, data []byte) {
 	t.Helper()
 
-	if err := binary.Write(dst, binary.BigEndian, uint32(len(data))); err != nil {
+	if uint64(len(data)) > uint64(^uint32(0)) {
+		t.Fatalf("chunk data too large: %d", len(data))
+	}
+	chunkLength := uint32(len(data)) //nolint:gosec // checked above against PNG's uint32 chunk length limit.
+	if err := binary.Write(dst, binary.BigEndian, chunkLength); err != nil {
 		t.Fatalf("write chunk length: %v", err)
 	}
 	writeString(t, dst, chunkType)
