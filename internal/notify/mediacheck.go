@@ -38,11 +38,9 @@ func (s *NotificationService) NotifyMediaCheckResult(r *MediaCheckResult) {
 }
 
 func formatMediaCheckFailure(r *MediaCheckResult) (subject, body string) {
-	if len(r.Problems) == 1 {
-		subject = fmt.Sprintf("[ERROR] Media file check: %s - Aeron Toolbox", problemLabel(&r.Problems[0]))
-	} else {
-		subject = fmt.Sprintf("[ERROR] Media file check: %d problems - Aeron Toolbox", len(r.Problems))
-	}
+	subject = errorSubject("Media file check: " + pluralize(len(r.Problems),
+		problemLabel(&r.Problems[0]),
+		fmt.Sprintf("%d problems", len(r.Problems))))
 
 	var b strings.Builder
 	b.WriteString("Media file check found problems\n\n")
@@ -70,7 +68,7 @@ func formatMediaCheckFailure(r *MediaCheckResult) (subject, body string) {
 }
 
 func formatMediaCheckRecovery(r *MediaCheckResult) (subject, body string) {
-	subject = "[OK] Media file check: recovered - Aeron Toolbox"
+	subject = okSubject("Media file check: recovered")
 
 	var b strings.Builder
 	b.WriteString("Media file check recovered\n\n")

@@ -3,7 +3,6 @@ package database
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
@@ -73,16 +72,10 @@ type PlaylistOptions struct {
 // BuildPlaylistQuery builds a parameterized block-item query.
 func BuildPlaylistQuery(schema string, opts *PlaylistOptions) (query string, params []any, err error) {
 	var conditions []string
-	paramCount := 0
-
-	nextParam := func() string {
-		paramCount++
-		return "$" + strconv.Itoa(paramCount)
-	}
+	pl := &paramList{}
 
 	if opts.BlockID != "" {
-		conditions = append(conditions, fmt.Sprintf("pi.blockid = %s", nextParam()))
-		params = append(params, opts.BlockID)
+		conditions = append(conditions, fmt.Sprintf("pi.blockid = %s", pl.next(opts.BlockID)))
 	} else {
 		return "", []any{}, nil
 	}
@@ -90,8 +83,7 @@ func BuildPlaylistQuery(schema string, opts *PlaylistOptions) (query string, par
 	if len(opts.ExportTypes) > 0 {
 		placeholders := make([]string, len(opts.ExportTypes))
 		for i, t := range opts.ExportTypes {
-			placeholders[i] = nextParam()
-			params = append(params, t)
+			placeholders[i] = pl.next(t)
 		}
 		conditions = append(conditions, fmt.Sprintf("COALESCE(t.exporttype, 1) NOT IN (%s)", strings.Join(placeholders, ",")))
 	}
@@ -136,15 +128,13 @@ func BuildPlaylistQuery(schema string, opts *PlaylistOptions) (query string, par
 	query = fmt.Sprintf("SELECT %s %s WHERE %s ORDER BY %s", columns, joins, whereClause, orderBy)
 
 	if opts.Limit > 0 {
-		query += fmt.Sprintf(" LIMIT %s", nextParam())
-		params = append(params, opts.Limit)
+		query += fmt.Sprintf(" LIMIT %s", pl.next(opts.Limit))
 		if opts.Offset > 0 {
-			query += fmt.Sprintf(" OFFSET %s", nextParam())
-			params = append(params, opts.Offset)
+			query += fmt.Sprintf(" OFFSET %s", pl.next(opts.Offset))
 		}
 	}
 
-	return query, params, nil
+	return query, pl.values, nil
 }
 
 // ExecutePlaylistQuery runs a playlist query and scans rows into PlaylistItem values.

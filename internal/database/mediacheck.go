@@ -3,7 +3,6 @@ package database
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
@@ -76,27 +75,22 @@ func BuildMediaCheckQuery(schema string, opts *MediaCheckOptions) (query string,
 		return "", nil, types.NewValidationError("schema", fmt.Sprintf("invalid schema name: %s", schema))
 	}
 
-	paramCount := 0
-	nextParam := func(v any) string {
-		paramCount++
-		params = append(params, v)
-		return "$" + strconv.Itoa(paramCount)
-	}
+	pl := &paramList{}
 
 	var conditions []string
 	switch {
 	case opts.BlockID != "":
-		conditions = append(conditions, fmt.Sprintf("pi.blockid = %s", nextParam(opts.BlockID)))
+		conditions = append(conditions, fmt.Sprintf("pi.blockid = %s", pl.next(opts.BlockID)))
 	case opts.Date != "":
-		p := nextParam(opts.Date)
+		p := pl.next(opts.Date)
 		conditions = append(conditions,
 			fmt.Sprintf("pi.startdatetime >= %s::date AND pi.startdatetime < %s::date + INTERVAL '1 day'", p, p))
 	case opts.From != "" || opts.To != "":
 		if opts.From != "" {
-			conditions = append(conditions, fmt.Sprintf("pi.startdatetime >= %s::date", nextParam(opts.From)))
+			conditions = append(conditions, fmt.Sprintf("pi.startdatetime >= %s::date", pl.next(opts.From)))
 		}
 		if opts.To != "" {
-			conditions = append(conditions, fmt.Sprintf("pi.startdatetime < %s::date + INTERVAL '1 day'", nextParam(opts.To)))
+			conditions = append(conditions, fmt.Sprintf("pi.startdatetime < %s::date + INTERVAL '1 day'", pl.next(opts.To)))
 		}
 	case opts.LookaheadDays > 0:
 		// Today through today+LookaheadDays inclusive. The date math runs in the
@@ -104,7 +98,7 @@ func BuildMediaCheckQuery(schema string, opts *MediaCheckOptions) (query string,
 		// regardless of the app's timezone.
 		conditions = append(conditions, fmt.Sprintf(
 			"pi.startdatetime >= CURRENT_DATE AND pi.startdatetime < CURRENT_DATE + %s::int",
-			nextParam(opts.LookaheadDays+1)))
+			pl.next(opts.LookaheadDays+1)))
 	default:
 		conditions = append(conditions,
 			"pi.startdatetime >= CURRENT_DATE AND pi.startdatetime < CURRENT_DATE + INTERVAL '1 day'")
@@ -112,7 +106,7 @@ func BuildMediaCheckQuery(schema string, opts *MediaCheckOptions) (query string,
 
 	if !opts.IncludeVoicetracks {
 		conditions = append(conditions,
-			fmt.Sprintf("(t.userid IS NULL OR t.userid <> %s::uuid)", nextParam(types.VoicetrackUserID)))
+			fmt.Sprintf("(t.userid IS NULL OR t.userid <> %s::uuid)", pl.next(types.VoicetrackUserID)))
 	}
 
 	joins := fmt.Sprintf(mediaCheckJoins, schema, schema, schema, schema)
@@ -120,10 +114,10 @@ func BuildMediaCheckQuery(schema string, opts *MediaCheckOptions) (query string,
 		mediaCheckColumns, joins, strings.Join(conditions, " AND "))
 
 	if opts.Limit > 0 {
-		query += fmt.Sprintf(" LIMIT %s", nextParam(opts.Limit))
+		query += fmt.Sprintf(" LIMIT %s", pl.next(opts.Limit))
 	}
 
-	return query, params, nil
+	return query, pl.values, nil
 }
 
 // GetMediaCheckItems returns playlist items and audio references for opts.

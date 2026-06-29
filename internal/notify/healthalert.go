@@ -34,7 +34,7 @@ func (s *NotificationService) NotifyHealthCheckError(err error) {
 	s.prevHealthAlertActive = true
 	s.stateMu.Unlock()
 
-	subject := "[ERROR] Database health check failed - Aeron Toolbox"
+	subject := errorSubject("Database health check failed")
 
 	var b strings.Builder
 	b.WriteString("Database health check failed\n\n")
@@ -57,7 +57,7 @@ func (s *NotificationService) NotifyHealthAlert(r *HealthAlertResult) {
 }
 
 func formatHealthAlert(r *HealthAlertResult) (subject, body string) {
-	subject = "[ERROR] Database health check - Aeron Toolbox"
+	subject = errorSubject("Database health check")
 
 	var b strings.Builder
 	b.WriteString("Database health check reports problems\n\n")
@@ -87,7 +87,7 @@ func formatHealthAlert(r *HealthAlertResult) (subject, body string) {
 }
 
 func formatHealthRecovery(r *HealthAlertResult) (subject, body string) {
-	subject = "[OK] Database health check recovered - Aeron Toolbox"
+	subject = okSubject("Database health check recovered")
 
 	var b strings.Builder
 	b.WriteString("Database health check recovered\n\n")

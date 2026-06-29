@@ -16,6 +16,21 @@ import (
 // timeFormat is the timestamp layout used in notification emails.
 const timeFormat = "2006-01-02 15:04:05"
 
+// errorSubject and okSubject format a notification subject line, wrapping a
+// summary with the severity tag and the shared product suffix, e.g.
+// okSubject("Backup recovered") -> "[OK] Backup recovered - Aeron Toolbox".
+func errorSubject(summary string) string { return "[ERROR] " + summary + " - Aeron Toolbox" }
+func okSubject(summary string) string    { return "[OK] " + summary + " - Aeron Toolbox" }
+
+// pluralize returns one when n == 1, otherwise many. It keeps each formatter's
+// singular/plural subject choice to a single expression.
+func pluralize(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
+}
+
 // BackupResult is the notification payload for a backup run.
 type BackupResult struct {
 	Success   bool
@@ -257,7 +272,7 @@ func (s *NotificationService) trackError(err error) {
 }
 
 func (s *NotificationService) formatBackupFailure(r *BackupResult) (subject, body string) {
-	subject = "[ERROR] Backup failed - Aeron Toolbox"
+	subject = errorSubject("Backup failed")
 
 	var b strings.Builder
 	b.WriteString("Backup failed\n\n")
@@ -278,7 +293,7 @@ func (s *NotificationService) formatBackupFailure(r *BackupResult) (subject, bod
 }
 
 func (s *NotificationService) formatBackupRecovery(r *BackupResult) (subject, body string) {
-	subject = "[OK] Backup recovered - Aeron Toolbox"
+	subject = okSubject("Backup recovered")
 
 	var b strings.Builder
 	b.WriteString("Backup recovered\n\n")
@@ -297,7 +312,7 @@ func (s *NotificationService) formatBackupRecovery(r *BackupResult) (subject, bo
 }
 
 func (s *NotificationService) formatS3Failure(filename string, r *S3SyncResult) (subject, body string) {
-	subject = "[ERROR] S3 synchronization failed - Aeron Toolbox"
+	subject = errorSubject("S3 synchronization failed")
 
 	var b strings.Builder
 	b.WriteString("S3 synchronization failed\n\n")
@@ -313,7 +328,7 @@ func (s *NotificationService) formatS3Failure(filename string, r *S3SyncResult) 
 }
 
 func (s *NotificationService) formatS3Recovery(filename string) (subject, body string) {
-	subject = "[OK] S3 synchronization recovered - Aeron Toolbox"
+	subject = okSubject("S3 synchronization recovered")
 
 	var b strings.Builder
 	b.WriteString("S3 synchronization recovered\n\n")
