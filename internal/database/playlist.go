@@ -9,7 +9,7 @@ import (
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
 )
 
-// playlistItemColumns defines the fields returned for each playlist item.
+// playlistItemColumns selects the API projection for playlist items.
 const playlistItemColumns = `
 	pi.titleid as trackid,
 	COALESCE(t.tracktitle, '') as tracktitle,
@@ -25,13 +25,13 @@ const playlistItemColumns = `
 	CASE WHEN t.userid = '%s' THEN true ELSE false END as is_voicetrack,
 	CASE WHEN COALESCE(pi.commblock, 0) > 0 THEN true ELSE false END as is_commblock`
 
-// playlistItemJoins defines the table relationships for playlist item queries.
+// playlistItemJoins joins playlist items to track and artist data.
 const playlistItemJoins = `
 	FROM %s.playlistitem pi
 	LEFT JOIN %s.track t ON pi.titleid = t.titleid
 	LEFT JOIN %s.artist a ON t.artistid = a.artistid`
 
-// PlaylistBlock represents a programming block with scheduling information.
+// PlaylistBlock is a scheduled programming block.
 type PlaylistBlock struct {
 	BlockID        string `db:"blockid" json:"blockid"`
 	Name           string `db:"name" json:"name"`
@@ -40,7 +40,7 @@ type PlaylistBlock struct {
 	Date           string `db:"date" json:"date"`
 }
 
-// PlaylistItem represents a single scheduled track or media item.
+// PlaylistItem is one scheduled track or media item within a block.
 type PlaylistItem struct {
 	TrackID        string `db:"trackid" json:"trackid"`
 	TrackTitle     string `db:"tracktitle" json:"tracktitle"`
@@ -57,7 +57,7 @@ type PlaylistItem struct {
 	IsCommblock    bool   `db:"is_commblock" json:"is_commblock"`
 }
 
-// PlaylistOptions contains filter, sort, and pagination parameters for playlist queries.
+// PlaylistOptions controls playlist filtering, sorting, and pagination.
 type PlaylistOptions struct {
 	BlockID     string
 	Date        string
@@ -70,7 +70,7 @@ type PlaylistOptions struct {
 	ArtistImage *bool
 }
 
-// BuildPlaylistQuery generates a parameterized SQL query from playlist filter options.
+// BuildPlaylistQuery builds a parameterized block-item query.
 func BuildPlaylistQuery(schema string, opts *PlaylistOptions) (query string, params []any, err error) {
 	var conditions []string
 	paramCount := 0
@@ -147,7 +147,7 @@ func BuildPlaylistQuery(schema string, opts *PlaylistOptions) (query string, par
 	return query, params, nil
 }
 
-// ExecutePlaylistQuery executes a playlist query and maps results to PlaylistItem structs.
+// ExecutePlaylistQuery runs a playlist query and scans rows into PlaylistItem values.
 func ExecutePlaylistQuery(ctx context.Context, db DB, query string, params []any) ([]PlaylistItem, error) {
 	var items []PlaylistItem
 	err := db.SelectContext(ctx, &items, query, params...)

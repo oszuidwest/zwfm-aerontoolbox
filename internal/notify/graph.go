@@ -1,4 +1,4 @@
-// Package notify provides email notifications via Microsoft Graph API.
+// Package notify sends operational emails through Microsoft Graph.
 package notify
 
 import (
@@ -25,22 +25,20 @@ const (
 	graphScope       = "https://graph.microsoft.com/.default"
 	tokenURLTemplate = "https://login.microsoftonline.com/%s/oauth2/v2.0/token" //nolint:gosec // URL template, not a credential
 
-	// Retry settings.
 	maxRetries       = 3
 	initialRetryWait = 1 * time.Second
 	maxRetryWait     = 30 * time.Second
 
-	// HTTP client timeout.
 	httpTimeout = 30 * time.Second
 )
 
-// GraphClient sends emails via Microsoft Graph API.
+// GraphClient sends plain-text mail through Microsoft Graph.
 type GraphClient struct {
 	fromAddress string
 	httpClient  *http.Client
 }
 
-// NewGraphClient creates a new Graph API email client.
+// NewGraphClient returns a Graph mail client for cfg.
 func NewGraphClient(cfg *config.GraphConfig) (*GraphClient, error) {
 	if err := validateCredentials(cfg, false); err != nil {
 		return nil, err
@@ -51,7 +49,6 @@ func NewGraphClient(cfg *config.GraphConfig) (*GraphClient, error) {
 
 	conf := newCredentialsConfig(cfg)
 
-	// Configure base HTTP client with timeout to prevent indefinite hangs
 	baseClient := &http.Client{Timeout: httpTimeout}
 	ctx := context.WithValue(context.Background(), oauth2.HTTPClient, baseClient)
 	httpClient := conf.Client(ctx)
@@ -61,8 +58,6 @@ func NewGraphClient(cfg *config.GraphConfig) (*GraphClient, error) {
 		httpClient:  httpClient,
 	}, nil
 }
-
-// Graph API request types.
 
 type graphMailRequest struct {
 	Message graphMessage `json:"message"`
@@ -87,7 +82,7 @@ type graphEmailAddress struct {
 	Address string `json:"address"`
 }
 
-// SendMail sends a plain text email to the specified recipients.
+// SendMail sends one plain-text email to the non-empty recipients.
 // The context controls cancellation of the request and any retries.
 func (c *GraphClient) SendMail(ctx context.Context, recipients []string, subject, body string) error {
 	if len(recipients) == 0 {
@@ -126,21 +121,19 @@ func (c *GraphClient) SendMail(ctx context.Context, recipients []string, subject
 	return c.doWithRetry(ctx, jsonData)
 }
 
-// doWithRetry sends the email request with automatic retries and exponential backoff.
-// The context controls cancellation - if cancelled, the retry loop stops immediately.
+// doWithRetry sends the request with bounded retries and exponential backoff.
+// Context cancellation stops the retry loop immediately.
 func (c *GraphClient) doWithRetry(ctx context.Context, jsonData []byte) error {
 	apiURL := fmt.Sprintf("%s/users/%s/sendMail", graphBaseURL, url.PathEscape(c.fromAddress))
 	backoff := NewBackoff(initialRetryWait, maxRetryWait)
 
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		// Check context before each attempt
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("request cancelled: %w", err)
 		}
 
 		if attempt > 0 {
-			// Context-aware sleep
 			if err := sleepWithContext(ctx, backoff.Next()); err != nil {
 				return fmt.Errorf("request cancelled during retry wait: %w", err)
 			}
@@ -186,7 +179,7 @@ func (c *GraphClient) doWithRetry(ctx context.Context, jsonData []byte) error {
 	return fmt.Errorf("max retries exceeded: %w", lastErr)
 }
 
-// sleepWithContext sleeps for the given duration or until the context is cancelled.
+// sleepWithContext sleeps for d unless ctx is cancelled first.
 func sleepWithContext(ctx context.Context, d time.Duration) error {
 	timer := time.NewTimer(d)
 	defer timer.Stop()
@@ -198,7 +191,7 @@ func sleepWithContext(ctx context.Context, d time.Duration) error {
 	}
 }
 
-// ValidateAuth verifies that the email credentials are valid by making a lightweight request.
+// ValidateAuth verifies credentials by requesting the configured mailbox.
 func (c *GraphClient) ValidateAuth() error {
 	apiURL := fmt.Sprintf("%s/users/%s", graphBaseURL, url.PathEscape(c.fromAddress))
 	req, err := http.NewRequest(http.MethodGet, apiURL, http.NoBody)
@@ -228,7 +221,7 @@ func (c *GraphClient) ValidateAuth() error {
 	}
 }
 
-// ValidateConfig validates that cfg has all required fields with strict GUID format checking.
+// ValidateConfig validates required Graph email fields and GUID shapes.
 func ValidateConfig(cfg *config.GraphConfig) error {
 	if err := validateCredentials(cfg, true); err != nil {
 		return err
@@ -242,17 +235,15 @@ func ValidateConfig(cfg *config.GraphConfig) error {
 	return nil
 }
 
-// IsConfigured reports whether the Graph configuration has the minimum required fields.
-// It validates that credentials are present and at least one valid recipient exists.
+// IsConfigured reports whether enough Graph email config exists to send mail.
 func IsConfigured(cfg *config.GraphConfig) bool {
 	if cfg.TenantID == "" || cfg.ClientID == "" || cfg.ClientSecret == "" || cfg.FromAddress == "" {
 		return false
 	}
-	// Verify at least one valid recipient after parsing
 	return len(ParseRecipients(cfg.Recipients)) > 0
 }
 
-// ParseRecipients splits a comma-separated recipients string into a slice.
+// ParseRecipients splits comma-separated recipients and drops empty entries.
 func ParseRecipients(recipients string) []string {
 	var result []string
 	for r := range strings.SplitSeq(recipients, ",") {
@@ -263,7 +254,7 @@ func ParseRecipients(recipients string) []string {
 	return result
 }
 
-// validateCredentials checks that required credential fields are present.
+// validateCredentials checks credential presence and, in strict mode, GUID shape.
 func validateCredentials(cfg *config.GraphConfig, strict bool) error {
 	if cfg.TenantID == "" {
 		return fmt.Errorf("tenant ID is required")
@@ -283,7 +274,7 @@ func validateCredentials(cfg *config.GraphConfig, strict bool) error {
 	return nil
 }
 
-// newCredentialsConfig creates an OAuth2 client credentials configuration.
+// newCredentialsConfig builds the OAuth2 client-credentials config.
 func newCredentialsConfig(cfg *config.GraphConfig) *clientcredentials.Config {
 	return &clientcredentials.Config{
 		ClientID:     cfg.ClientID,

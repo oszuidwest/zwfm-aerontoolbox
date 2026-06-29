@@ -8,7 +8,7 @@ import (
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/service"
 )
 
-// BackupDeleteResponse represents the response format for backup delete operations.
+// BackupDeleteResponse is returned after a backup file is deleted.
 type BackupDeleteResponse struct {
 	Message  string `json:"message"`
 	Filename string `json:"filename"`
@@ -67,7 +67,6 @@ func (s *Server) handleDownloadBackupFile(w http.ResponseWriter, r *http.Request
 func (s *Server) handleDeleteBackup(w http.ResponseWriter, r *http.Request) {
 	filename := chi.URLParam(r, "filename")
 
-	// Require confirmation header
 	const confirmHeader = "X-Confirm-Delete"
 	if r.Header.Get(confirmHeader) != filename {
 		respondError(w, http.StatusBadRequest, "Confirmation header missing: "+confirmHeader+" must contain the filename")

@@ -1,4 +1,4 @@
-// Package api provides the HTTP API server for the Aeron radio automation system.
+// Package api serves the Aeron Toolbox HTTP API.
 package api
 
 import (
@@ -18,30 +18,41 @@ import (
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/util"
 )
 
-// ImageUploadRequest represents the JSON request body for image upload operations.
+// ImageUploadRequest accepts either an image URL or base64-encoded image data.
 type ImageUploadRequest struct {
 	URL   string `json:"url"`
 	Image string `json:"image"`
 }
 
-// ImageStatsResponse represents the response format for statistics endpoints.
+// ImageStatsResponse reports image coverage for artists or tracks.
 type ImageStatsResponse struct {
 	Total         int `json:"total"`
 	WithImages    int `json:"with_images"`
 	WithoutImages int `json:"without_images"`
 }
 
-// HealthResponse represents the response for the health check endpoint.
+// HealthResponse is returned by the public health endpoint.
 type HealthResponse struct {
-	Status         string              `json:"status"`
-	Version        string              `json:"version"`
-	Database       string              `json:"database"`
-	DatabaseStatus string              `json:"database_status"`
-	Notifications  *NotificationHealth `json:"notifications"`
-	FileMonitor    *FileMonitorHealth  `json:"file_monitor,omitempty"`
+	Status         string                `json:"status"`
+	Version        string                `json:"version"`
+	Database       string                `json:"database"`
+	DatabaseStatus string                `json:"database_status"`
+	Notifications  *NotificationHealth   `json:"notifications"`
+	FileMonitor    *FileMonitorHealth    `json:"file_monitor,omitempty"`
+	MediaFileCheck *MediaFileCheckHealth `json:"media_file_check,omitempty"`
 }
 
-// FileMonitorHealth represents file monitor status in the health response.
+// MediaFileCheckHealth summarizes scheduled media-file check health.
+// Problems is the number of missing, ambiguous and errored items in the most
+// recent completed run. It only drives the overall degraded status when the
+// scheduled check is enabled, so ad-hoc API runs with arbitrary scope do not
+// flip the system's health.
+type MediaFileCheckHealth struct {
+	Enabled  bool `json:"enabled"`
+	Problems int  `json:"problems"`
+}
+
+// FileMonitorHealth summarizes file monitor health.
 //
 // ChecksStale is the raw count from the most recent run (includes stale
 // files outside their configured ActiveWindow) and is preserved for
@@ -54,7 +65,7 @@ type FileMonitorHealth struct {
 	ChecksAlerting int  `json:"checks_alerting"`
 }
 
-// NotificationHealth represents notification system status in the health response.
+// NotificationHealth summarizes notification configuration and recent failures.
 type NotificationHealth struct {
 	Configured   bool                     `json:"configured"`
 	LastError    string                   `json:"last_error,omitempty"`
@@ -62,7 +73,7 @@ type NotificationHealth struct {
 	SecretExpiry *notify.SecretExpiryInfo `json:"secret_expiry,omitempty"`
 }
 
-// ImageUploadResponse represents the response for image upload operations.
+// ImageUploadResponse reports the stored entity label and optimization result.
 type ImageUploadResponse struct {
 	Artist               string  `json:"artist"`
 	Track                string  `json:"track,omitzero"`
@@ -71,13 +82,13 @@ type ImageUploadResponse struct {
 	SizeReductionPercent float64 `json:"savings_percent"`
 }
 
-// BulkDeleteResponse represents the response for bulk delete operations.
+// BulkDeleteResponse reports how many images were removed.
 type BulkDeleteResponse struct {
 	Deleted int64  `json:"deleted"`
 	Message string `json:"message"`
 }
 
-// ImageDeleteResponse represents the response for image delete operations.
+// ImageDeleteResponse identifies the entity whose image was removed.
 type ImageDeleteResponse struct {
 	Message  string `json:"message"`
 	ArtistID string `json:"artist_id,omitzero"`
@@ -109,7 +120,6 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		DatabaseStatus: dbStatus,
 	}
 
-	// Add notification health info.
 	emailCfg := &s.service.Config().Notifications.Email
 	configured := notify.IsConfigured(emailCfg)
 	nh := &NotificationHealth{Configured: configured}
@@ -127,7 +137,6 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 	resp.Notifications = nh
 
-	// Add file monitor health info.
 	var fmAlerting int
 	fmCfg := s.service.Config().FileMonitor
 	if fmCfg.Enabled {
@@ -140,20 +149,33 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	resp.Status = overallHealthStatus(dbConnected, notifyExpiresSoon, fmAlerting)
+	var mediaProblems int
+	mfcCfg := s.service.Config().MediaFileCheck
+	if mfcCfg.Enabled {
+		problems := s.service.MediaFileCheck.ProblemCount()
+		resp.MediaFileCheck = &MediaFileCheckHealth{Enabled: true, Problems: problems}
+		if mfcCfg.Scheduler.Enabled {
+			mediaProblems = problems
+		}
+	}
+
+	resp.Status = overallHealthStatus(dbConnected, notifyExpiresSoon || fmAlerting > 0 || mediaProblems > 0)
 	respondJSON(w, http.StatusOK, resp)
 }
 
-// overallHealthStatus returns the highest-severity status given component states.
-// Severity order: "unhealthy" > "degraded" > "healthy".
-func overallHealthStatus(dbConnected, notifyExpiresSoon bool, fmAlerting int) string {
-	if !dbConnected {
+// overallHealthStatus returns the highest-severity status given the database
+// connectivity and whether any component reported a degraded signal. Callers OR
+// their per-component signals into degraded, so adding a component never changes
+// this signature. Severity order: "unhealthy" > "degraded" > "healthy".
+func overallHealthStatus(dbConnected, degraded bool) string {
+	switch {
+	case !dbConnected:
 		return "unhealthy"
-	}
-	if notifyExpiresSoon || fmAlerting > 0 {
+	case degraded:
 		return "degraded"
+	default:
+		return "healthy"
 	}
-	return "healthy"
 }
 
 func (s *Server) handleStats(entityType types.EntityType) http.HandlerFunc {
@@ -373,7 +395,6 @@ func parsePlaylistOptions(query url.Values) database.PlaylistOptions {
 func (s *Server) handlePlaylist(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 
-	// Single block with items
 	if query.Get("block_id") != "" {
 		opts := parsePlaylistOptions(query)
 		playlist, err := s.service.Media.GetPlaylist(r.Context(), &opts)
@@ -389,7 +410,6 @@ func (s *Server) handlePlaylist(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// All blocks with tracks for a date
 	date := query.Get("date")
 	result, err := s.service.Media.GetPlaylistWithTracks(r.Context(), date)
 	if err != nil {

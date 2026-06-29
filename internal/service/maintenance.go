@@ -14,14 +14,14 @@ import (
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/util"
 )
 
-// MaintenanceService handles database health monitoring.
+// MaintenanceService inspects PostgreSQL health and emits maintenance alerts.
 type MaintenanceService struct {
 	repo   *database.Repository
 	config *config.Config
 	notify *notify.NotificationService
 }
 
-// newMaintenanceService creates a new MaintenanceService instance.
+// newMaintenanceService returns a maintenance service using repo, cfg, and notifySvc.
 func newMaintenanceService(
 	repo *database.Repository, cfg *config.Config, notifySvc *notify.NotificationService,
 ) *MaintenanceService {
@@ -36,9 +36,7 @@ func newMaintenanceService(
 // are found. It is stripped before passing results to the notification system.
 const noIssuesDetected = "No issues detected"
 
-// Health types.
-
-// DatabaseHealth represents the overall health status of the database.
+// DatabaseHealth is the API health report for the configured database.
 type DatabaseHealth struct {
 	DatabaseName       string                   `json:"database_name"`
 	DatabaseVersion    string                   `json:"database_version"`
@@ -55,7 +53,7 @@ type DatabaseHealth struct {
 	CheckedAt          time.Time                `json:"checked_at"`
 }
 
-// TableHealth represents health statistics for a single table.
+// TableHealth is the maintenance snapshot for one table.
 type TableHealth struct {
 	Name            string     `json:"name"`
 	RowCount        int64      `json:"row_count"`
@@ -80,7 +78,7 @@ type TableHealth struct {
 	NeedsAnalyze    bool       `json:"needs_analyze"`
 }
 
-// tableHealthRow contains health statistics and size information for a database table.
+// tableHealthRow is the raw PostgreSQL statistics row for one table.
 type tableHealthRow struct {
 	TableName       string     `db:"table_name"`
 	LiveTuples      int64      `db:"live_tuples"`
@@ -98,9 +96,7 @@ type tableHealthRow struct {
 	ToastSize       int64      `db:"toast_size"`
 }
 
-// Health operations.
-
-// GetHealth retrieves comprehensive database health information.
+// GetHealth collects database, table, connection, and query health.
 func (s *MaintenanceService) GetHealth(ctx context.Context) (*DatabaseHealth, error) {
 	schema := s.repo.Schema()
 	health := &DatabaseHealth{
@@ -187,7 +183,7 @@ func (s *MaintenanceService) CheckHealthAndAlert(ctx context.Context) {
 	s.notify.NotifyHealthAlert(result)
 }
 
-// getDatabaseSize returns the total database size.
+// getDatabaseSize returns the current database size in raw and display forms.
 func (s *MaintenanceService) getDatabaseSize(ctx context.Context) (size string, sizeRaw int64, err error) {
 	err = s.repo.DB().GetContext(ctx, &sizeRaw, "SELECT pg_database_size(current_database())")
 	if err != nil {
@@ -196,7 +192,7 @@ func (s *MaintenanceService) getDatabaseSize(ctx context.Context) (size string, 
 	return util.FormatBytes(sizeRaw), sizeRaw, nil
 }
 
-// getConnectionUsage returns the current connection count, maximum, and usage percentage.
+// getConnectionUsage returns active connections, max_connections, and usage percent.
 func (s *MaintenanceService) getConnectionUsage(ctx context.Context) (active, maxConns int, pct float64, err error) {
 	if err := s.repo.DB().GetContext(ctx, &active,
 		"SELECT count(*) FROM pg_stat_activity WHERE datname = current_database()"); err != nil {
@@ -248,7 +244,7 @@ func (s *MaintenanceService) getLongRunningQueries(ctx context.Context) ([]types
 	return queries, nil
 }
 
-// getTableHealth retrieves health statistics for all tables in the schema.
+// getTableHealth retrieves maintenance statistics for all user tables in schema.
 func (s *MaintenanceService) getTableHealth(ctx context.Context) ([]TableHealth, error) {
 	schema := s.repo.Schema()
 	query := `
@@ -288,8 +284,7 @@ func (s *MaintenanceService) getTableHealth(ctx context.Context) ([]TableHealth,
 	return tables, nil
 }
 
-// convertTableRow maps a raw database statistics row to a TableHealth struct,
-// computing derived fields like dead-tuple percentage (0–100) and maintenance flags.
+// convertTableRow maps raw PostgreSQL stats and derives maintenance flags.
 func convertTableRow(row *tableHealthRow, cfg *config.MaintenanceConfig) TableHealth {
 	table := TableHealth{
 		Name:            row.TableName,
@@ -327,9 +322,7 @@ func convertTableRow(row *tableHealthRow, cfg *config.MaintenanceConfig) TableHe
 	return table
 }
 
-// Recommendations.
-
-// generateRecommendations returns recommendations for the entire database health report.
+// generateRecommendations returns operator actions for the health report.
 func (s *MaintenanceService) generateRecommendations(health *DatabaseHealth) []string {
 	var recs []string
 

@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// FileAlertResult contains information about a single file check for notification purposes.
+// FileAlertResult is the notification payload for one stale or recovered file.
 type FileAlertResult struct {
 	Name          string
 	Path          string
@@ -18,7 +18,7 @@ type FileAlertResult struct {
 	CheckedAt     time.Time
 }
 
-// SendFileAlerts sends a single email listing all newly detected stale or missing files.
+// SendFileAlerts sends one email listing newly stale, missing, or errored files.
 func (s *NotificationService) SendFileAlerts(alerts []FileAlertResult) {
 	if !IsConfigured(&s.config.Notifications.Email) || len(alerts) == 0 {
 		return
@@ -28,7 +28,7 @@ func (s *NotificationService) SendFileAlerts(alerts []FileAlertResult) {
 	s.sendAsync(subject, body)
 }
 
-// SendFileRecoveries sends a single email listing all files that have recovered.
+// SendFileRecoveries sends one email listing files that recovered.
 func (s *NotificationService) SendFileRecoveries(recoveries []FileAlertResult) {
 	if !IsConfigured(&s.config.Notifications.Email) || len(recoveries) == 0 {
 		return

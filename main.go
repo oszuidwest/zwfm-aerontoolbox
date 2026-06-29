@@ -1,11 +1,5 @@
-// Package main implements the Aeron Toolbox API server.
-//
-// This server provides an unofficial REST API for the Aeron radio automation system.
-// It offers image management, database browsing, database maintenance, and backup
-// functionality through direct database access.
-//
-// The API server can be configured via JSON configuration file and supports
-// optional API key authentication for secure access.
+// Package main wires configuration, storage, scheduling, and HTTP serving for
+// the Aeron Toolbox API.
 package main
 
 import (
@@ -34,7 +28,7 @@ func main() {
 	}
 }
 
-// run executes the server lifecycle from initialization through graceful shutdown.
+// run initializes dependencies and blocks until the server exits or shuts down.
 func run() error {
 	configFile := flag.String("config", "", "Path to config file (default: config.json)")
 	port := flag.String("port", "8080", "API server port (default: 8080)")
@@ -67,7 +61,7 @@ func run() error {
 	}
 	defer svc.Close()
 
-	// Start background refresh of secret expiry info so health checks don't block
+	// Start background secret-expiry refresh so health checks do not block.
 	svc.Notify.StartExpiryChecker()
 
 	// Create a root context that cancels on SIGINT/SIGTERM.
@@ -88,7 +82,7 @@ func run() error {
 	return serveUntilShutdown(server, *port, scheduler, ctx)
 }
 
-// printVersion prints the application version, commit hash, and build time.
+// printVersion writes build metadata and exits without starting the server.
 func printVersion() {
 	fmt.Printf("Aeron Toolbox %s (%s)\n", Version, Commit)
 	fmt.Printf("Build time: %s\n", BuildTime)
@@ -110,7 +104,7 @@ func initLogger(cfg *config.Config) {
 	slog.Info("Logger initialized", "level", level.String(), "format", cfg.Log.GetFormat())
 }
 
-// setupDatabase establishes a database connection pool and returns a cleanup function.
+// setupDatabase opens the configured PostgreSQL pool and returns its cleanup function.
 func setupDatabase(cfg *config.Config) (*sqlx.DB, func(), error) {
 	db, err := sqlx.Open("postgres", cfg.Database.ConnectionString())
 	if err != nil {
@@ -144,8 +138,7 @@ func setupDatabase(cfg *config.Config) (*sqlx.DB, func(), error) {
 	return db, cleanup, nil
 }
 
-// serveUntilShutdown runs the API server until a shutdown signal or error occurs.
-// The ctx parameter is the application lifecycle context, canceled on SIGINT/SIGTERM.
+// serveUntilShutdown runs the API server until ctx is cancelled or serving fails.
 func serveUntilShutdown(server *api.Server, port string, scheduler *service.Scheduler, ctx context.Context) error {
 	serverErr := make(chan error, 1)
 	go func() {
@@ -166,9 +159,8 @@ func serveUntilShutdown(server *api.Server, port string, scheduler *service.Sche
 	return gracefulShutdown(server, scheduler)
 }
 
-// gracefulShutdown performs orderly shutdown of the scheduler and server.
+// gracefulShutdown drains scheduled jobs before stopping the HTTP server.
 func gracefulShutdown(server *api.Server, scheduler *service.Scheduler) error {
-	// Stop scheduler (handles both backup and maintenance jobs)
 	ctx := scheduler.Stop()
 	select {
 	case <-ctx.Done():

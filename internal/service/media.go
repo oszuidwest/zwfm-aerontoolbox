@@ -11,13 +11,13 @@ import (
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
 )
 
-// MediaService handles artist, track, image, and playlist operations.
+// MediaService coordinates artist, track, image, and playlist workflows.
 type MediaService struct {
 	repo   *database.Repository
 	config *config.Config
 }
 
-// newMediaService creates a MediaService with the provided repository and configuration.
+// newMediaService returns a media service using repo and cfg.
 func newMediaService(repo *database.Repository, cfg *config.Config) *MediaService {
 	return &MediaService{
 		repo:   repo,
@@ -25,35 +25,29 @@ func newMediaService(repo *database.Repository, cfg *config.Config) *MediaServic
 	}
 }
 
-// Artist operations.
-
-// GetArtist retrieves an artist by ID.
+// GetArtist returns artist details for id.
 func (s *MediaService) GetArtist(ctx context.Context, id string) (*database.ArtistDetails, error) {
 	return s.repo.GetArtist(ctx, id)
 }
 
-// Track operations.
-
-// GetTrack retrieves a track by ID.
+// GetTrack returns track details for id.
 func (s *MediaService) GetTrack(ctx context.Context, id string) (*database.TrackDetails, error) {
 	return s.repo.GetTrack(ctx, id)
 }
 
-// Image operations.
-
-// GetImage retrieves the image for an entity.
+// GetImage returns stored artwork for an artist or track.
 func (s *MediaService) GetImage(ctx context.Context, entityType types.EntityType, id string) ([]byte, error) {
 	table := types.Table(entityType)
 	return s.repo.GetImage(ctx, table, id)
 }
 
-// DeleteImage removes the image from an entity.
+// DeleteImage clears stored artwork for an artist or track.
 func (s *MediaService) DeleteImage(ctx context.Context, entityType types.EntityType, id string) error {
 	table := types.Table(entityType)
 	return s.repo.DeleteImage(ctx, table, id)
 }
 
-// ImageUploadParams contains the parameters for image upload operations.
+// ImageUploadParams selects the target entity and exactly one image source.
 type ImageUploadParams struct {
 	EntityType types.EntityType
 	ID         string
@@ -61,7 +55,7 @@ type ImageUploadParams struct {
 	ImageData  []byte
 }
 
-// ImageUploadResult contains the results of an image upload operation.
+// ImageUploadResult reports the stored entity label and optimization outcome.
 type ImageUploadResult struct {
 	ArtistName           string
 	TrackTitle           string
@@ -70,7 +64,7 @@ type ImageUploadResult struct {
 	SizeReductionPercent float64
 }
 
-// UploadImage downloads, resizes, optimizes, and stores an image for an artist or track.
+// UploadImage validates, optimizes, and stores artwork for an artist or track.
 func (s *MediaService) UploadImage(ctx context.Context, params *ImageUploadParams) (*ImageUploadResult, error) {
 	slog.Debug("Image upload started",
 		"entityType", params.EntityType,
@@ -146,16 +140,14 @@ func (s *MediaService) UploadImage(ctx context.Context, params *ImageUploadParam
 	}, nil
 }
 
-// Statistics operations.
-
-// ImageStats represents statistics about images in the database.
+// ImageStats reports image coverage for one entity type.
 type ImageStats struct {
 	Total         int
 	WithImages    int
 	WithoutImages int
 }
 
-// GetStatistics returns image statistics for entities of the specified type.
+// GetStatistics returns image coverage for artists or tracks.
 func (s *MediaService) GetStatistics(ctx context.Context, entityType types.EntityType) (*ImageStats, error) {
 	if err := validateEntityType(entityType); err != nil {
 		return nil, err
@@ -173,13 +165,13 @@ func (s *MediaService) GetStatistics(ctx context.Context, entityType types.Entit
 	}, nil
 }
 
-// DeleteResult contains the results of a bulk image deletion operation.
+// DeleteResult reports a bulk artwork deletion.
 type DeleteResult struct {
 	CountBefore  int
 	DeletedCount int64
 }
 
-// DeleteAllImages removes all images from all entities of the specified type.
+// DeleteAllImages clears all artwork for one entity type.
 func (s *MediaService) DeleteAllImages(ctx context.Context, entityType types.EntityType) (*DeleteResult, error) {
 	if err := validateEntityType(entityType); err != nil {
 		return nil, err
@@ -204,9 +196,7 @@ func (s *MediaService) DeleteAllImages(ctx context.Context, entityType types.Ent
 	return &DeleteResult{CountBefore: count, DeletedCount: deleted}, nil
 }
 
-// Playlist operations.
-
-// DefaultPlaylistOptions returns playlist query options with sensible defaults.
+// DefaultPlaylistOptions returns the API defaults for playlist queries.
 func DefaultPlaylistOptions() database.PlaylistOptions {
 	return database.PlaylistOptions{
 		ExportTypes: []int{},
@@ -214,20 +204,20 @@ func DefaultPlaylistOptions() database.PlaylistOptions {
 	}
 }
 
-// GetPlaylist retrieves played tracks for a date or block with filtering and pagination.
+// GetPlaylist returns block-scoped playlist items with filtering and pagination.
 func (s *MediaService) GetPlaylist(
 	ctx context.Context, opts *database.PlaylistOptions,
 ) ([]database.PlaylistItem, error) {
 	return s.repo.GetPlaylist(ctx, opts)
 }
 
-// PlaylistBlockWithTracks represents a playlist block with its associated tracks.
+// PlaylistBlockWithTracks combines a block with its scheduled items.
 type PlaylistBlockWithTracks struct {
 	database.PlaylistBlock
 	Tracks []database.PlaylistItem `json:"tracks"`
 }
 
-// GetPlaylistWithTracks retrieves all playlist blocks for a date with their tracks.
+// GetPlaylistWithTracks returns date-scoped blocks with their items.
 func (s *MediaService) GetPlaylistWithTracks(ctx context.Context, date string) ([]PlaylistBlockWithTracks, error) {
 	blocks, tracksByBlock, err := s.repo.GetPlaylistWithTracks(ctx, date)
 	if err != nil {
@@ -249,9 +239,7 @@ func (s *MediaService) GetPlaylistWithTracks(ctx context.Context, date string) (
 	return result, nil
 }
 
-// Validation helpers.
-
-// validateEntityType ensures the entity type is either artist or track.
+// validateEntityType accepts only artist and track operations.
 func validateEntityType(entityType types.EntityType) error {
 	if entityType != types.EntityTypeArtist && entityType != types.EntityTypeTrack {
 		return types.NewValidationError("entityType",
@@ -260,7 +248,7 @@ func validateEntityType(entityType types.EntityType) error {
 	return nil
 }
 
-// validateImageUploadParams ensures parameters contain exactly one image source.
+// validateImageUploadParams requires a valid entity and exactly one image source.
 func validateImageUploadParams(params *ImageUploadParams) error {
 	if err := validateEntityType(params.EntityType); err != nil {
 		return err

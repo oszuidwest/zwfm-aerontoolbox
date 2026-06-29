@@ -1,4 +1,4 @@
-// Package config provides application configuration management.
+// Package config loads, defaults, and validates JSON configuration for the API server.
 package config
 
 import (
@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -18,7 +19,7 @@ import (
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/util"
 )
 
-// DatabaseConfig contains PostgreSQL database connection parameters.
+// DatabaseConfig holds PostgreSQL connection settings.
 type DatabaseConfig struct {
 	Host                   string `json:"host" validate:"required"`
 	Port                   string `json:"port" validate:"required"`
@@ -32,7 +33,7 @@ type DatabaseConfig struct {
 	ConnMaxLifetimeMinutes int    `json:"conn_max_lifetime_minutes" validate:"gte=0"`
 }
 
-// ImageConfig contains image processing and optimization settings.
+// ImageConfig controls image validation and optimization.
 type ImageConfig struct {
 	TargetWidth               int   `json:"target_width" validate:"required,gt=0"`
 	TargetHeight              int   `json:"target_height" validate:"required,gt=0"`
@@ -41,14 +42,14 @@ type ImageConfig struct {
 	MaxImageDownloadSizeBytes int64 `json:"max_image_download_size_bytes" validate:"gte=0"`
 }
 
-// APIConfig contains API authentication and server settings.
+// APIConfig controls API authentication and request timeouts.
 type APIConfig struct {
 	Enabled               bool     `json:"enabled"`
 	Keys                  []string `json:"keys" validate:"required_if=Enabled true,dive,required"`
 	RequestTimeoutSeconds int      `json:"request_timeout_seconds" validate:"gte=0"`
 }
 
-// MaintenanceConfig contains thresholds and settings for database health monitoring.
+// MaintenanceConfig holds thresholds used by database health checks.
 type MaintenanceConfig struct {
 	BloatThreshold              float64         `json:"bloat_threshold" validate:"gte=0,lte=100"`
 	DeadTupleThreshold          int64           `json:"dead_tuple_threshold" validate:"gte=0"`
@@ -62,13 +63,13 @@ type MaintenanceConfig struct {
 	Scheduler                   SchedulerConfig `json:"scheduler"`
 }
 
-// SchedulerConfig contains settings for individual scheduled operations.
+// SchedulerConfig controls a single cron-backed operation.
 type SchedulerConfig struct {
 	Enabled  bool   `json:"enabled"`
 	Schedule string `json:"schedule" validate:"required_if=Enabled true"`
 }
 
-// S3Config contains settings for S3-compatible storage synchronization.
+// S3Config configures optional S3-compatible backup synchronization.
 type S3Config struct {
 	Enabled         bool   `json:"enabled"`
 	Bucket          string `json:"bucket" validate:"required_if=Enabled true"`
@@ -80,7 +81,7 @@ type S3Config struct {
 	ForcePathStyle  bool   `json:"force_path_style"`
 }
 
-// BackupConfig contains settings for database backup functionality.
+// BackupConfig configures local and optional remote database backups.
 type BackupConfig struct {
 	Enabled            bool            `json:"enabled"`
 	Path               string          `json:"path" validate:"required_if=Enabled true"`
@@ -94,21 +95,21 @@ type BackupConfig struct {
 	S3                 S3Config        `json:"s3"`
 }
 
-// NotificationsConfig contains notification settings.
+// NotificationsConfig groups all notification providers.
 type NotificationsConfig struct {
 	Email GraphConfig `json:"email"`
 }
 
-// GraphConfig contains Microsoft Graph API settings for email notifications.
+// GraphConfig configures Microsoft Graph email delivery.
 type GraphConfig struct {
 	TenantID     string `json:"tenant_id" validate:"omitempty,guid"`
 	ClientID     string `json:"client_id" validate:"omitempty,guid"`
-	ClientSecret string `json:"client_secret"` //nolint:gosec // Configuration field, not a credential
+	ClientSecret string `json:"client_secret"` //nolint:gosec // G101: user-supplied config secret, not a hardcoded credential
 	FromAddress  string `json:"from_address"`
 	Recipients   string `json:"recipients"`
 }
 
-// FileMonitorConfig contains settings for monitoring file freshness on disk.
+// FileMonitorConfig configures freshness checks for files on disk.
 type FileMonitorConfig struct {
 	Enabled         bool                     `json:"enabled"`
 	IntervalSeconds int                      `json:"interval_seconds" validate:"gte=0"`
@@ -128,7 +129,7 @@ type FileMonitorCheckConfig struct {
 	ActiveWindow   string `json:"active_window"`
 }
 
-// DisplayName returns the check name if set, otherwise the file path.
+// DisplayName returns the configured label, falling back to the file path.
 func (c *FileMonitorCheckConfig) DisplayName() string {
 	if c.Name != "" {
 		return c.Name
@@ -160,22 +161,80 @@ func (c *FileMonitorConfig) Interval() time.Duration {
 	return time.Duration(c.IntervalSeconds) * time.Second
 }
 
-// LogConfig contains logging configuration.
+// MediaFileCheckConfig configures playlist audio verification against disk files.
+//
+// The Aeron database stores Windows paths (e.g. O:\Audio\85\Artist - Title.wav)
+// while this service typically runs on Linux. Two complementary strategies map a
+// database reference to a real file:
+//
+//   - DriveMounts translates a Windows drive prefix to a host directory
+//     (e.g. "O:" -> "/mnt/aeron-o"), preserving the directory structure so an
+//     exact path can be stat'd. This is the fast, unambiguous primary strategy.
+//   - SearchDirs are directories indexed recursively; a reference is then matched
+//     by filename (with and, as a fallback, without extension). This is the
+//     fallback for files whose exact path moved or that are mounted flat.
+//
+// At least one of DriveMounts or SearchDirs must be configured when Enabled.
+type MediaFileCheckConfig struct {
+	Enabled            bool              `json:"enabled"`
+	SearchDirs         []string          `json:"search_dirs"`
+	DriveMounts        map[string]string `json:"drive_mounts"`
+	StatTimeoutSec     int               `json:"stat_timeout_seconds" validate:"gte=0"`
+	MaxRangeDays       int               `json:"max_range_days" validate:"gte=0"`
+	CaseInsensitive    *bool             `json:"case_insensitive"`
+	IncludeVoicetracks bool              `json:"include_voicetracks"`
+	// LookaheadDays extends scheduled runs from today through today+N
+	// inclusive. A zero value checks only today; manual API runs ignore this.
+	LookaheadDays int             `json:"lookahead_days" validate:"gte=0"`
+	Scheduler     SchedulerConfig `json:"scheduler"`
+}
+
+// DefaultMediaFileCheckStatTimeoutSeconds is the default per-stat timeout for media file checks.
+const DefaultMediaFileCheckStatTimeoutSeconds = 5
+
+// DefaultMediaFileCheckMaxRangeDays caps the from/to span of a single media file check.
+const DefaultMediaFileCheckMaxRangeDays = 31
+
+// StatTimeout returns the per-stat timeout. Falls back to
+// DefaultMediaFileCheckStatTimeoutSeconds when StatTimeoutSec is zero or negative.
+func (c *MediaFileCheckConfig) StatTimeout() time.Duration {
+	if c.StatTimeoutSec <= 0 {
+		return DefaultMediaFileCheckStatTimeoutSeconds * time.Second
+	}
+	return time.Duration(c.StatTimeoutSec) * time.Second
+}
+
+// GetMaxRangeDays returns the configured from/to span cap or its default.
+func (c *MediaFileCheckConfig) GetMaxRangeDays() int {
+	return cmp.Or(c.MaxRangeDays, DefaultMediaFileCheckMaxRangeDays)
+}
+
+// IsCaseInsensitive reports whether filename matching ignores case. Defaults to
+// true (the references originate on case-insensitive Windows) when unset.
+func (c *MediaFileCheckConfig) IsCaseInsensitive() bool {
+	if c.CaseInsensitive == nil {
+		return true
+	}
+	return *c.CaseInsensitive
+}
+
+// LogConfig configures global structured logging.
 type LogConfig struct {
 	Level  string `json:"level" validate:"omitempty,oneof=debug info warn error"`
 	Format string `json:"format" validate:"omitempty,oneof=text json"`
 }
 
-// Config represents the complete application configuration.
+// Config is the fully loaded application configuration.
 type Config struct {
-	Database      DatabaseConfig      `json:"database"`
-	Image         ImageConfig         `json:"image"`
-	API           APIConfig           `json:"api"`
-	Maintenance   MaintenanceConfig   `json:"maintenance"`
-	Backup        BackupConfig        `json:"backup"`
-	FileMonitor   FileMonitorConfig   `json:"file_monitor"`
-	Notifications NotificationsConfig `json:"notifications"`
-	Log           LogConfig           `json:"log"`
+	Database       DatabaseConfig       `json:"database"`
+	Image          ImageConfig          `json:"image"`
+	API            APIConfig            `json:"api"`
+	Maintenance    MaintenanceConfig    `json:"maintenance"`
+	Backup         BackupConfig         `json:"backup"`
+	FileMonitor    FileMonitorConfig    `json:"file_monitor"`
+	MediaFileCheck MediaFileCheckConfig `json:"media_file_check"`
+	Notifications  NotificationsConfig  `json:"notifications"`
+	Log            LogConfig            `json:"log"`
 }
 
 const (
@@ -200,27 +259,27 @@ const (
 	DefaultBackupTimeoutMinutes        = 30
 )
 
-// GetMaxDownloadBytes returns the maximum allowed image download size in bytes.
+// GetMaxDownloadBytes returns the configured image download cap or its default.
 func (c *ImageConfig) GetMaxDownloadBytes() int64 {
 	return cmp.Or(c.MaxImageDownloadSizeBytes, DefaultMaxImageDownloadSizeBytes)
 }
 
-// GetRequestTimeout returns the HTTP request timeout as a Duration.
+// GetRequestTimeout returns the configured HTTP timeout or its default.
 func (c *APIConfig) GetRequestTimeout() time.Duration {
 	return time.Duration(cmp.Or(c.RequestTimeoutSeconds, DefaultRequestTimeoutSeconds)) * time.Second
 }
 
-// GetMaxOpenConns returns the maximum number of open database connections.
+// GetMaxOpenConns returns the configured open-connection cap or its default.
 func (c *DatabaseConfig) GetMaxOpenConns() int {
 	return cmp.Or(c.MaxOpenConns, DefaultMaxOpenConnections)
 }
 
-// GetMaxIdleConns returns the maximum number of idle database connections.
+// GetMaxIdleConns returns the configured idle-connection cap or its default.
 func (c *DatabaseConfig) GetMaxIdleConns() int {
 	return cmp.Or(c.MaxIdleConns, DefaultMaxIdleConnections)
 }
 
-// GetConnMaxLifetime returns the maximum lifetime of database connections as a Duration.
+// GetConnMaxLifetime returns the configured connection lifetime or its default.
 func (c *DatabaseConfig) GetConnMaxLifetime() time.Duration {
 	return time.Duration(cmp.Or(c.ConnMaxLifetimeMinutes, DefaultConnMaxLifetimeMinutes)) * time.Minute
 }
@@ -275,32 +334,32 @@ func (c *MaintenanceConfig) GetLongQueryThresholdSeconds() int {
 	return cmp.Or(c.LongQueryThresholdSeconds, DefaultLongQueryThresholdSeconds)
 }
 
-// GetPath returns the directory path where backup files are stored.
+// GetPath returns the backup directory or its default.
 func (c *BackupConfig) GetPath() string {
 	return cmp.Or(c.Path, DefaultBackupPath)
 }
 
-// GetRetentionDays returns the number of days to keep backup files before automatic deletion.
+// GetRetentionDays returns the backup age limit or its default.
 func (c *BackupConfig) GetRetentionDays() int {
 	return cmp.Or(c.RetentionDays, DefaultBackupRetentionDays)
 }
 
-// GetMaxBackups returns the maximum number of backup files to retain.
+// GetMaxBackups returns the backup count limit or its default.
 func (c *BackupConfig) GetMaxBackups() int {
 	return cmp.Or(c.MaxBackups, DefaultBackupMaxBackups)
 }
 
-// GetDefaultCompression returns the compression level (0-9) for backups.
+// GetDefaultCompression returns the backup compression level, capped at 9.
 func (c *BackupConfig) GetDefaultCompression() int {
 	return min(cmp.Or(c.DefaultCompression, DefaultBackupCompression), 9)
 }
 
-// GetTimeout returns the maximum duration for backup operations.
+// GetTimeout returns the backup timeout or its default.
 func (c *BackupConfig) GetTimeout() time.Duration {
 	return time.Duration(cmp.Or(c.TimeoutMinutes, DefaultBackupTimeoutMinutes)) * time.Minute
 }
 
-// GetPathPrefix returns the S3 path prefix for constructing object keys.
+// GetPathPrefix returns the S3 object prefix with a trailing slash when set.
 func (c *S3Config) GetPathPrefix() string {
 	prefix := c.PathPrefix
 	if prefix != "" && !strings.HasSuffix(prefix, "/") {
@@ -331,7 +390,7 @@ func (c *LogConfig) GetFormat() string {
 	return "text"
 }
 
-// Load loads and validates application configuration from a JSON file.
+// Load reads JSON configuration, applies environment overrides, and validates it.
 func Load(configPath string) (*Config, error) {
 	config := &Config{}
 
@@ -383,6 +442,7 @@ func newConfigValidator() *validator.Validate {
 
 	v.RegisterStructValidation(validateS3Config, S3Config{})
 	v.RegisterStructValidation(validateFileMonitorConfig, FileMonitorConfig{})
+	v.RegisterStructValidation(validateMediaFileCheckConfig, MediaFileCheckConfig{})
 
 	return v
 }
@@ -442,6 +502,44 @@ func validateFileMonitorConfig(sl validator.StructLevel) {
 	}
 }
 
+// driveLetterPattern matches a Windows drive prefix such as "O:" (optionally
+// written "O:\"). Capture group 1 is the letter.
+var driveLetterPattern = regexp.MustCompile(`^([A-Za-z]):\\?$`)
+
+// validateMediaFileCheckConfig checks that, when the media file check is
+// enabled, at least one resolution source is configured and that every path is
+// absolute. Drive-mount keys must be Windows drive prefixes ("O:") and their
+// targets absolute host directories. The checks only run when enabled so a
+// disabled, half-filled block does not block startup.
+func validateMediaFileCheckConfig(sl validator.StructLevel) {
+	mfc := sl.Current().Interface().(MediaFileCheckConfig)
+	if !mfc.Enabled {
+		return
+	}
+
+	if len(mfc.SearchDirs) == 0 && len(mfc.DriveMounts) == 0 {
+		sl.ReportError(mfc.SearchDirs, "search_dirs", "SearchDirs", "media_check_no_source", "")
+	}
+
+	for i, dir := range mfc.SearchDirs {
+		if !filepath.IsAbs(dir) {
+			fieldName := fmt.Sprintf("search_dirs[%d]", i)
+			structFieldName := fmt.Sprintf("SearchDirs[%d]", i)
+			sl.ReportError(mfc.SearchDirs[i], fieldName, structFieldName, "absolute_path", "")
+		}
+	}
+
+	for drive, target := range mfc.DriveMounts {
+		if !driveLetterPattern.MatchString(drive) {
+			sl.ReportError(target, "drive_mounts", "DriveMounts", "media_check_drive_key", drive)
+			continue
+		}
+		if !filepath.IsAbs(target) {
+			sl.ReportError(target, "drive_mounts", "DriveMounts", "media_check_drive_target", drive)
+		}
+	}
+}
+
 // validate validates the configuration using struct tags and struct-level validators.
 func validate(config *Config) error {
 	if err := configValidator.Struct(config); err != nil {
@@ -459,7 +557,7 @@ func formatErrors(err error) error {
 
 	var msgs []string
 	for _, e := range ve {
-		field := strings.ToLower(e.Namespace()[7:]) // Strip "Config." prefix
+		field := strings.ToLower(e.Namespace()[7:]) // strip "Config." prefix
 		msgs = append(msgs, fmt.Sprintf("%s %s", field, tagMessage(e.Tag(), e.Param())))
 	}
 
@@ -477,6 +575,12 @@ func tagMessage(tag, param string) string {
 		return "is required when no endpoint is specified"
 	case "required_when_enabled":
 		return "must have at least one entry when enabled"
+	case "media_check_no_source":
+		return "requires at least one search dir or drive mount when enabled"
+	case "media_check_drive_key":
+		return fmt.Sprintf("has an invalid drive key %q (expected e.g. \"O:\")", param)
+	case "media_check_drive_target":
+		return fmt.Sprintf("target for drive %q must be an absolute path", param)
 	case "duplicate_path":
 		return fmt.Sprintf("is duplicated (%s)", param)
 	case "absolute_path":

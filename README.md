@@ -12,6 +12,7 @@ Het radioautomatiseringssysteem Aeron mist tooling voor beheer en onderhoud. Aer
 - **Onderhoud:** bewaak de gezondheid van de database met automatische meldingen bij problemen
 - **Backups:** maak, valideer en download databasebackups (optioneel naar S3)
 - **Bestandscontrole:** controleer of bestanden actueel zijn, met meldingen bij verouderde of ontbrekende bestanden
+- **Mediabestanden:** controleer database-gestuurd of de audio uit de playlist daadwerkelijk op schijf staat
 
 ## Snel starten
 
@@ -69,6 +70,7 @@ Kopieer [`config.example.json`](config.example.json) naar `config.json`. De bela
 | `maintenance` | Drempelwaarden en automatische scheduler voor database health checks |
 | `backup` | Pad naar backups, retentie, scheduler en optionele S3-sync |
 | `file_monitor` | Signaleert verouderde of ontbrekende bestanden op schijf |
+| `media_file_check` | Controleert database-gestuurd of playlist-audio op schijf staat (exacte `drive_mounts` + `search_dirs` als fallback) |
 | `notifications` | E-mailmeldingen via Microsoft Graph API |
 | `log` | Logniveau (`debug`, `info`, `warn`, `error`) en formaat (`text`, `json`) |
 

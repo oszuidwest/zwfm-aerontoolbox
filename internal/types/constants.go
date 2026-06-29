@@ -2,27 +2,27 @@ package types
 
 import "fmt"
 
-// EntityType identifies the type of entity (artist or track).
+// EntityType identifies the media entity kind used by API routes.
 type EntityType string
 
 const (
-	// EntityTypeArtist represents an artist entity.
+	// EntityTypeArtist selects artist records.
 	EntityTypeArtist EntityType = "artist"
-	// EntityTypeTrack represents a track entity.
+	// EntityTypeTrack selects track records.
 	EntityTypeTrack EntityType = "track"
 )
 
-// Table represents a database table name.
+// Table is a validated Aeron table selector.
 type Table string
 
 const (
-	// TableArtist is the database table name for artist records.
+	// TableArtist selects the artist table.
 	TableArtist Table = "artist"
-	// TableTrack is the database table name for track records.
+	// TableTrack selects the track table.
 	TableTrack Table = "track"
 )
 
-// LongRunningQuery represents a query that has been running longer than the configured threshold.
+// LongRunningQuery is a database query exceeding the configured duration threshold.
 type LongRunningQuery struct {
 	PID      int    `db:"pid" json:"pid"`
 	Duration string `db:"duration" json:"duration"`
@@ -36,7 +36,7 @@ const VoicetrackUserID = "021F097E-B504-49BB-9B89-16B64D2E8422"
 // SupportedFormats lists the image formats that can be processed.
 var SupportedFormats = []string{"jpeg", "jpg", "png"}
 
-// IDColumnForTable returns the primary key column name for the given table.
+// IDColumnForTable returns the Aeron primary-key column for table.
 func IDColumnForTable(table Table) string {
 	if table == TableTrack {
 		return "titleid"
@@ -44,7 +44,7 @@ func IDColumnForTable(table Table) string {
 	return "artistid"
 }
 
-// IsValidIdentifier reports whether name contains only valid SQL identifier characters.
+// IsValidIdentifier reports whether name is a non-empty SQL identifier.
 func IsValidIdentifier(name string) bool {
 	if name == "" {
 		return false

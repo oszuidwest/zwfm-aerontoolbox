@@ -10,7 +10,7 @@ import (
 	_ "github.com/lib/pq"
 )
 
-// DB is the database interface for data access operations.
+// DB is the sqlx surface used by repository query helpers.
 type DB interface {
 	GetContext(ctx context.Context, dest any, query string, args ...any) error
 	SelectContext(ctx context.Context, dest any, query string, args ...any) error
@@ -18,14 +18,14 @@ type DB interface {
 	PingContext(ctx context.Context) error
 }
 
-// Artist is a basic artist entity with ID, name, and image status.
+// Artist is the compact artist projection used by list-style queries.
 type Artist struct {
 	ID         string `db:"artistid"`
 	ArtistName string `db:"artist"`
 	HasImage   bool   `db:"has_image"`
 }
 
-// ArtistDetails contains complete artist information including social media and metadata.
+// ArtistDetails is the full artist projection returned by detail endpoints.
 type ArtistDetails struct {
 	ID          string `db:"artistid" json:"artistid"`
 	ArtistName  string `db:"artist" json:"artist"`
@@ -37,7 +37,7 @@ type ArtistDetails struct {
 	RepeatValue int    `db:"repeat_value" json:"repeat_value"`
 }
 
-// Track is a basic track entity with ID, title, artist, and image status.
+// Track is the compact track projection used by list-style queries.
 type Track struct {
 	ID         string `db:"titleid"`
 	TrackTitle string `db:"tracktitle"`
@@ -45,7 +45,7 @@ type Track struct {
 	HasImage   bool   `db:"has_image"`
 }
 
-// TrackDetails contains complete track information including timing and audio properties.
+// TrackDetails is the full track projection returned by detail endpoints.
 type TrackDetails struct {
 	ID            string `db:"titleid" json:"titleid"`
 	TrackTitle    string `db:"tracktitle" json:"tracktitle"`

@@ -33,7 +33,7 @@ var nowFunc = time.Now
 // A radio config typically lists a handful of files, so 8 is plenty.
 const statCheckParallelism = 8
 
-// FileCheckErrorKind categorises why a file check failed.
+// FileCheckErrorKind classifies why a file check failed.
 type FileCheckErrorKind string
 
 const (
@@ -73,7 +73,7 @@ type statInFlight struct {
 	result      statResult
 }
 
-// FileMonitorService monitors files on disk for staleness based on modification time.
+// FileMonitorService checks configured files for staleness and alert transitions.
 type FileMonitorService struct {
 	config *config.Config
 	notify fileMonitorNotifier
@@ -113,8 +113,7 @@ type FileMonitorService struct {
 	completedRunID uint64
 }
 
-// FileMonitorStatus contains the results of the most recent file monitor check
-// plus the live run-state for the service.
+// FileMonitorStatus combines the latest check results with live run state.
 //
 // Polling recipe after POST /check: read run_id from the response (myRunID),
 // then poll /status until completed_run_id >= myRunID && running == false.
@@ -131,7 +130,7 @@ type FileMonitorStatus struct {
 	Checks          []FileCheckResult `json:"checks"`
 }
 
-// FileCheckResult contains the result of checking a single file.
+// FileCheckResult is the API verdict for one configured file.
 //
 // Five valid state profiles exist:
 //   - File exists:        FileExists=true,  FileAgeMinutes/LastModified set, Error empty
@@ -220,7 +219,7 @@ func (s *FileMonitorService) executeRun() *FileMonitorStatus {
 // only graceRunDone is set; per-path alertState is not touched), active-window
 // alert suppression (IsStale is preserved transparently; only alert-state
 // transitions and notifications are suppressed), and alert/recovery transitions.
-// Note: mutates results[i].InAlert in-place via the shared slice backing array.
+// It mutates results[i].InAlert in-place via the shared slice backing array.
 // Returns new alerts and recoveries for notification dispatch (which must happen
 // outside the lock).
 func (s *FileMonitorService) processAlertStates(
@@ -271,7 +270,7 @@ func (s *FileMonitorService) processAlertStates(
 	return newAlerts, newRecoveries
 }
 
-// dispatchNotifications sends batched alert and recovery notifications.
+// dispatchNotifications sends alert and recovery batches outside state locks.
 func (s *FileMonitorService) dispatchNotifications(
 	newAlerts, newRecoveries []notify.FileAlertResult,
 ) {
@@ -344,7 +343,7 @@ func (s *FileMonitorService) AlertingCount() int {
 	return s.countChecksLocked(func(c FileCheckResult) bool { return c.InAlert })
 }
 
-// countChecksLocked counts results satisfying pred. Caller must hold publishedMu for reading.
+// countChecksLocked counts results satisfying pred; caller holds publishedMu for reading.
 func (s *FileMonitorService) countChecksLocked(pred func(FileCheckResult) bool) int {
 	if s.lastCheck == nil {
 		return 0
@@ -485,7 +484,7 @@ func (s *FileMonitorService) startOrJoinFlight(path string, now time.Time) (*sta
 	return flight, true
 }
 
-// timeoutResult builds a synthetic stale-with-timeout result for a hung stat.
+// timeoutResult builds a stale result for a stat that exceeded its budget.
 func (s *FileMonitorService) timeoutResult(
 	check config.FileMonitorCheckConfig, flight *statInFlight, timeout time.Duration,
 ) FileCheckResult {
@@ -504,7 +503,7 @@ func (s *FileMonitorService) timeoutResult(
 	}
 }
 
-// buildResult turns an os.Stat outcome into a FileCheckResult.
+// buildResult maps an os.Stat outcome to the API result shape.
 func (s *FileMonitorService) buildResult(
 	check config.FileMonitorCheckConfig, info os.FileInfo, err error, now time.Time,
 ) FileCheckResult {
@@ -564,7 +563,7 @@ func (s *FileMonitorService) buildResult(
 	return result
 }
 
-// toAlertResult converts a check result to a notification alert result.
+// toAlertResult converts a check result to a notification payload.
 func toAlertResult(
 	check config.FileMonitorCheckConfig, result *FileCheckResult, checkedAt time.Time,
 ) notify.FileAlertResult {

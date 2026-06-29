@@ -1,4 +1,4 @@
-// Package database provides PostgreSQL data access for the Aeron database.
+// Package database queries the Aeron PostgreSQL schema and maps rows to API models.
 package database
 
 import (
@@ -14,18 +14,18 @@ import (
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
 )
 
-// Repository provides data access methods for the Aeron database.
+// Repository binds Aeron queries to a PostgreSQL schema.
 type Repository struct {
 	db     *sqlx.DB
 	schema string
 }
 
-// NewRepository returns a Repository for accessing the specified schema.
+// NewRepository returns a Repository scoped to schema.
 func NewRepository(db *sqlx.DB, schema string) *Repository {
 	return &Repository{db: db, schema: schema}
 }
 
-// DB returns the underlying database connection.
+// DB exposes the underlying pool for specialized queries.
 func (r *Repository) DB() *sqlx.DB {
 	return r.db
 }
@@ -35,7 +35,7 @@ func (r *Repository) Schema() string {
 	return r.schema
 }
 
-// Ping verifies the database connection is alive.
+// Ping verifies the database connection can answer requests.
 func (r *Repository) Ping(ctx context.Context) error {
 	return r.db.PingContext(ctx)
 }
@@ -49,16 +49,12 @@ func (r *Repository) resolveTable(table types.Table) (qualifiedName, label, idCo
 	return qualifiedName, string(table), types.IDColumnForTable(table), nil
 }
 
-// Artist operations.
-
 // GetArtist retrieves complete artist details by UUID.
 func (r *Repository) GetArtist(ctx context.Context, id string) (*ArtistDetails, error) {
 	slog.Debug("Entity lookup", "type", "artist", "id", id)
 	query := fmt.Sprintf(artistDetailsQuery, r.schema)
 	return getEntityByID[ArtistDetails](ctx, r.db, query, id, "artist", "fetch artist")
 }
-
-// Track operations.
 
 // GetTrack retrieves complete track details by UUID.
 func (r *Repository) GetTrack(ctx context.Context, id string) (*TrackDetails, error) {
@@ -67,9 +63,7 @@ func (r *Repository) GetTrack(ctx context.Context, id string) (*TrackDetails, er
 	return getEntityByID[TrackDetails](ctx, r.db, query, id, "track", "fetch track")
 }
 
-// Image operations.
-
-// GetImage retrieves the image for an entity.
+// GetImage retrieves the stored image for an artist or track.
 func (r *Repository) GetImage(ctx context.Context, table types.Table, id string) ([]byte, error) {
 	qualifiedTableName, label, idCol, err := r.resolveTable(table)
 	if err != nil {
@@ -94,7 +88,7 @@ func (r *Repository) GetImage(ctx context.Context, table types.Table, id string)
 	return imageData, nil
 }
 
-// UpdateImage stores new image data for the specified entity.
+// UpdateImage stores image bytes for an artist or track.
 func (r *Repository) UpdateImage(ctx context.Context, table types.Table, id string, imageData []byte) error {
 	qualifiedTableName, label, idCol, err := r.resolveTable(table)
 	if err != nil {
@@ -110,7 +104,7 @@ func (r *Repository) UpdateImage(ctx context.Context, table types.Table, id stri
 	return nil
 }
 
-// DeleteImage removes the image for an entity.
+// DeleteImage clears the stored image for an artist or track.
 func (r *Repository) DeleteImage(ctx context.Context, table types.Table, id string) error {
 	qualifiedTableName, label, idCol, err := r.resolveTable(table)
 	if err != nil {
@@ -136,15 +130,13 @@ func (r *Repository) DeleteImage(ctx context.Context, table types.Table, id stri
 	return nil
 }
 
-// Count operations.
-
-// ImageCounts contains total and with-image counts for a table.
+// ImageCounts is the total and with-image count for a table.
 type ImageCounts struct {
 	Total      int `db:"total"`
 	WithImages int `db:"with_images"`
 }
 
-// CountImages returns total entity count and count with images in a single query.
+// CountImages returns total rows and rows with images in one query.
 func (r *Repository) CountImages(ctx context.Context, table types.Table) (*ImageCounts, error) {
 	qualifiedTableName, label, _, err := r.resolveTable(table)
 	if err != nil {
@@ -159,7 +151,7 @@ func (r *Repository) CountImages(ctx context.Context, table types.Table) (*Image
 	return &counts, nil
 }
 
-// CountWithImages counts entities that have images.
+// CountWithImages counts rows whose picture column is set.
 func (r *Repository) CountWithImages(ctx context.Context, table types.Table) (int, error) {
 	return r.countItems(ctx, table, true)
 }
@@ -185,7 +177,7 @@ func (r *Repository) countItems(ctx context.Context, table types.Table, hasImage
 	return count, nil
 }
 
-// DeleteAllImages removes all images for entities in the specified table.
+// DeleteAllImages clears every stored image in table.
 func (r *Repository) DeleteAllImages(ctx context.Context, table types.Table) (int64, error) {
 	qualifiedTableName, label, _, err := r.resolveTable(table)
 	if err != nil {
@@ -202,9 +194,7 @@ func (r *Repository) DeleteAllImages(ctx context.Context, table types.Table) (in
 	return result.RowsAffected()
 }
 
-// Playlist operations.
-
-// GetPlaylist retrieves playlist items based on options.
+// GetPlaylist retrieves playlist items for the requested block scope.
 func (r *Repository) GetPlaylist(ctx context.Context, opts *PlaylistOptions) ([]PlaylistItem, error) {
 	query, params, err := BuildPlaylistQuery(r.schema, opts)
 	if err != nil {
@@ -213,7 +203,7 @@ func (r *Repository) GetPlaylist(ctx context.Context, opts *PlaylistOptions) ([]
 	return ExecutePlaylistQuery(ctx, r.db, query, params)
 }
 
-// GetPlaylistBlocks retrieves all playlist blocks for a specific date.
+// GetPlaylistBlocks retrieves all playlist blocks for date or today when empty.
 func (r *Repository) GetPlaylistBlocks(ctx context.Context, date string) ([]PlaylistBlock, error) {
 	var dateFilter string
 	params := []any{}
@@ -246,7 +236,7 @@ func (r *Repository) GetPlaylistBlocks(ctx context.Context, date string) ([]Play
 	return blocks, nil
 }
 
-// GetPlaylistWithTracks retrieves all blocks with their associated tracks for a date.
+// GetPlaylistWithTracks retrieves date-scoped blocks and their items.
 func (r *Repository) GetPlaylistWithTracks(
 	ctx context.Context, date string,
 ) ([]PlaylistBlock, map[string][]PlaylistItem, error) {
