@@ -61,6 +61,13 @@ func NewScheduler(ctx context.Context, svc *AeronService) (*Scheduler, error) {
 		}
 	}
 
+	// Register media file check job if enabled.
+	if cfg.MediaFileCheck.Enabled && cfg.MediaFileCheck.Scheduler.Enabled {
+		if err := s.addJob(cfg.MediaFileCheck.Scheduler.Schedule, "media-file-check", s.runMediaFileCheck); err != nil {
+			return nil, err
+		}
+	}
+
 	return s, nil
 }
 
@@ -129,6 +136,23 @@ func (s *Scheduler) runFileMonitor(_ context.Context) {
 		return
 	}
 	slog.Info("Scheduled file monitor check started")
+}
+
+// runMediaFileCheck verifies that today's playlist audio files exist on disk.
+// It funnels through TriggerScheduled so a manual API trigger and a cron tick
+// cannot overlap, and so the scheduled run (which emails alerts) keeps a stable
+// today-scope for the failure/recovery transition.
+func (s *Scheduler) runMediaFileCheck(_ context.Context) {
+	if _, err := s.service.MediaFileCheck.TriggerScheduled(); err != nil {
+		var conflict *types.ConflictError
+		if errors.As(err, &conflict) {
+			slog.Info("Scheduled media file check skipped (already running)")
+			return
+		}
+		slog.Error("Scheduled media file check failed to start", "error", err)
+		return
+	}
+	slog.Info("Scheduled media file check started")
 }
 
 // healthCheckTimeout is the maximum time allowed for a scheduled health check.

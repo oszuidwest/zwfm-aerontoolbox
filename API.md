@@ -15,6 +15,7 @@
   - [Database onderhoud](#database-onderhoud)
   - [Backup-endpoints](#backup-endpoints)
   - [Bestandscontrole](#bestandscontrole)
+  - [Mediabestandcontrole](#mediabestandcontrole)
   - [Notificaties](#notificaties)
 - [Codevoorbeelden](#codevoorbeelden)
 - [Configuratie](#configuratie)
@@ -53,6 +54,9 @@ De Aeron Toolbox API biedt RESTful-endpoints voor het Aeron-radioautomatiserings
 | **Bestandscontrole** |
 | `/api/file-monitor/status` | GET | Status bestandscontrole | Ja |
 | `/api/file-monitor/check` | POST | Handmatige bestandscontrole starten | Ja |
+| **Mediabestandcontrole** |
+| `/api/media/files/check` | POST | Controle op ontbrekende audiobestanden starten | Ja |
+| `/api/media/files/check/status` | GET | Resultaat van de mediabestandcontrole | Ja |
 | **Backups** |
 | `/api/db/backup` | POST | Nieuwe backup aanmaken | Ja |
 | `/api/db/backup/status` | GET | Backup status opvragen | Ja |
@@ -1267,6 +1271,173 @@ Als de bestandscontrole is ingeschakeld, geeft de health-endpoint (`GET /api/hea
 
 - `checks_stale`: ruwe telling van bestanden die te oud zijn of niet bereikbaar zijn, inclusief bestanden buiten hun `active_window`.
 - `checks_alerting`: window-aware telling; bestanden buiten hun `active_window` tellen hier niet mee. Wanneer de database verbonden is en `checks_alerting > 0`, wordt de algemene status `"degraded"` (`"unhealthy"` heeft altijd prioriteit). Een bestand dat 's nachts verouderd raakt maar alleen overdag wordt ververst, telt hier dus niet mee.
+
+---
+
+## Mediabestandcontrole
+
+Waar de [bestandscontrole](#bestandscontrole) een vaste lijst configuratiebestanden bewaakt, is de mediabestandcontrole **database-gestuurd**: hij leest de playlist uit de Aeron-database en controleert of de bijbehorende audiobestanden daadwerkelijk op schijf staan. Zo signaleer je ontbrekende of verplaatste tracks vóórdat ze in de uitzending vallen.
+
+De controle draait asynchroon: een `POST` start een run op de achtergrond en geeft direct een `run_id` terug; het resultaat lees je op met `GET .../status`.
+
+### Hoe een databasereferentie wordt gematcht
+
+In de Aeron-database staan audiopaden als **Windows-paden** (bijv. `O:\Audio\85\Artist - Title.wav`), terwijl de Toolbox doorgaans op Linux draait. De controle vertaalt een referentie in deze volgorde:
+
+1. **Drive-mapping (exact pad).** Met `drive_mappings` wordt een Windows-driveletter vertaald naar een hostmap (bijv. `O:` → `/mnt/aeron-o`). De volledige mapstructuur blijft behouden en het exacte pad wordt direct gecontroleerd. Dit is de snelste en meest eenduidige strategie.
+2. **Bestandsnaam-index (fallback).** De mappen in `roots` worden recursief geïndexeerd. Lukt het exacte pad niet, dan wordt gematcht op bestandsnaam — eerst inclusief extensie, daarna extensie-onafhankelijk (een `.wav` in de database matcht dan ook een `.flac` op schijf). Wanneer er geen padreferentie is, wordt teruggevallen op metadata (`artist - title`, `title`).
+
+Matchen gebeurt standaard hoofdletter-ongevoelig (`case_insensitive`), omdat de bron Windows is. Voicetracks worden standaard overgeslagen (`include_voicetracks`). Er wordt **geen** vaste `.wav`-aanname gedaan.
+
+**Statussen per item:**
+- `present` — er is precies één bestand gevonden.
+- `missing` — geen bestand gevonden.
+- `ambiguous` — meerdere bestanden matchen de referentie (bijv. dezelfde bestandsnaam in verschillende mappen).
+- `no_reference` — het playlistitem heeft geen bruikbare referentie (bijv. de track bestaat niet meer in de database).
+- `stat_error` — het bestand kon niet gecontroleerd worden (time-out, geen rechten, mount onbereikbaar).
+
+### Mediabestandcontrole starten
+
+Start een controle op de achtergrond voor de opgegeven scope.
+
+**Endpoint:** `POST /api/media/files/check`
+**Authenticatie:** Vereist
+
+**Queryparameters (optioneel):**
+- `date=YYYY-MM-DD` — controleer één dag. Zonder datumparameters wordt **vandaag** gecontroleerd (zoals bij `/api/playlist`).
+- `from=YYYY-MM-DD&to=YYYY-MM-DD` — controleer een datumbereik. Het bereik is begrensd tot `media_file_check.max_range_days` (standaard 31) om enorme scans te voorkomen.
+- `block_id={uuid}` — controleer één playlistblok (heeft voorrang op datumfilters).
+- `limit={n}` — beperk het aantal te controleren items.
+- `include_voicetracks=true` — neem voicetracks mee (standaard uitgesloten).
+
+**Foutresponse indien uitgeschakeld:** `404 Not Found`
+```json
+{
+  "error": "media file check is not enabled"
+}
+```
+
+**Response:** `202 Accepted`
+```json
+{
+  "message": "Media file check started",
+  "run_id": 1,
+  "check": "/api/media/files/check/status"
+}
+```
+
+**Error response:** `409 Conflict`
+```json
+{
+  "error": "media file check already running"
+}
+```
+
+**Validatiefout (bijv. ongeldige datum of te groot bereik):** `400 Bad Request`
+```json
+{
+  "error": "range: date range exceeds the maximum of 31 days"
+}
+```
+
+De handmatige trigger en de geplande cronrun delen dezelfde single-flight gate; ze kunnen elkaar dus niet overlappen.
+
+### Resultaat van de mediabestandcontrole
+
+Toont de runstatus plus het resultaat van de meest recente run.
+
+**Endpoint:** `GET /api/media/files/check/status`
+**Authenticatie:** Vereist
+
+**Response:** `200 OK`
+```json
+{
+  "running": false,
+  "run_id": 1,
+  "completed_run_id": 1,
+  "started_at": "2026-06-29T06:00:00Z",
+  "result": {
+    "checked_at": "2026-06-29T06:00:01Z",
+    "scope": {
+      "date": "2026-06-29",
+      "exclude_voicetracks": true
+    },
+    "summary": {
+      "total": 713,
+      "present": 709,
+      "missing": 2,
+      "ambiguous": 1,
+      "no_reference": 0,
+      "errors": 1
+    },
+    "items": [
+      {
+        "trackid": "af042d85-55b2-4d26-9093-d1bb7278c607",
+        "artist": "Robin S",
+        "tracktitle": "Luv 4 Luv",
+        "start_time": "2026-06-29T00:09:05",
+        "block_id": "c087211a-b4ac-47c8-af26-3aa6ef40b870",
+        "block": "",
+        "status": "missing",
+        "db_reference": "O:\\Audio\\93\\Robin S - 1993 Luv 4 Luv.wav",
+        "checked_paths": [
+          "/mnt/aeron-o/Audio/93/Robin S - 1993 Luv 4 Luv.wav",
+          "roots (by name): Robin S - 1993 Luv 4 Luv.wav"
+        ],
+        "matches": []
+      }
+    ]
+  }
+}
+```
+
+**Velden op topniveau:**
+- `running`: Of er op dit moment een run bezig is.
+- `run_id`: Monotone identifier van de huidige of meest recent gestarte run (`0` als de service nog nooit heeft gedraaid).
+- `completed_run_id`: Identifier van de run waarvan het resultaat zichtbaar is in `result`.
+- `started_at`: Starttijd van de huidige of meest recente run.
+- `result`: Het resultaat van de meest recente voltooide run (`null` tot de eerste run klaar is).
+
+**Velden in `result`:**
+- `checked_at`: Tijdstip waarop de run de items verwerkte.
+- `scope`: De toegepaste scope (`date`, `from`, `to`, `block_id`, `limit`, `exclude_voicetracks`).
+- `summary`: Tellingen per status (`total`, `present`, `missing`, `ambiguous`, `no_reference`, `errors`).
+- `items`: Resultaat per playlistitem.
+- `error`: Aanwezig wanneer de run zelf mislukte (bijvoorbeeld een databasefout).
+
+**Velden per item:**
+- `trackid`, `artist`, `tracktitle`, `start_time`, `block_id`, `block`: Playlist- en trackgegevens.
+- `status`: Een van `present`, `missing`, `ambiguous`, `no_reference`, `stat_error`.
+- `db_reference`: De referentie uit de database die gebruikt is.
+- `checked_paths`: De concrete paden en zoekacties die zijn geprobeerd.
+- `matches`: De gevonden bestanden op schijf (één bij `present`, meerdere bij `ambiguous`).
+- `match_type`: Hoe gematcht is: `exact_path`, `filename`, `filename_noext` of `metadata` (ontbreekt bij geen match).
+- `error`: Foutmelding bij `stat_error` (ontbreekt verder).
+
+**Pollingrecept:** lees `run_id` uit de `POST`-response (`myRunID`), poll daarna `GET .../status` tot `completed_run_id >= myRunID && running == false`.
+
+### Geplande controle en e-mailnotificaties
+
+Met `media_file_check.scheduler` draait de controle automatisch op een cron-schema (scope: vandaag). Als e-mailnotificaties zijn geconfigureerd, stuurt een geplande run een alert wanneer er problemen (`missing`, `ambiguous` of `stat_error`) worden gevonden, en een herstelmelding zodra een volgende run weer schoon is. Handmatige API-runs versturen geen e-mail, zodat ad-hoc scopes de alert-status niet verstoren.
+
+### Integratie met de health-endpoint (mediabestandcontrole)
+
+Als de mediabestandcontrole is ingeschakeld, geeft `GET /api/health` een extra `media_file_check`-blok terug:
+
+```json
+{
+  "status": "degraded",
+  "version": "1.0.0",
+  "database": "aeron",
+  "database_status": "connected",
+  "media_file_check": {
+    "enabled": true,
+    "problems": 3
+  }
+}
+```
+
+- `problems`: aantal `missing`-, `ambiguous`- en `stat_error`-items in de meest recente run. Dit telt alleen mee voor de algemene status `"degraded"` wanneer de **geplande** controle (`scheduler.enabled`) aanstaat, zodat ad-hoc API-runs met een afwijkende scope de health niet beïnvloeden.
 
 ---
 

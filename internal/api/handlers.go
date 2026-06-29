@@ -33,12 +33,23 @@ type ImageStatsResponse struct {
 
 // HealthResponse represents the response for the health check endpoint.
 type HealthResponse struct {
-	Status         string              `json:"status"`
-	Version        string              `json:"version"`
-	Database       string              `json:"database"`
-	DatabaseStatus string              `json:"database_status"`
-	Notifications  *NotificationHealth `json:"notifications"`
-	FileMonitor    *FileMonitorHealth  `json:"file_monitor,omitempty"`
+	Status         string                `json:"status"`
+	Version        string                `json:"version"`
+	Database       string                `json:"database"`
+	DatabaseStatus string                `json:"database_status"`
+	Notifications  *NotificationHealth   `json:"notifications"`
+	FileMonitor    *FileMonitorHealth    `json:"file_monitor,omitempty"`
+	MediaFileCheck *MediaFileCheckHealth `json:"media_file_check,omitempty"`
+}
+
+// MediaFileCheckHealth represents media file check status in the health response.
+// Problems is the number of missing, ambiguous and errored items in the most
+// recent completed run. It only drives the overall degraded status when the
+// scheduled check is enabled, so ad-hoc API runs with arbitrary scope do not
+// flip the system's health.
+type MediaFileCheckHealth struct {
+	Enabled  bool `json:"enabled"`
+	Problems int  `json:"problems"`
 }
 
 // FileMonitorHealth represents file monitor status in the health response.
@@ -140,17 +151,28 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	resp.Status = overallHealthStatus(dbConnected, notifyExpiresSoon, fmAlerting)
+	// Add media file check health info.
+	var mediaProblems int
+	mfcCfg := s.service.Config().MediaFileCheck
+	if mfcCfg.Enabled {
+		problems := s.service.MediaFileCheck.ProblemCount()
+		resp.MediaFileCheck = &MediaFileCheckHealth{Enabled: true, Problems: problems}
+		if mfcCfg.Scheduler.Enabled {
+			mediaProblems = problems
+		}
+	}
+
+	resp.Status = overallHealthStatus(dbConnected, notifyExpiresSoon, fmAlerting, mediaProblems)
 	respondJSON(w, http.StatusOK, resp)
 }
 
 // overallHealthStatus returns the highest-severity status given component states.
 // Severity order: "unhealthy" > "degraded" > "healthy".
-func overallHealthStatus(dbConnected, notifyExpiresSoon bool, fmAlerting int) string {
+func overallHealthStatus(dbConnected, notifyExpiresSoon bool, fmAlerting, mediaProblems int) string {
 	if !dbConnected {
 		return "unhealthy"
 	}
-	if notifyExpiresSoon || fmAlerting > 0 {
+	if notifyExpiresSoon || fmAlerting > 0 || mediaProblems > 0 {
 		return "degraded"
 	}
 	return "healthy"

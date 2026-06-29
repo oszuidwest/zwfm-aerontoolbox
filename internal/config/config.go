@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -160,6 +161,61 @@ func (c *FileMonitorConfig) Interval() time.Duration {
 	return time.Duration(c.IntervalSeconds) * time.Second
 }
 
+// MediaFileCheckConfig contains settings for verifying that audio files
+// referenced by the playlist actually exist on disk.
+//
+// The Aeron database stores Windows paths (e.g. O:\Audio\85\Artist - Title.wav)
+// while this service typically runs on Linux. Two complementary strategies map a
+// database reference to a real file:
+//
+//   - DriveMappings translates a Windows drive prefix to a host directory
+//     (e.g. "O:" -> "/mnt/aeron-o"), preserving the directory structure so an
+//     exact path can be stat'd. This is the fast, unambiguous primary strategy.
+//   - Roots are directories indexed recursively; a reference is then matched by
+//     filename (with and, as a fallback, without extension). This is the
+//     fallback for files whose exact path moved or that are mounted flat.
+//
+// At least one of DriveMappings or Roots must be configured when Enabled.
+type MediaFileCheckConfig struct {
+	Enabled            bool              `json:"enabled"`
+	Roots              []string          `json:"roots"`
+	DriveMappings      map[string]string `json:"drive_mappings"`
+	StatTimeoutSec     int               `json:"stat_timeout_seconds" validate:"gte=0"`
+	MaxRangeDays       int               `json:"max_range_days" validate:"gte=0"`
+	CaseInsensitive    *bool             `json:"case_insensitive"`
+	IncludeVoicetracks bool              `json:"include_voicetracks"`
+	Scheduler          SchedulerConfig   `json:"scheduler"`
+}
+
+// DefaultMediaFileCheckStatTimeoutSeconds is the default per-stat timeout for media file checks.
+const DefaultMediaFileCheckStatTimeoutSeconds = 5
+
+// DefaultMediaFileCheckMaxRangeDays caps the from/to span of a single media file check.
+const DefaultMediaFileCheckMaxRangeDays = 31
+
+// StatTimeout returns the per-stat timeout. Falls back to
+// DefaultMediaFileCheckStatTimeoutSeconds when StatTimeoutSec is zero or negative.
+func (c *MediaFileCheckConfig) StatTimeout() time.Duration {
+	if c.StatTimeoutSec <= 0 {
+		return DefaultMediaFileCheckStatTimeoutSeconds * time.Second
+	}
+	return time.Duration(c.StatTimeoutSec) * time.Second
+}
+
+// GetMaxRangeDays returns the maximum allowed from/to span in days.
+func (c *MediaFileCheckConfig) GetMaxRangeDays() int {
+	return cmp.Or(c.MaxRangeDays, DefaultMediaFileCheckMaxRangeDays)
+}
+
+// IsCaseInsensitive reports whether filename matching ignores case. Defaults to
+// true (the references originate on case-insensitive Windows) when unset.
+func (c *MediaFileCheckConfig) IsCaseInsensitive() bool {
+	if c.CaseInsensitive == nil {
+		return true
+	}
+	return *c.CaseInsensitive
+}
+
 // LogConfig contains logging configuration.
 type LogConfig struct {
 	Level  string `json:"level" validate:"omitempty,oneof=debug info warn error"`
@@ -168,14 +224,15 @@ type LogConfig struct {
 
 // Config represents the complete application configuration.
 type Config struct {
-	Database      DatabaseConfig      `json:"database"`
-	Image         ImageConfig         `json:"image"`
-	API           APIConfig           `json:"api"`
-	Maintenance   MaintenanceConfig   `json:"maintenance"`
-	Backup        BackupConfig        `json:"backup"`
-	FileMonitor   FileMonitorConfig   `json:"file_monitor"`
-	Notifications NotificationsConfig `json:"notifications"`
-	Log           LogConfig           `json:"log"`
+	Database       DatabaseConfig       `json:"database"`
+	Image          ImageConfig          `json:"image"`
+	API            APIConfig            `json:"api"`
+	Maintenance    MaintenanceConfig    `json:"maintenance"`
+	Backup         BackupConfig         `json:"backup"`
+	FileMonitor    FileMonitorConfig    `json:"file_monitor"`
+	MediaFileCheck MediaFileCheckConfig `json:"media_file_check"`
+	Notifications  NotificationsConfig  `json:"notifications"`
+	Log            LogConfig            `json:"log"`
 }
 
 const (
@@ -383,6 +440,7 @@ func newConfigValidator() *validator.Validate {
 
 	v.RegisterStructValidation(validateS3Config, S3Config{})
 	v.RegisterStructValidation(validateFileMonitorConfig, FileMonitorConfig{})
+	v.RegisterStructValidation(validateMediaFileCheckConfig, MediaFileCheckConfig{})
 
 	return v
 }
@@ -442,6 +500,44 @@ func validateFileMonitorConfig(sl validator.StructLevel) {
 	}
 }
 
+// driveLetterPattern matches a Windows drive prefix such as "O:" (optionally
+// written "O:\"). Capture group 1 is the letter.
+var driveLetterPattern = regexp.MustCompile(`^([A-Za-z]):\\?$`)
+
+// validateMediaFileCheckConfig checks that, when the media file check is
+// enabled, at least one resolution source is configured and that every path is
+// absolute. Drive-mapping keys must be Windows drive prefixes ("O:") and their
+// targets absolute host directories. The checks only run when enabled so a
+// disabled, half-filled block does not block startup.
+func validateMediaFileCheckConfig(sl validator.StructLevel) {
+	mfc := sl.Current().Interface().(MediaFileCheckConfig)
+	if !mfc.Enabled {
+		return
+	}
+
+	if len(mfc.Roots) == 0 && len(mfc.DriveMappings) == 0 {
+		sl.ReportError(mfc.Roots, "roots", "Roots", "media_check_no_source", "")
+	}
+
+	for i, root := range mfc.Roots {
+		if !filepath.IsAbs(root) {
+			fieldName := fmt.Sprintf("roots[%d]", i)
+			structFieldName := fmt.Sprintf("Roots[%d]", i)
+			sl.ReportError(mfc.Roots[i], fieldName, structFieldName, "absolute_path", "")
+		}
+	}
+
+	for drive, target := range mfc.DriveMappings {
+		if !driveLetterPattern.MatchString(drive) {
+			sl.ReportError(target, "drive_mappings", "DriveMappings", "media_check_drive_key", drive)
+			continue
+		}
+		if !filepath.IsAbs(target) {
+			sl.ReportError(target, "drive_mappings", "DriveMappings", "media_check_drive_target", drive)
+		}
+	}
+}
+
 // validate validates the configuration using struct tags and struct-level validators.
 func validate(config *Config) error {
 	if err := configValidator.Struct(config); err != nil {
@@ -477,6 +573,12 @@ func tagMessage(tag, param string) string {
 		return "is required when no endpoint is specified"
 	case "required_when_enabled":
 		return "must have at least one entry when enabled"
+	case "media_check_no_source":
+		return "requires at least one root or drive mapping when enabled"
+	case "media_check_drive_key":
+		return fmt.Sprintf("has an invalid drive key %q (expected e.g. \"O:\")", param)
+	case "media_check_drive_target":
+		return fmt.Sprintf("target for drive %q must be an absolute path", param)
 	case "duplicate_path":
 		return fmt.Sprintf("is duplicated (%s)", param)
 	case "absolute_path":

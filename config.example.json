@@ -81,6 +81,24 @@
       }
     ]
   },
+  "media_file_check": {
+    "enabled": false,
+    "roots": [
+      "/mnt/aeron-audio"
+    ],
+    "drive_mappings": {
+      "O:": "/mnt/aeron-o",
+      "Y:": "/mnt/aeron-y"
+    },
+    "stat_timeout_seconds": 5,
+    "max_range_days": 31,
+    "case_insensitive": true,
+    "include_voicetracks": false,
+    "scheduler": {
+      "enabled": false,
+      "schedule": "0 6 * * *"
+    }
+  },
   "notifications": {
     "email": {
       "tenant_id": "",

@@ -103,6 +103,13 @@ func (s *Server) router() http.Handler {
 				r.Post("/file-monitor/check", s.handleFileMonitorCheck)
 			})
 
+			// Media file check endpoints (guarded: 404 when disabled)
+			r.Group(func(r chi.Router) {
+				r.Use(s.requireMediaFileCheckEnabled)
+				r.Post("/media/files/check", s.handleMediaFileCheck)
+				r.Get("/media/files/check/status", s.handleMediaFileCheckStatus)
+			})
+
 			r.Post("/notifications/test-email", s.handleTestEmail)
 		})
 	})
@@ -174,6 +181,16 @@ func (s *Server) requireFileMonitorEnabled(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !s.service.Config().FileMonitor.Enabled {
 			respondError(w, http.StatusNotFound, "file monitor is not enabled")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) requireMediaFileCheckEnabled(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.service.Config().MediaFileCheck.Enabled {
+			respondError(w, http.StatusNotFound, "media file check is not enabled")
 			return
 		}
 		next.ServeHTTP(w, r)

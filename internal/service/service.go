@@ -14,11 +14,12 @@ import (
 
 // AeronService is the main service that provides access to all sub-services.
 type AeronService struct {
-	Media       *MediaService
-	Backup      *BackupService
-	Maintenance *MaintenanceService
-	FileMonitor *FileMonitorService
-	Notify      *notify.NotificationService
+	Media          *MediaService
+	Backup         *BackupService
+	Maintenance    *MaintenanceService
+	FileMonitor    *FileMonitorService
+	MediaFileCheck *MediaFileCheckService
+	Notify         *notify.NotificationService
 
 	repo   *database.Repository
 	config *config.Config
@@ -40,13 +41,14 @@ func New(db *sqlx.DB, cfg *config.Config) (*AeronService, error) {
 	}
 
 	return &AeronService{
-		Media:       newMediaService(repo, cfg),
-		Backup:      backupSvc,
-		Maintenance: newMaintenanceService(repo, cfg, notifySvc),
-		FileMonitor: fileMonitorSvc,
-		Notify:      notifySvc,
-		repo:        repo,
-		config:      cfg,
+		Media:          newMediaService(repo, cfg),
+		Backup:         backupSvc,
+		Maintenance:    newMaintenanceService(repo, cfg, notifySvc),
+		FileMonitor:    fileMonitorSvc,
+		MediaFileCheck: newMediaFileCheckService(repo, cfg, notifySvc),
+		Notify:         notifySvc,
+		repo:           repo,
+		config:         cfg,
 	}, nil
 }
 
@@ -64,6 +66,7 @@ func (s *AeronService) Repository() *database.Repository {
 func (s *AeronService) Close() {
 	s.Backup.Close()
 	s.FileMonitor.Close()
+	s.MediaFileCheck.Close()
 	s.Notify.Close()
 }
 

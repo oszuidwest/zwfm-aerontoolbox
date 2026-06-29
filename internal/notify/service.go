@@ -48,6 +48,7 @@ type NotificationService struct {
 	prevBackupFailed      bool
 	prevHealthAlertActive bool
 	prevS3Failed          bool
+	prevMediaCheckFailed  bool
 	stateMu               sync.Mutex
 
 	// Last notification send error (for health endpoint)
