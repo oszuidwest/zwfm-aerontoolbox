@@ -19,8 +19,8 @@
     "max_image_download_size_bytes": 52428800
   },
   "api": {
-    "enabled": false,
-    "keys": [],
+    "enabled": true,
+    "keys": ["vervang-dit-door-een-lange-willekeurige-api-sleutel"],
     "request_timeout_seconds": 30
   },
   "maintenance": {
