@@ -40,9 +40,9 @@ func (s *NotificationService) SendFileRecoveries(recoveries []FileAlertResult) {
 
 func formatFileAlerts(alerts []FileAlertResult) (subject, body string) {
 	if len(alerts) == 1 {
-		subject = fmt.Sprintf("[ERROR] File monitor: %s stale - Aeron Toolbox", fileLabel(&alerts[0]))
+		subject = errorSubject("File monitor: " + fileLabel(&alerts[0]) + " stale")
 	} else {
-		subject = fmt.Sprintf("[ERROR] File monitor: %d files stale - Aeron Toolbox", len(alerts))
+		subject = errorSubject(fmt.Sprintf("File monitor: %d files stale", len(alerts)))
 	}
 
 	var b strings.Builder
@@ -71,9 +71,9 @@ func formatFileAlerts(alerts []FileAlertResult) (subject, body string) {
 
 func formatFileRecoveries(recoveries []FileAlertResult) (subject, body string) {
 	if len(recoveries) == 1 {
-		subject = fmt.Sprintf("[OK] File monitor: %s recovered - Aeron Toolbox", fileLabel(&recoveries[0]))
+		subject = okSubject("File monitor: " + fileLabel(&recoveries[0]) + " recovered")
 	} else {
-		subject = fmt.Sprintf("[OK] File monitor: %d files recovered - Aeron Toolbox", len(recoveries))
+		subject = okSubject(fmt.Sprintf("File monitor: %d files recovered", len(recoveries)))
 	}
 
 	var b strings.Builder

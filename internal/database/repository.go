@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strconv"
 	"strings"
 
 	"github.com/jmoiron/sqlx"
@@ -254,23 +253,20 @@ func (r *Repository) GetPlaylistWithTracks(
 		blockIDs[i] = block.BlockID
 	}
 
-	var dateFilter string
-	params := []any{}
-	paramCount := 0
+	pl := &paramList{}
 
+	var dateFilter string
 	if date != "" {
-		dateFilter = "pi.startdatetime >= $1::date AND pi.startdatetime < $1::date + INTERVAL '1 day'"
-		params = append(params, date)
-		paramCount = 1
+		p := pl.next(date)
+		dateFilter = fmt.Sprintf(
+			"pi.startdatetime >= %s::date AND pi.startdatetime < %s::date + INTERVAL '1 day'", p, p)
 	} else {
 		dateFilter = "pi.startdatetime >= CURRENT_DATE AND pi.startdatetime < CURRENT_DATE + INTERVAL '1 day'"
 	}
 
 	placeholders := make([]string, len(blockIDs))
 	for i, id := range blockIDs {
-		paramCount++
-		placeholders[i] = "$" + strconv.Itoa(paramCount)
-		params = append(params, id)
+		placeholders[i] = pl.next(id)
 	}
 
 	type playlistItemWithBlockID struct {
@@ -286,7 +282,7 @@ func (r *Repository) GetPlaylistWithTracks(
 		columns, joins, dateFilter, strings.Join(placeholders, ","))
 
 	var tempItems []playlistItemWithBlockID
-	err = r.db.SelectContext(ctx, &tempItems, query, params...)
+	err = r.db.SelectContext(ctx, &tempItems, query, pl.values...)
 	if err != nil {
 		return nil, nil, types.NewOperationError("fetch playlist items", err)
 	}

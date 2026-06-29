@@ -168,6 +168,25 @@ func validateBackupFilename(filename string) error {
 	return nil
 }
 
+// ensureBackupFile checks the feature is enabled, validates the filename, and
+// confirms the file is present. A missing file maps to NotFoundError; any other
+// stat error (e.g. permission denied) maps to OperationError.
+func (s *BackupService) ensureBackupFile(filename string) error {
+	if err := s.checkEnabled(); err != nil {
+		return err
+	}
+	if err := validateBackupFilename(filename); err != nil {
+		return err
+	}
+	if _, err := s.backupRoot.Stat(filename); err != nil {
+		if os.IsNotExist(err) {
+			return types.NewNotFoundError("backup", filename)
+		}
+		return types.NewOperationError("stat backup", err)
+	}
+	return nil
+}
+
 // buildPgDumpArgs constructs the pg_dump arguments for the configured database.
 func (s *BackupService) buildPgDumpArgs(compression int) []string {
 	return []string{
@@ -501,16 +520,8 @@ func (s *BackupService) List() (*BackupListResponse, error) {
 
 // Delete removes a managed backup locally and schedules remote deletion.
 func (s *BackupService) Delete(filename string) error {
-	if err := s.checkEnabled(); err != nil {
+	if err := s.ensureBackupFile(filename); err != nil {
 		return err
-	}
-
-	if err := validateBackupFilename(filename); err != nil {
-		return err
-	}
-
-	if _, err := s.backupRoot.Stat(filename); os.IsNotExist(err) {
-		return types.NewNotFoundError("backup", filename)
 	}
 
 	if err := s.backupRoot.Remove(filename); err != nil {
@@ -539,16 +550,8 @@ func (s *BackupService) Delete(filename string) error {
 
 // GetFilePath validates filename and returns its absolute local path.
 func (s *BackupService) GetFilePath(filename string) (string, error) {
-	if err := s.checkEnabled(); err != nil {
+	if err := s.ensureBackupFile(filename); err != nil {
 		return "", err
-	}
-
-	if err := validateBackupFilename(filename); err != nil {
-		return "", err
-	}
-
-	if _, err := s.backupRoot.Stat(filename); os.IsNotExist(err) {
-		return "", types.NewNotFoundError("backup", filename)
 	}
 
 	return filepath.Join(s.config.Backup.GetPath(), filename), nil

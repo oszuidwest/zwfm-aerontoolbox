@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/oszuidwest/zwfm-aerontoolbox/internal/config"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/service"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
 )
@@ -83,7 +84,7 @@ func (s *Server) router() http.Handler {
 				})
 
 				r.Group(func(r chi.Router) {
-					r.Use(s.requireBackupEnabled)
+					r.Use(s.requireEnabled("backup is not enabled", func(c *config.Config) bool { return c.Backup.Enabled }))
 					r.Post("/backup", s.handleCreateBackup)
 					r.Get("/backup/status", s.handleBackupStatus)
 					r.Get("/backups", s.handleListBackups)
@@ -94,13 +95,13 @@ func (s *Server) router() http.Handler {
 			})
 
 			r.Group(func(r chi.Router) {
-				r.Use(s.requireFileMonitorEnabled)
+				r.Use(s.requireEnabled("file monitor is not enabled", func(c *config.Config) bool { return c.FileMonitor.Enabled }))
 				r.Get("/file-monitor/status", s.handleFileMonitorStatus)
 				r.Post("/file-monitor/check", s.handleFileMonitorCheck)
 			})
 
 			r.Group(func(r chi.Router) {
-				r.Use(s.requireMediaFileCheckEnabled)
+				r.Use(s.requireEnabled("media file check is not enabled", func(c *config.Config) bool { return c.MediaFileCheck.Enabled }))
 				r.Post("/media/files/check", s.handleMediaFileCheck)
 				r.Get("/media/files/check/status", s.handleMediaFileCheckStatus)
 			})
@@ -162,34 +163,19 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-func (s *Server) requireBackupEnabled(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !s.service.Config().Backup.Enabled {
-			respondError(w, http.StatusNotFound, "backup is not enabled")
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-func (s *Server) requireFileMonitorEnabled(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !s.service.Config().FileMonitor.Enabled {
-			respondError(w, http.StatusNotFound, "file monitor is not enabled")
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-func (s *Server) requireMediaFileCheckEnabled(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !s.service.Config().MediaFileCheck.Enabled {
-			respondError(w, http.StatusNotFound, "media file check is not enabled")
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
+// requireEnabled builds middleware that 404s when a feature is disabled. The
+// enabled predicate is evaluated per request against the live config, so a
+// runtime config change is reflected without rebuilding the router.
+func (s *Server) requireEnabled(message string, enabled func(*config.Config) bool) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !enabled(s.service.Config()) {
+				respondError(w, http.StatusNotFound, message)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 func (s *Server) isValidAPIKey(key string) bool {
