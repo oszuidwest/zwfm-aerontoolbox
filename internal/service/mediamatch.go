@@ -123,11 +123,11 @@ type fileIndex struct {
 	errors []string
 }
 
-// buildFileIndex walks each root recursively and indexes every regular file by
-// filename and by stem. Per-file walk errors are logged and skipped so one
-// unreadable subtree does not abort the whole index. The walk aborts early if
-// ctx is cancelled.
-func buildFileIndex(ctx context.Context, roots []string, caseInsensitive bool) *fileIndex {
+// buildFileIndex walks each search dir recursively and indexes every regular
+// file by filename and by stem. Per-file walk errors are logged and skipped so
+// one unreadable subtree does not abort the whole index. The walk aborts early
+// if ctx is cancelled.
+func buildFileIndex(ctx context.Context, dirs []string, caseInsensitive bool) *fileIndex {
 	idx := &fileIndex{
 		byName: make(map[string][]string),
 		byStem: make(map[string][]string),
@@ -142,12 +142,12 @@ func buildFileIndex(ctx context.Context, roots []string, caseInsensitive bool) *
 		m[key] = append(m[key], full)
 	}
 
-	for _, root := range roots {
+	for _, dir := range dirs {
 		if ctx != nil && ctx.Err() != nil {
-			idx.addError(fmt.Sprintf("index build canceled before %s: %v", root, ctx.Err()))
+			idx.addError(fmt.Sprintf("index build canceled before %s: %v", dir, ctx.Err()))
 			break
 		}
-		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 			if ctx != nil && ctx.Err() != nil {
 				return ctx.Err()
 			}
@@ -169,8 +169,8 @@ func buildFileIndex(ctx context.Context, roots []string, caseInsensitive bool) *
 			return nil
 		})
 		if err != nil {
-			idx.addError(fmt.Sprintf("%s: %v", root, err))
-			slog.Warn("Media file check: index walk stopped", "root", root, "error", err)
+			idx.addError(fmt.Sprintf("%s: %v", dir, err))
+			slog.Warn("Media file check: index walk stopped", "dir", dir, "error", err)
 			if ctx != nil && ctx.Err() != nil {
 				break
 			}
@@ -205,11 +205,11 @@ type rootDir struct {
 }
 
 // mediaMatcher resolves database references to files on disk using two
-// strategies: exact path translation via drive mappings, then a filename index
-// over the configured roots (built lazily on first fallback).
+// strategies: exact path translation via drive mounts, then a filename index
+// over the configured search dirs (built lazily on first fallback).
 type mediaMatcher struct {
 	driveRoots      map[string]*rootDir
-	roots           []string
+	searchDirs      []string
 	caseInsensitive bool
 	statTimeout     time.Duration
 
@@ -314,7 +314,7 @@ func (m *mediaMatcher) match(in *matchInput) matchOutcome {
 		return out
 	}
 
-	// Strategy 2: filename index over roots (exact filename, then ext-independent).
+	// Strategy 2: filename index over search dirs (exact filename, then ext-independent).
 	if idx := m.getIndex(); idx != nil {
 		// Exact filename (with extension).
 		var names []string
@@ -385,25 +385,25 @@ func (m *mediaMatcher) statDriveMapped(ref string) (candidate string, exists boo
 	return candidate, exists, err
 }
 
-// getIndex returns the lazily-built filename index, or nil when no roots are
-// configured. The index is built at most once per matcher; concurrent callers
-// that fall through to the index strategy block on the same build via Once.
+// getIndex returns the lazily-built filename index, or nil when no search dirs
+// are configured. The index is built at most once per matcher; concurrent
+// callers that fall through to the index strategy block on the same build via Once.
 func (m *mediaMatcher) getIndex() *fileIndex {
 	m.indexOnce.Do(func() {
-		if len(m.roots) == 0 {
+		if len(m.searchDirs) == 0 {
 			return
 		}
 		start := time.Now()
-		m.index = buildFileIndex(m.ctx, m.roots, m.caseInsensitive)
+		m.index = buildFileIndex(m.ctx, m.searchDirs, m.caseInsensitive)
 		if err := m.index.err(); err != nil {
 			slog.Warn("Media file check: index built with errors",
-				"files", m.index.count, "roots", len(m.roots),
+				"files", m.index.count, "search_dirs", len(m.searchDirs),
 				"duration", time.Since(start).Round(time.Millisecond).String(),
 				"error", err)
 			return
 		}
 		slog.Info("Media file check: index built",
-			"files", m.index.count, "roots", len(m.roots),
+			"files", m.index.count, "search_dirs", len(m.searchDirs),
 			"duration", time.Since(start).Round(time.Millisecond).String())
 	})
 	return m.index
@@ -464,7 +464,7 @@ func statRootWithTimeout(root *os.Root, name string, timeout time.Duration) (boo
 
 // describeSearch renders an operator-facing note about an index lookup.
 func describeSearch(how string, keys []string) string {
-	return fmt.Sprintf("roots (%s): %s", how, strings.Join(keys, ", "))
+	return fmt.Sprintf("search_dirs (%s): %s", how, strings.Join(keys, ", "))
 }
 
 func appendUnique(s []string, v string) []string {

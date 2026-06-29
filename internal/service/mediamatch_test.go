@@ -74,8 +74,8 @@ func TestBaseNameAndStem(t *testing.T) {
 }
 
 // buildTestMatcher constructs a matcher for tests, opening an os.Root per drive
-// mapping. Missing directories are stored as unopened roots (root == nil).
-func buildTestMatcher(t *testing.T, driveDirs map[string]string, roots []string, caseInsensitive bool) *mediaMatcher {
+// mount. Missing directories are stored as unopened roots (root == nil).
+func buildTestMatcher(t *testing.T, driveDirs map[string]string, searchDirs []string, caseInsensitive bool) *mediaMatcher {
 	t.Helper()
 	driveRoots := make(map[string]*rootDir)
 	for drive, dir := range driveDirs {
@@ -90,7 +90,7 @@ func buildTestMatcher(t *testing.T, driveDirs map[string]string, roots []string,
 	}
 	return &mediaMatcher{
 		driveRoots:      driveRoots,
-		roots:           roots,
+		searchDirs:      searchDirs,
 		caseInsensitive: caseInsensitive,
 		statTimeout:     5 * time.Second,
 	}

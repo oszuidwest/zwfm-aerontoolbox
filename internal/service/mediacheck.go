@@ -219,13 +219,13 @@ func (s *MediaFileCheckService) executeRun(ctx context.Context, opts *database.M
 	return result
 }
 
-// buildMatcher opens the drive-mapping roots and returns a matcher plus a
+// buildMatcher opens the drive-mount targets and returns a matcher plus a
 // cleanup function that closes them.
 func (s *MediaFileCheckService) buildMatcher(ctx context.Context) (matcher *mediaMatcher, cleanup func()) {
 	mfc := &s.config.MediaFileCheck
 
-	driveRoots := make(map[string]*rootDir, len(mfc.DriveMappings))
-	for drive, dir := range mfc.DriveMappings {
+	driveRoots := make(map[string]*rootDir, len(mfc.DriveMounts))
+	for drive, dir := range mfc.DriveMounts {
 		key := normalizeDriveKey(drive)
 		if key == "" {
 			continue
@@ -234,7 +234,7 @@ func (s *MediaFileCheckService) buildMatcher(ctx context.Context) (matcher *medi
 		root, err := os.OpenRoot(dir)
 		if err != nil {
 			rd.openErr = err
-			slog.Warn("Media file check: drive mapping root unavailable", "drive", key, "dir", dir, "error", err)
+			slog.Warn("Media file check: drive mount target unavailable", "drive", key, "dir", dir, "error", err)
 		} else {
 			rd.root = root
 		}
@@ -243,7 +243,7 @@ func (s *MediaFileCheckService) buildMatcher(ctx context.Context) (matcher *medi
 
 	matcher = &mediaMatcher{
 		driveRoots:      driveRoots,
-		roots:           mfc.Roots,
+		searchDirs:      mfc.SearchDirs,
 		caseInsensitive: mfc.IsCaseInsensitive(),
 		statTimeout:     mfc.StatTimeout(),
 		ctx:             ctx,

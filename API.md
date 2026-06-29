@@ -1284,8 +1284,10 @@ De controle draait asynchroon: een `POST` start een run op de achtergrond en gee
 
 In de Aeron-database staan audiopaden als **Windows-paden** (bijv. `O:\Audio\85\Artist - Title.wav`), terwijl de Toolbox doorgaans op Linux draait. De controle vertaalt een referentie in deze volgorde:
 
-1. **Drive-mapping (exact pad).** Met `drive_mappings` wordt een Windows-driveletter vertaald naar een hostmap (bijv. `O:` → `/mnt/aeron-o`). De volledige mapstructuur blijft behouden en het exacte pad wordt direct gecontroleerd. Dit is de snelste en meest eenduidige strategie.
-2. **Bestandsnaam-index (fallback).** De mappen in `roots` worden recursief geïndexeerd. Lukt het exacte pad niet, dan wordt gematcht op bestandsnaam — eerst inclusief extensie, daarna extensie-onafhankelijk (een `.wav` in de database matcht dan ook een `.flac` op schijf). Er wordt uitsluitend op de bestandsnaam (`audio.name`) gematcht, niet op losse `artist`/`title`-metadata.
+1. **Drive-mount (exact pad).** Met `drive_mounts` wordt een Windows-driveletter vertaald naar een hostmap (bijv. `O:` → `/mnt/aeron-o`). De volledige mapstructuur blijft behouden en het exacte pad wordt direct gecontroleerd. Dit is de snelste en meest eenduidige strategie.
+2. **Bestandsnaam-index (fallback).** De mappen in `search_dirs` worden recursief geïndexeerd. Lukt het exacte pad niet, dan wordt gematcht op bestandsnaam — eerst inclusief extensie, daarna extensie-onafhankelijk (een `.wav` in de database matcht dan ook een `.flac` op schijf). Er wordt uitsluitend op de bestandsnaam (`audio.name`) gematcht, niet op losse `artist`/`title`-metadata.
+
+> **Kort:** `drive_mounts` controleert of het bestand op de **exacte plek** uit de database staat (volledig pad, alleen de driveletter wordt vertaald); `search_dirs` controleert of een bestand met die **naam** überhaupt ergens onder de opgegeven mappen bestaat (de map uit de database wordt genegeerd).
 
 Matchen gebeurt standaard hoofdletter-ongevoelig (`case_insensitive`), omdat de bron Windows is. Voicetracks worden standaard overgeslagen (`include_voicetracks`). Er wordt **geen** vaste `.wav`-aanname gedaan.
 
@@ -1382,7 +1384,7 @@ Toont de runstatus plus het resultaat van de meest recente run.
         "db_reference": "O:\\Audio\\93\\Robin S - 1993 Luv 4 Luv.wav",
         "checked_paths": [
           "/mnt/aeron-o/Audio/93/Robin S - 1993 Luv 4 Luv.wav",
-          "roots (by name): Robin S - 1993 Luv 4 Luv.wav"
+          "search_dirs (by name): Robin S - 1993 Luv 4 Luv.wav"
         ],
         "matches": []
       }

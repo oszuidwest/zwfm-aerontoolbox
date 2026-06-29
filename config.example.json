@@ -83,13 +83,13 @@
   },
   "media_file_check": {
     "enabled": false,
-    "roots": [
-      "/mnt/aeron-audio"
-    ],
-    "drive_mappings": {
+    "drive_mounts": {
       "O:": "/mnt/aeron-o",
       "Y:": "/mnt/aeron-y"
     },
+    "search_dirs": [
+      "/mnt/aeron-audio"
+    ],
     "stat_timeout_seconds": 5,
     "max_range_days": 31,
     "case_insensitive": true,

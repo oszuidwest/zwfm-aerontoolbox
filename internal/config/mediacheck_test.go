@@ -5,9 +5,9 @@ import "testing"
 func TestMediaFileCheck_DisabledSkipsValidation(t *testing.T) {
 	cfg := minimalConfig()
 	cfg.MediaFileCheck = MediaFileCheckConfig{
-		Enabled:       false,
-		Roots:         []string{"relative/path"}, // would be invalid if enabled
-		DriveMappings: map[string]string{"bad": "also-relative"},
+		Enabled:     false,
+		SearchDirs:  []string{"relative/path"}, // would be invalid if enabled
+		DriveMounts: map[string]string{"bad": "also-relative"},
 	}
 
 	if err := validate(cfg); err != nil {
@@ -20,15 +20,15 @@ func TestMediaFileCheck_EnabledRequiresSource(t *testing.T) {
 	cfg.MediaFileCheck = MediaFileCheckConfig{Enabled: true}
 
 	if err := validate(cfg); err == nil {
-		t.Fatal("expected error when enabled with no roots or drive mappings, got nil")
+		t.Fatal("expected error when enabled with no search dirs or drive mounts, got nil")
 	}
 }
 
 func TestMediaFileCheck_EnabledWithAbsoluteRoot(t *testing.T) {
 	cfg := minimalConfig()
 	cfg.MediaFileCheck = MediaFileCheckConfig{
-		Enabled: true,
-		Roots:   []string{"/mnt/aeron-audio"},
+		Enabled:    true,
+		SearchDirs: []string{"/mnt/aeron-audio"},
 	}
 
 	if err := validate(cfg); err != nil {
@@ -39,8 +39,8 @@ func TestMediaFileCheck_EnabledWithAbsoluteRoot(t *testing.T) {
 func TestMediaFileCheck_RelativeRootRejected(t *testing.T) {
 	cfg := minimalConfig()
 	cfg.MediaFileCheck = MediaFileCheckConfig{
-		Enabled: true,
-		Roots:   []string{"relative/audio"},
+		Enabled:    true,
+		SearchDirs: []string{"relative/audio"},
 	}
 
 	if err := validate(cfg); err == nil {
@@ -51,8 +51,8 @@ func TestMediaFileCheck_RelativeRootRejected(t *testing.T) {
 func TestMediaFileCheck_DriveMappingValid(t *testing.T) {
 	cfg := minimalConfig()
 	cfg.MediaFileCheck = MediaFileCheckConfig{
-		Enabled:       true,
-		DriveMappings: map[string]string{"O:": "/mnt/aeron-o", "Y:": "/mnt/aeron-y"},
+		Enabled:     true,
+		DriveMounts: map[string]string{"O:": "/mnt/aeron-o", "Y:": "/mnt/aeron-y"},
 	}
 
 	if err := validate(cfg); err != nil {
@@ -63,8 +63,8 @@ func TestMediaFileCheck_DriveMappingValid(t *testing.T) {
 func TestMediaFileCheck_DriveMappingBadKey(t *testing.T) {
 	cfg := minimalConfig()
 	cfg.MediaFileCheck = MediaFileCheckConfig{
-		Enabled:       true,
-		DriveMappings: map[string]string{"audio": "/mnt/aeron-o"},
+		Enabled:     true,
+		DriveMounts: map[string]string{"audio": "/mnt/aeron-o"},
 	}
 
 	if err := validate(cfg); err == nil {
@@ -75,8 +75,8 @@ func TestMediaFileCheck_DriveMappingBadKey(t *testing.T) {
 func TestMediaFileCheck_DriveMappingRelativeTarget(t *testing.T) {
 	cfg := minimalConfig()
 	cfg.MediaFileCheck = MediaFileCheckConfig{
-		Enabled:       true,
-		DriveMappings: map[string]string{"O:": "relative/dir"},
+		Enabled:     true,
+		DriveMounts: map[string]string{"O:": "relative/dir"},
 	}
 
 	if err := validate(cfg); err == nil {

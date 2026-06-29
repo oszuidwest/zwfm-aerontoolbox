@@ -168,18 +168,18 @@ func (c *FileMonitorConfig) Interval() time.Duration {
 // while this service typically runs on Linux. Two complementary strategies map a
 // database reference to a real file:
 //
-//   - DriveMappings translates a Windows drive prefix to a host directory
+//   - DriveMounts translates a Windows drive prefix to a host directory
 //     (e.g. "O:" -> "/mnt/aeron-o"), preserving the directory structure so an
 //     exact path can be stat'd. This is the fast, unambiguous primary strategy.
-//   - Roots are directories indexed recursively; a reference is then matched by
-//     filename (with and, as a fallback, without extension). This is the
+//   - SearchDirs are directories indexed recursively; a reference is then matched
+//     by filename (with and, as a fallback, without extension). This is the
 //     fallback for files whose exact path moved or that are mounted flat.
 //
-// At least one of DriveMappings or Roots must be configured when Enabled.
+// At least one of DriveMounts or SearchDirs must be configured when Enabled.
 type MediaFileCheckConfig struct {
 	Enabled            bool              `json:"enabled"`
-	Roots              []string          `json:"roots"`
-	DriveMappings      map[string]string `json:"drive_mappings"`
+	SearchDirs         []string          `json:"search_dirs"`
+	DriveMounts        map[string]string `json:"drive_mounts"`
 	StatTimeoutSec     int               `json:"stat_timeout_seconds" validate:"gte=0"`
 	MaxRangeDays       int               `json:"max_range_days" validate:"gte=0"`
 	CaseInsensitive    *bool             `json:"case_insensitive"`
@@ -506,7 +506,7 @@ var driveLetterPattern = regexp.MustCompile(`^([A-Za-z]):\\?$`)
 
 // validateMediaFileCheckConfig checks that, when the media file check is
 // enabled, at least one resolution source is configured and that every path is
-// absolute. Drive-mapping keys must be Windows drive prefixes ("O:") and their
+// absolute. Drive-mount keys must be Windows drive prefixes ("O:") and their
 // targets absolute host directories. The checks only run when enabled so a
 // disabled, half-filled block does not block startup.
 func validateMediaFileCheckConfig(sl validator.StructLevel) {
@@ -515,25 +515,25 @@ func validateMediaFileCheckConfig(sl validator.StructLevel) {
 		return
 	}
 
-	if len(mfc.Roots) == 0 && len(mfc.DriveMappings) == 0 {
-		sl.ReportError(mfc.Roots, "roots", "Roots", "media_check_no_source", "")
+	if len(mfc.SearchDirs) == 0 && len(mfc.DriveMounts) == 0 {
+		sl.ReportError(mfc.SearchDirs, "search_dirs", "SearchDirs", "media_check_no_source", "")
 	}
 
-	for i, root := range mfc.Roots {
-		if !filepath.IsAbs(root) {
-			fieldName := fmt.Sprintf("roots[%d]", i)
-			structFieldName := fmt.Sprintf("Roots[%d]", i)
-			sl.ReportError(mfc.Roots[i], fieldName, structFieldName, "absolute_path", "")
+	for i, dir := range mfc.SearchDirs {
+		if !filepath.IsAbs(dir) {
+			fieldName := fmt.Sprintf("search_dirs[%d]", i)
+			structFieldName := fmt.Sprintf("SearchDirs[%d]", i)
+			sl.ReportError(mfc.SearchDirs[i], fieldName, structFieldName, "absolute_path", "")
 		}
 	}
 
-	for drive, target := range mfc.DriveMappings {
+	for drive, target := range mfc.DriveMounts {
 		if !driveLetterPattern.MatchString(drive) {
-			sl.ReportError(target, "drive_mappings", "DriveMappings", "media_check_drive_key", drive)
+			sl.ReportError(target, "drive_mounts", "DriveMounts", "media_check_drive_key", drive)
 			continue
 		}
 		if !filepath.IsAbs(target) {
-			sl.ReportError(target, "drive_mappings", "DriveMappings", "media_check_drive_target", drive)
+			sl.ReportError(target, "drive_mounts", "DriveMounts", "media_check_drive_target", drive)
 		}
 	}
 }
@@ -574,7 +574,7 @@ func tagMessage(tag, param string) string {
 	case "required_when_enabled":
 		return "must have at least one entry when enabled"
 	case "media_check_no_source":
-		return "requires at least one root or drive mapping when enabled"
+		return "requires at least one search dir or drive mount when enabled"
 	case "media_check_drive_key":
 		return fmt.Sprintf("has an invalid drive key %q (expected e.g. \"O:\")", param)
 	case "media_check_drive_target":
