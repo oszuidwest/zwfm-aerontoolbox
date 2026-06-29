@@ -2,9 +2,8 @@ package service
 
 import (
 	"context"
-	"fmt"
+	"io"
 	"log/slog"
-	"os"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -63,24 +62,14 @@ func ptrOrNil(s string) *string {
 }
 
 // upload streams one local backup file to remote storage.
-func (s *s3Service) upload(ctx context.Context, filename, localPath string) (err error) {
-	file, err := os.Open(localPath) //nolint:gosec // G304: localPath is built from a validated managed backup filename
-	if err != nil {
-		return types.NewOperationError("S3 upload", fmt.Errorf("open file: %w", err))
-	}
-	defer func() {
-		if closeErr := file.Close(); closeErr != nil && err == nil {
-			err = types.NewOperationError("S3 upload", fmt.Errorf("close file: %w", closeErr))
-		}
-	}()
-
+func (s *s3Service) upload(ctx context.Context, filename string, body io.Reader) error {
 	key := s.prefix + filename
 	start := time.Now()
 
-	_, err = s.tm.UploadObject(ctx, &transfermanager.UploadObjectInput{
+	_, err := s.tm.UploadObject(ctx, &transfermanager.UploadObjectInput{
 		Bucket: aws.String(s.bucket),
 		Key:    aws.String(key),
-		Body:   file,
+		Body:   body,
 	})
 	if err != nil {
 		return types.NewOperationError("S3 upload", err)
