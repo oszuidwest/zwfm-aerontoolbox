@@ -91,3 +91,50 @@ func TestFileMonitorRoutesEnabledPassThrough(t *testing.T) {
 		t.Fatalf("success = false, want true; error: %s", got.Error)
 	}
 }
+
+func TestIsValidAPIKey(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.API.Enabled = true
+	cfg.API.Keys = []string{"first-test-key", "second-test-key"}
+
+	svc, err := service.New(nil, cfg)
+	if err != nil {
+		t.Fatalf("service.New: %v", err)
+	}
+	t.Cleanup(svc.Close)
+
+	server := New(svc, "test")
+	tests := []struct {
+		name string
+		key  string
+		want bool
+	}{
+		{
+			name: "first configured key",
+			key:  "first-test-key",
+			want: true,
+		},
+		{
+			name: "second configured key",
+			key:  "second-test-key",
+			want: true,
+		},
+		{
+			name: "unknown key",
+			key:  "unknown-test-key",
+			want: false,
+		},
+		{
+			name: "empty key",
+			key:  "",
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := server.isValidAPIKey(tt.key); got != tt.want {
+				t.Fatalf("isValidAPIKey(%q) = %v, want %v", tt.key, got, tt.want)
+			}
+		})
+	}
+}
