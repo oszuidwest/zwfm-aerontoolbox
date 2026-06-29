@@ -1,5 +1,5 @@
 # Dockerfile for test database with pre-loaded data
-FROM postgres:16-alpine
+FROM postgres:18-alpine
 
 # Copy mock data
 COPY fixtures/mock_data.sql /docker-entrypoint-initdb.d/01-mock-data.sql
