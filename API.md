@@ -1285,7 +1285,7 @@ De controle draait asynchroon: een `POST` start een run op de achtergrond en gee
 In de Aeron-database staan audiopaden als **Windows-paden** (bijv. `O:\Audio\85\Artist - Title.wav`), terwijl de Toolbox doorgaans op Linux draait. De controle vertaalt een referentie in deze volgorde:
 
 1. **Drive-mapping (exact pad).** Met `drive_mappings` wordt een Windows-driveletter vertaald naar een hostmap (bijv. `O:` → `/mnt/aeron-o`). De volledige mapstructuur blijft behouden en het exacte pad wordt direct gecontroleerd. Dit is de snelste en meest eenduidige strategie.
-2. **Bestandsnaam-index (fallback).** De mappen in `roots` worden recursief geïndexeerd. Lukt het exacte pad niet, dan wordt gematcht op bestandsnaam — eerst inclusief extensie, daarna extensie-onafhankelijk (een `.wav` in de database matcht dan ook een `.flac` op schijf). Wanneer er geen padreferentie is, wordt teruggevallen op metadata (`artist - title`, `title`).
+2. **Bestandsnaam-index (fallback).** De mappen in `roots` worden recursief geïndexeerd. Lukt het exacte pad niet, dan wordt gematcht op bestandsnaam — eerst inclusief extensie, daarna extensie-onafhankelijk (een `.wav` in de database matcht dan ook een `.flac` op schijf). Er wordt uitsluitend op de bestandsnaam (`audio.name`) gematcht, niet op losse `artist`/`title`-metadata.
 
 Matchen gebeurt standaard hoofdletter-ongevoelig (`case_insensitive`), omdat de bron Windows is. Voicetracks worden standaard overgeslagen (`include_voicetracks`). Er wordt **geen** vaste `.wav`-aanname gedaan.
 
@@ -1411,7 +1411,7 @@ Toont de runstatus plus het resultaat van de meest recente run.
 - `db_reference`: De referentie uit de database die gebruikt is.
 - `checked_paths`: De concrete paden en zoekacties die zijn geprobeerd.
 - `matches`: De gevonden bestanden op schijf (één bij `present`, meerdere bij `ambiguous`).
-- `match_type`: Hoe gematcht is: `exact_path`, `filename`, `filename_noext` of `metadata` (ontbreekt bij geen match).
+- `match_type`: Hoe gematcht is: `exact_path`, `filename` of `filename_noext` (ontbreekt bij geen match).
 - `error`: Foutmelding bij `stat_error` (ontbreekt verder).
 
 **Pollingrecept:** lees `run_id` uit de `POST`-response (`myRunID`), poll daarna `GET .../status` tot `completed_run_id >= myRunID && running == false`.
@@ -1437,7 +1437,7 @@ Als de mediabestandcontrole is ingeschakeld, geeft `GET /api/health` een extra `
 }
 ```
 
-- `problems`: aantal `missing`-, `ambiguous`- en `stat_error`-items in de meest recente run. Dit telt alleen mee voor de algemene status `"degraded"` wanneer de **geplande** controle (`scheduler.enabled`) aanstaat, zodat ad-hoc API-runs met een afwijkende scope de health niet beïnvloeden.
+- `problems`: aantal `missing`-, `ambiguous`- en `stat_error`-items in de meest recente **geplande** run. Dit telt alleen mee voor de algemene status `"degraded"` wanneer de geplande controle (`scheduler.enabled`) aanstaat, zodat ad-hoc API-runs met een afwijkende scope de health niet beïnvloeden.
 
 ---
 

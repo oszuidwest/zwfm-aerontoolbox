@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -110,7 +111,7 @@ func TestMatch_DriveMappingExactPath(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "Audio", "85", "Artist - Title.wav"))
 
 	m := buildTestMatcher(t, map[string]string{"O:": dir}, nil, true)
-	out := m.match(&matchInput{FilePath: `O:\Audio\85\Artist - Title.wav`, TrackFound: true})
+	out := m.match(&matchInput{FilePath: `O:\Audio\85\Artist - Title.wav`})
 
 	if out.Status != MediaStatusPresent {
 		t.Fatalf("status = %q, want present", out.Status)
@@ -126,7 +127,7 @@ func TestMatch_DriveMappingExactPath(t *testing.T) {
 func TestMatch_DriveMappingMissing(t *testing.T) {
 	dir := t.TempDir()
 	m := buildTestMatcher(t, map[string]string{"O:": dir}, nil, true)
-	out := m.match(&matchInput{FilePath: `O:\Audio\nope.wav`, TrackFound: true})
+	out := m.match(&matchInput{FilePath: `O:\Audio\nope.wav`})
 
 	if out.Status != MediaStatusMissing {
 		t.Fatalf("status = %q, want missing", out.Status)
@@ -139,7 +140,7 @@ func TestMatch_IndexByFilename(t *testing.T) {
 
 	m := buildTestMatcher(t, nil, []string{root}, true)
 	// No drive mapping for O: -> falls through to the index.
-	out := m.match(&matchInput{FilePath: `O:\elsewhere\unique.wav`, TrackFound: true})
+	out := m.match(&matchInput{FilePath: `O:\elsewhere\unique.wav`})
 
 	if out.Status != MediaStatusPresent {
 		t.Fatalf("status = %q, want present", out.Status)
@@ -155,7 +156,7 @@ func TestMatch_IndexAmbiguous(t *testing.T) {
 	writeFile(t, filepath.Join(root, "b", "dup.wav"))
 
 	m := buildTestMatcher(t, nil, []string{root}, true)
-	out := m.match(&matchInput{FileName: `O:\x\dup.wav`, TrackFound: true})
+	out := m.match(&matchInput{FileName: `O:\x\dup.wav`})
 
 	if out.Status != MediaStatusAmbiguous {
 		t.Fatalf("status = %q, want ambiguous", out.Status)
@@ -170,7 +171,7 @@ func TestMatch_ExtensionIndependent(t *testing.T) {
 	writeFile(t, filepath.Join(root, "song.flac")) // DB says .wav, disk has .flac
 
 	m := buildTestMatcher(t, nil, []string{root}, true)
-	out := m.match(&matchInput{FilePath: `O:\Audio\song.wav`, TrackFound: true})
+	out := m.match(&matchInput{FilePath: `O:\Audio\song.wav`})
 
 	if out.Status != MediaStatusPresent {
 		t.Fatalf("status = %q, want present", out.Status)
@@ -180,28 +181,44 @@ func TestMatch_ExtensionIndependent(t *testing.T) {
 	}
 }
 
-func TestMatch_MetadataFallback(t *testing.T) {
+func TestMatch_MetadataOnlyIsNotAFileReference(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "Artist - Title.mp3"))
 
 	m := buildTestMatcher(t, nil, []string{root}, true)
-	// No path references at all; only metadata is available.
-	out := m.match(&matchInput{Artist: "Artist", TrackTitle: "Title", TrackFound: true})
+	out := m.match(&matchInput{Artist: "Artist", TrackTitle: "Title"})
 
-	if out.Status != MediaStatusPresent {
-		t.Fatalf("status = %q, want present", out.Status)
-	}
-	if out.MatchType != matchTypeMetadata {
-		t.Errorf("matchType = %q, want %q", out.MatchType, matchTypeMetadata)
+	if out.Status != MediaStatusNoReference {
+		t.Fatalf("status = %q, want no_reference", out.Status)
 	}
 }
 
 func TestMatch_NoReference(t *testing.T) {
 	m := buildTestMatcher(t, nil, nil, true)
-	out := m.match(&matchInput{TrackFound: false})
+	out := m.match(&matchInput{})
 
 	if out.Status != MediaStatusNoReference {
 		t.Fatalf("status = %q, want no_reference", out.Status)
+	}
+}
+
+func TestMatch_ConcretePathIgnoresBareTitleIndexHit(t *testing.T) {
+	driveDir := t.TempDir()
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "jingles", "Liefdedealer.mp3"))
+
+	m := buildTestMatcher(t, map[string]string{"O:": driveDir}, []string{root}, true)
+	out := m.match(&matchInput{
+		FilePath:   `O:\Audio\85\Blof - Liefdedealer.wav`,
+		Artist:     "Blof",
+		TrackTitle: "Liefdedealer",
+	})
+
+	if out.Status != MediaStatusMissing {
+		t.Fatalf("status = %q, want missing", out.Status)
+	}
+	if len(out.Matches) != 0 {
+		t.Fatalf("matches = %v, want none", out.Matches)
 	}
 }
 
@@ -223,13 +240,28 @@ func TestMatch_CaseSensitivity(t *testing.T) {
 func TestMatch_StatErrorWhenRootUnavailable(t *testing.T) {
 	// Drive mapped to a directory that cannot be opened -> stat error, not missing.
 	m := buildTestMatcher(t, map[string]string{"O:": filepath.Join(t.TempDir(), "does-not-exist")}, nil, true)
-	out := m.match(&matchInput{FilePath: `O:\Audio\x.wav`, TrackFound: true})
+	out := m.match(&matchInput{FilePath: `O:\Audio\x.wav`})
 
 	if out.Status != MediaStatusStatError {
 		t.Fatalf("status = %q, want stat_error", out.Status)
 	}
 	if out.Error == "" {
 		t.Error("expected non-empty error message")
+	}
+}
+
+func TestMatch_StatErrorWinsOverIndexFallback(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "x.wav"))
+
+	m := buildTestMatcher(t, map[string]string{"O:": filepath.Join(t.TempDir(), "does-not-exist")}, []string{root}, true)
+	out := m.match(&matchInput{FilePath: `O:\Audio\x.wav`})
+
+	if out.Status != MediaStatusStatError {
+		t.Fatalf("status = %q, want stat_error", out.Status)
+	}
+	if len(out.Matches) != 0 {
+		t.Fatalf("matches = %v, want none", out.Matches)
 	}
 }
 
@@ -241,10 +273,18 @@ func TestMatch_DriveMappingPrefersExactOverIndex(t *testing.T) {
 	writeFile(t, filepath.Join(root, "other", "hit.wav"))
 
 	m := buildTestMatcher(t, map[string]string{"O:": driveDir}, []string{root}, true)
-	out := m.match(&matchInput{FilePath: `O:\Audio\hit.wav`, TrackFound: true})
+	out := m.match(&matchInput{FilePath: `O:\Audio\hit.wav`})
 
 	if out.Status != MediaStatusPresent || out.MatchType != matchTypeExactPath {
 		t.Fatalf("status=%q matchType=%q, want present/exact_path", out.Status, out.MatchType)
+	}
+}
+
+func TestBuildFileIndexRecordsWalkError(t *testing.T) {
+	idx := buildFileIndex(context.Background(), []string{filepath.Join(t.TempDir(), "missing")}, true)
+
+	if err := idx.err(); err == nil {
+		t.Fatal("expected index error for missing root, got nil")
 	}
 }
 

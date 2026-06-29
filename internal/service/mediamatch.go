@@ -1,12 +1,14 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -33,8 +35,9 @@ const (
 	matchTypeExactPath     = "exact_path"
 	matchTypeFilename      = "filename"
 	matchTypeFilenameNoExt = "filename_noext"
-	matchTypeMetadata      = "metadata"
 )
+
+const maxFileIndexErrors = 5
 
 // normalizeDriveKey turns a Windows drive prefix ("O:", "o:\", "O") into the
 // canonical "O:" form. It returns "" when s is not a single-letter drive.
@@ -117,13 +120,14 @@ type fileIndex struct {
 	byName map[string][]string
 	byStem map[string][]string
 	count  int
+	errors []string
 }
 
 // buildFileIndex walks each root recursively and indexes every regular file by
 // filename and by stem. Per-file walk errors are logged and skipped so one
 // unreadable subtree does not abort the whole index. The walk aborts early if
 // ctx is cancelled.
-func buildFileIndex(ctx contextLike, roots []string, caseInsensitive bool) *fileIndex {
+func buildFileIndex(ctx context.Context, roots []string, caseInsensitive bool) *fileIndex {
 	idx := &fileIndex{
 		byName: make(map[string][]string),
 		byStem: make(map[string][]string),
@@ -139,11 +143,16 @@ func buildFileIndex(ctx contextLike, roots []string, caseInsensitive bool) *file
 	}
 
 	for _, root := range roots {
+		if ctx != nil && ctx.Err() != nil {
+			idx.addError(fmt.Sprintf("index build canceled before %s: %v", root, ctx.Err()))
+			break
+		}
 		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 			if ctx != nil && ctx.Err() != nil {
 				return ctx.Err()
 			}
 			if err != nil {
+				idx.addError(fmt.Sprintf("%s: %v", path, err))
 				slog.Warn("Media file check: walk error", "path", path, "error", err)
 				if d != nil && d.IsDir() {
 					return filepath.SkipDir
@@ -160,16 +169,31 @@ func buildFileIndex(ctx contextLike, roots []string, caseInsensitive bool) *file
 			return nil
 		})
 		if err != nil {
+			idx.addError(fmt.Sprintf("%s: %v", root, err))
 			slog.Warn("Media file check: index walk stopped", "root", root, "error", err)
+			if ctx != nil && ctx.Err() != nil {
+				break
+			}
 		}
 	}
 	return idx
 }
 
-// contextLike is the minimal context surface buildFileIndex needs. It avoids a
-// hard context import here while letting callers pass a real context.Context.
-type contextLike interface {
-	Err() error
+func (idx *fileIndex) addError(msg string) {
+	if len(idx.errors) < maxFileIndexErrors {
+		idx.errors = append(idx.errors, msg)
+		return
+	}
+	if len(idx.errors) == maxFileIndexErrors {
+		idx.errors = append(idx.errors, "additional index errors omitted")
+	}
+}
+
+func (idx *fileIndex) err() error {
+	if idx == nil || len(idx.errors) == 0 {
+		return nil
+	}
+	return fmt.Errorf("media file index incomplete: %s", strings.Join(idx.errors, "; "))
 }
 
 // rootDir is an opened drive-mapping target. root is nil when the directory
@@ -189,7 +213,7 @@ type mediaMatcher struct {
 	caseInsensitive bool
 	statTimeout     time.Duration
 
-	ctx       contextLike
+	ctx       context.Context
 	index     *fileIndex
 	indexOnce sync.Once
 }
@@ -202,7 +226,6 @@ type matchInput struct {
 	AudioName  string // audio.name (basename without extension)
 	Artist     string
 	TrackTitle string
-	TrackFound bool
 }
 
 // matchOutcome is the matcher's verdict for one item.
@@ -249,7 +272,7 @@ func (in *matchInput) winRefs() []string {
 		if r == "" {
 			continue
 		}
-		if !sliceContains(refs, r) {
+		if !slices.Contains(refs, r) {
 			refs = append(refs, r)
 		}
 	}
@@ -261,7 +284,7 @@ func (m *mediaMatcher) match(in *matchInput) matchOutcome {
 	out := matchOutcome{DBReference: in.dbReference()}
 
 	winRefs := in.winRefs()
-	hasRef := len(winRefs) > 0 || in.AudioName != "" || in.Artist != "" || in.TrackTitle != ""
+	hasRef := len(winRefs) > 0 || in.AudioName != ""
 	if !hasRef {
 		out.Status = MediaStatusNoReference
 		return out
@@ -285,6 +308,11 @@ func (m *mediaMatcher) match(in *matchInput) matchOutcome {
 			return out
 		}
 	}
+	if statErr != "" {
+		out.Status = MediaStatusStatError
+		out.Error = statErr
+		return out
+	}
 
 	// Strategy 2: filename index over roots (exact filename, then ext-independent).
 	if idx := m.getIndex(); idx != nil {
@@ -299,39 +327,20 @@ func (m *mediaMatcher) match(in *matchInput) matchOutcome {
 			return out
 		}
 
-		// Extension-independent: stems from filenames, audio.name and metadata.
+		// Extension-independent: stems from filenames and audio.name.
 		var stems []string
 		for _, ref := range winRefs {
 			stems = appendUnique(stems, stem(baseName(ref)))
 		}
-		fileStemCount := len(stems)
 		if in.AudioName != "" {
 			stems = appendUnique(stems, in.AudioName)
 		}
-		if label := metadataLabel(in.Artist, in.TrackTitle); label != "" {
-			stems = appendUnique(stems, label)
-		}
-		if in.TrackTitle != "" {
-			stems = appendUnique(stems, in.TrackTitle)
-		}
 		if matches := idx.lookup(idx.byStem, stems, m.caseInsensitive); len(matches) > 0 {
 			out.CheckedPaths = append(out.CheckedPaths, describeSearch("by name (any extension)", stems))
-			mt := matchTypeFilenameNoExt
-			if fileStemCount == 0 {
-				mt = matchTypeMetadata
-			}
-			finishIndexMatch(&out, matches, mt)
+			finishIndexMatch(&out, matches, matchTypeFilenameNoExt)
 			return out
 		}
 		out.CheckedPaths = append(out.CheckedPaths, describeSearch("by name", names))
-	}
-
-	// No match: a stat error outranks a clean "missing" because the file may in
-	// fact exist but could not be verified.
-	if statErr != "" {
-		out.Status = MediaStatusStatError
-		out.Error = statErr
-		return out
 	}
 	out.Status = MediaStatusMissing
 	return out
@@ -386,11 +395,25 @@ func (m *mediaMatcher) getIndex() *fileIndex {
 		}
 		start := time.Now()
 		m.index = buildFileIndex(m.ctx, m.roots, m.caseInsensitive)
+		if err := m.index.err(); err != nil {
+			slog.Warn("Media file check: index built with errors",
+				"files", m.index.count, "roots", len(m.roots),
+				"duration", time.Since(start).Round(time.Millisecond).String(),
+				"error", err)
+			return
+		}
 		slog.Info("Media file check: index built",
 			"files", m.index.count, "roots", len(m.roots),
 			"duration", time.Since(start).Round(time.Millisecond).String())
 	})
 	return m.index
+}
+
+func (m *mediaMatcher) indexErr() error {
+	if m == nil || m.index == nil {
+		return nil
+	}
+	return m.index.err()
 }
 
 // lookup collects the distinct on-disk paths matching any of the given keys.
@@ -414,6 +437,8 @@ func statRootWithTimeout(root *os.Root, name string, timeout time.Duration) (boo
 	type result struct{ err error }
 	ch := make(chan result, 1)
 	go func() {
+		// A frozen mount can leave this goroutine stuck in Stat after the caller
+		// times out; the buffered channel prevents an additional blocked send.
 		_, err := root.Stat(name)
 		ch <- result{err: err}
 	}()
@@ -427,6 +452,8 @@ func statRootWithTimeout(root *os.Root, name string, timeout time.Duration) (boo
 			return true, nil
 		}
 		if errors.Is(r.err, fs.ErrNotExist) {
+			// A stale mount that appears as an empty directory is indistinguishable
+			// from a genuine absence at this layer.
 			return false, nil
 		}
 		return false, r.err
@@ -441,17 +468,8 @@ func describeSearch(how string, keys []string) string {
 }
 
 func appendUnique(s []string, v string) []string {
-	if v == "" || sliceContains(s, v) {
+	if v == "" || slices.Contains(s, v) {
 		return s
 	}
 	return append(s, v)
-}
-
-func sliceContains(s []string, v string) bool {
-	for _, e := range s {
-		if e == v {
-			return true
-		}
-	}
-	return false
 }

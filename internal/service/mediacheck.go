@@ -102,6 +102,7 @@ type MediaFileCheckService struct {
 
 	publishedMu    sync.RWMutex
 	lastResult     *MediaCheckResult
+	lastScheduled  *MediaCheckResult
 	startedAt      *time.Time
 	runID          uint64
 	completedRunID uint64
@@ -157,7 +158,7 @@ func (s *MediaFileCheckService) trigger(opts *database.MediaCheckOptions, notify
 		defer cancel()
 
 		result := s.executeRun(ctx, opts)
-		s.publishCompleted(result, runID)
+		s.publishCompleted(result, runID, notifyResult)
 		if notifyResult {
 			s.notify.NotifyMediaCheckResult(buildNotifyResult(result))
 		}
@@ -194,7 +195,15 @@ func (s *MediaFileCheckService) executeRun(ctx context.Context, opts *database.M
 			return nil
 		})
 	}
-	_ = g.Wait() // workers never return errors; outcomes are embedded in results.
+	if err := g.Wait(); err != nil {
+		result.Error = err.Error()
+	}
+	if err := ctx.Err(); err != nil && result.Error == "" {
+		result.Error = err.Error()
+	}
+	if err := matcher.indexErr(); err != nil && result.Error == "" {
+		result.Error = err.Error()
+	}
 
 	result.Items = results
 	result.Summary = summarize(results)
@@ -271,15 +280,15 @@ func (s *MediaFileCheckService) Status() *MediaCheckStatus {
 }
 
 // ProblemCount returns the number of missing, ambiguous and errored items in the
-// most recent completed run. Used by the health endpoint.
+// most recent scheduled run. Used by the health endpoint; ad-hoc API scopes are
+// intentionally excluded from the health signal.
 func (s *MediaFileCheckService) ProblemCount() int {
 	s.publishedMu.RLock()
 	defer s.publishedMu.RUnlock()
-	if s.lastResult == nil {
+	if s.lastScheduled == nil {
 		return 0
 	}
-	sum := s.lastResult.Summary
-	return sum.Missing + sum.Ambiguous + sum.Errors
+	return problemCount(s.lastScheduled)
 }
 
 func (s *MediaFileCheckService) startNewRun() uint64 {
@@ -291,10 +300,13 @@ func (s *MediaFileCheckService) startNewRun() uint64 {
 	return s.runID
 }
 
-func (s *MediaFileCheckService) publishCompleted(result *MediaCheckResult, runID uint64) {
+func (s *MediaFileCheckService) publishCompleted(result *MediaCheckResult, runID uint64, scheduled bool) {
 	s.publishedMu.Lock()
 	defer s.publishedMu.Unlock()
 	s.lastResult = result
+	if scheduled {
+		s.lastScheduled = result
+	}
 	s.completedRunID = runID
 }
 
@@ -307,7 +319,6 @@ func toMatchInput(item *database.MediaCheckItem) *matchInput {
 		AudioName:  item.AudioName,
 		Artist:     item.Artist,
 		TrackTitle: item.TrackTitle,
-		TrackFound: item.TrackFound,
 	}
 }
 
@@ -353,6 +364,17 @@ func summarize(items []MediaCheckItemResult) MediaCheckSummary {
 		}
 	}
 	return sum
+}
+
+func problemCount(result *MediaCheckResult) int {
+	if result == nil {
+		return 0
+	}
+	if result.Error != "" {
+		return 1
+	}
+	sum := result.Summary
+	return sum.Missing + sum.Ambiguous + sum.Errors
 }
 
 func scopeFromOptions(opts *database.MediaCheckOptions) MediaCheckScope {

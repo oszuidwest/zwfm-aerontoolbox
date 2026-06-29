@@ -26,6 +26,11 @@ func TestBuildMediaCheckQuery_DefaultsToToday(t *testing.T) {
 	if !strings.Contains(query, "t.userid IS NULL OR t.userid <>") {
 		t.Errorf("expected voicetrack exclusion, got: %s", query)
 	}
+	for _, removed := range []string{"as track_found", "as audioid", "as is_voicetrack"} {
+		if strings.Contains(query, removed) {
+			t.Errorf("query still selects removed column %q: %s", removed, query)
+		}
+	}
 }
 
 func TestBuildMediaCheckQuery_Date(t *testing.T) {

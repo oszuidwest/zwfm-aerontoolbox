@@ -16,21 +16,17 @@ import (
 // track.audioid. In the real Aeron schema both FilePath and FileName hold full
 // Windows paths (and may differ); AudioName is the bare filename without
 // extension and is the most reliably populated reference. Empty strings denote
-// an absent reference. TrackFound is false when the playlist item's titleid no
-// longer resolves to a track (e.g. the track was deleted after airing).
+// an absent reference.
 type MediaCheckItem struct {
-	TrackID      string `db:"trackid"`
-	Artist       string `db:"artist"`
-	TrackTitle   string `db:"tracktitle"`
-	StartTime    string `db:"start_time"`
-	BlockID      string `db:"blockid"`
-	BlockName    string `db:"block"`
-	TrackFound   bool   `db:"track_found"`
-	AudioID      string `db:"audioid"`
-	FilePath     string `db:"filepath"`
-	FileName     string `db:"filename"`
-	AudioName    string `db:"audioname"`
-	IsVoicetrack bool   `db:"is_voicetrack"`
+	TrackID    string `db:"trackid"`
+	Artist     string `db:"artist"`
+	TrackTitle string `db:"tracktitle"`
+	StartTime  string `db:"start_time"`
+	BlockID    string `db:"blockid"`
+	BlockName  string `db:"block"`
+	FilePath   string `db:"filepath"`
+	FileName   string `db:"filename"`
+	AudioName  string `db:"audioname"`
 }
 
 // MediaCheckOptions contains the scope filters for a media file check query.
@@ -49,7 +45,6 @@ type MediaCheckOptions struct {
 }
 
 // mediaCheckColumns selects the playlist item, track, audio and block fields.
-// %s is the VoicetrackUserID used to flag voice tracks.
 const mediaCheckColumns = `
 	COALESCE(pi.titleid::text, '') as trackid,
 	COALESCE(t.tracktitle, '') as tracktitle,
@@ -57,14 +52,11 @@ const mediaCheckColumns = `
 	TO_CHAR(pi.startdatetime, 'YYYY-MM-DD"T"HH24:MI:SS') as start_time,
 	COALESCE(pi.blockid::text, '') as blockid,
 	COALESCE(pb.name, '') as block,
-	CASE WHEN t.titleid IS NOT NULL THEN true ELSE false END as track_found,
-	COALESCE(t.audioid::text, '') as audioid,
 	COALESCE(au.filepath, '') as filepath,
 	COALESCE(au.filename, '') as filename,
-	COALESCE(au.name, '') as audioname,
-	CASE WHEN t.userid = '%s' THEN true ELSE false END as is_voicetrack`
+	COALESCE(au.name, '') as audioname`
 
-// mediaCheckJoins defines the table relationships. The three %s are the schema
+// mediaCheckJoins defines the table relationships. The four %s are the schema
 // for playlistitem, track, audio and playlistblock respectively.
 const mediaCheckJoins = `
 	FROM %s.playlistitem pi
@@ -112,10 +104,9 @@ func BuildMediaCheckQuery(schema string, opts *MediaCheckOptions) (query string,
 			fmt.Sprintf("(t.userid IS NULL OR t.userid <> %s::uuid)", nextParam(types.VoicetrackUserID)))
 	}
 
-	columns := fmt.Sprintf(mediaCheckColumns, types.VoicetrackUserID)
 	joins := fmt.Sprintf(mediaCheckJoins, schema, schema, schema, schema)
 	query = fmt.Sprintf("SELECT %s %s WHERE %s ORDER BY pi.startdatetime",
-		columns, joins, strings.Join(conditions, " AND "))
+		mediaCheckColumns, joins, strings.Join(conditions, " AND "))
 
 	if opts.Limit > 0 {
 		query += fmt.Sprintf(" LIMIT %s", nextParam(opts.Limit))
