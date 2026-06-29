@@ -110,6 +110,7 @@ func (s *MediaService) UploadImage(ctx context.Context, params *ImageUploadParam
 		TargetHeight:  s.config.Image.TargetHeight,
 		Quality:       s.config.Image.Quality,
 		RejectSmaller: s.config.Image.RejectSmaller,
+		MaxPixels:     s.config.Image.GetMaxPixels(),
 	}
 	slog.Debug("Image processing started",
 		"inputSize", len(imageData),

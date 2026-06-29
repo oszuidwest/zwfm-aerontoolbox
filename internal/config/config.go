@@ -40,6 +40,7 @@ type ImageConfig struct {
 	Quality                   int   `json:"quality" validate:"required,min=1,max=100"`
 	RejectSmaller             bool  `json:"reject_smaller"`
 	MaxImageDownloadSizeBytes int64 `json:"max_image_download_size_bytes" validate:"gte=0"`
+	MaxPixels                 int64 `json:"max_pixels" validate:"gte=0"`
 }
 
 // APIConfig controls API authentication and request timeouts.
@@ -242,6 +243,7 @@ const (
 	DefaultMaxIdleConnections          = 5
 	DefaultConnMaxLifetimeMinutes      = 5
 	DefaultMaxImageDownloadSizeBytes   = 50 * 1024 * 1024
+	DefaultMaxImagePixels              = 25_000_000
 	DefaultRequestTimeoutSeconds       = 30
 	DefaultBloatThreshold              = 10.0
 	DefaultDeadTupleThreshold          = 10000
@@ -262,6 +264,11 @@ const (
 // GetMaxDownloadBytes returns the configured image download cap or its default.
 func (c *ImageConfig) GetMaxDownloadBytes() int64 {
 	return cmp.Or(c.MaxImageDownloadSizeBytes, DefaultMaxImageDownloadSizeBytes)
+}
+
+// GetMaxPixels returns the decoded image pixel cap or its default.
+func (c *ImageConfig) GetMaxPixels() int64 {
+	return cmp.Or(c.MaxPixels, DefaultMaxImagePixels)
 }
 
 // GetRequestTimeout returns the configured HTTP timeout or its default.

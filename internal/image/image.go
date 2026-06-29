@@ -19,6 +19,7 @@ type Config struct {
 	TargetHeight  int
 	Quality       int
 	RejectSmaller bool
+	MaxPixels     int64
 }
 
 // ProcessingResult reports original and stored image characteristics.
@@ -186,8 +187,16 @@ func extractImageInfo(imageData []byte) (*Info, error) {
 	}, nil
 }
 
-// validateImageDimensions checks minimum size requirements when RejectSmaller is set.
+// validateImageDimensions checks minimum and maximum size requirements.
 func validateImageDimensions(info *Info, config Config) error {
+	if exceedsMaxPixels(info.Width, info.Height, config.MaxPixels) {
+		return &types.ValidationError{
+			Field: "dimensions",
+			Message: fmt.Sprintf("image is too large: %dx%d (maximum %d pixels)",
+				info.Width, info.Height, config.MaxPixels),
+		}
+	}
+
 	if config.RejectSmaller && (info.Width < config.TargetWidth || info.Height < config.TargetHeight) {
 		return &types.ValidationError{
 			Field: "dimensions",
@@ -196,6 +205,13 @@ func validateImageDimensions(info *Info, config Config) error {
 		}
 	}
 	return nil
+}
+
+func exceedsMaxPixels(width, height int, maxPixels int64) bool {
+	if maxPixels <= 0 || width <= 0 || height <= 0 {
+		return false
+	}
+	return int64(width) > maxPixels/int64(height)
 }
 
 // isAlreadyTargetSize returns true if image matches target dimensions exactly.
