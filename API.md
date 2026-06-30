@@ -3,7 +3,7 @@
 ## Inhoudsopgave
 
 - [Overzicht](#overzicht)
-- [Snel overzicht endpoints](#snel-overzicht-endpoints)
+- [Snel overzicht van de endpoints](#snel-overzicht-van-de-endpoints)
 - [Authenticatie](#authenticatie)
 - [Response-formaat](#response-formaat)
 - [Foutmeldingen](#foutmeldingen)
@@ -14,19 +14,19 @@
   - [Playlist-endpoints](#playlist-endpoints)
   - [Database onderhoud](#database-onderhoud)
   - [Backup-endpoints](#backup-endpoints)
-  - [Bestandscontrole](#bestandscontrole)
-  - [Mediabestandcontrole](#mediabestandcontrole)
+  - [Bestandsbewaking](#bestandsbewaking)
+  - [Aanwezigheidscontrole](#aanwezigheidscontrole)
   - [Notificaties](#notificaties)
 - [Codevoorbeelden](#codevoorbeelden)
 - [Configuratie](#configuratie)
 
 ## Overzicht
 
-De Aeron Toolbox API biedt RESTful-endpoints voor het Aeron-radioautomatiseringssysteem. De API biedt directe databasetoegang voor afbeeldingenbeheer, mediabrowser, database-onderhoud en backup-management.
+De Aeron Toolbox API biedt RESTful-endpoints voor het Aeron-radioautomatiseringssysteem en geeft directe databasetoegang voor afbeeldingenbeheer, het doorzoeken van media, database-onderhoud en backupbeheer.
 
 **Basis-URL:** `http://localhost:8080/api`
 
-## Snel overzicht endpoints
+## Snel overzicht van de endpoints
 
 | Endpoint | Methode | Beschrijving | Auth |
 |----------|---------|--------------|------|
@@ -51,12 +51,12 @@ De Aeron Toolbox API biedt RESTful-endpoints voor het Aeron-radioautomatiserings
 | `/api/playlist?block_id={id}` | GET | Tracks in playlistblok | Ja |
 | **Database onderhoud** |
 | `/api/db/maintenance/health` | GET | Database health en statistieken | Ja |
-| **Bestandscontrole** |
-| `/api/file-monitor/status` | GET | Status bestandscontrole | Ja |
-| `/api/file-monitor/check` | POST | Handmatige bestandscontrole starten | Ja |
-| **Mediabestandcontrole** |
+| **Bestandsbewaking** |
+| `/api/file-monitor/status` | GET | Status bestandsbewaking | Ja |
+| `/api/file-monitor/check` | POST | Handmatige controle starten | Ja |
+| **Aanwezigheidscontrole** |
 | `/api/media/files/check` | POST | Controle op ontbrekende audiobestanden starten | Ja |
-| `/api/media/files/check/status` | GET | Resultaat van de mediabestandcontrole | Ja |
+| `/api/media/files/check/status` | GET | Resultaat van de aanwezigheidscontrole | Ja |
 | **Backups** |
 | `/api/db/backup` | POST | Nieuwe backup aanmaken | Ja |
 | `/api/db/backup/status` | GET | Backup status opvragen | Ja |
@@ -73,7 +73,7 @@ Wanneer authenticatie is ingeschakeld in de configuratie, vereisen alle endpoint
 
 **Header:** `X-API-Key: jouw-api-sleutel`
 
-Gebruik per omgeving unieke, willekeurig gegenereerde API-sleutels van minimaal 32 bytes entropy (bijvoorbeeld `openssl rand -base64 32`). Hergebruik geen wachtwoorden, woordenboekwoorden of korte gedeelde secrets.
+Gebruik per omgeving unieke, willekeurig gegenereerde API-sleutels van minimaal 32 bytes entropie (bijvoorbeeld `openssl rand -base64 32`). Hergebruik geen wachtwoorden, woordenboekwoorden of korte gedeelde secrets.
 
 **Response bij ontbrekende autorisatie:**
 ```json
@@ -175,8 +175,8 @@ Het `notifications`-veld is altijd aanwezig en toont:
   - `days_left`: Aantal resterende dagen
   - `error`: Foutmelding bij ophalen (bijv. onvoldoende rechten)
 
-Het `file_monitor`-veld is alleen aanwezig wanneer de bestandscontrole is ingeschakeld en toont:
-- `enabled`: Of de bestandscontrole is geconfigureerd
+Het `file_monitor`-veld is alleen aanwezig wanneer de bestandsbewaking is ingeschakeld en toont:
+- `enabled`: Of de bestandsbewaking is geconfigureerd
 - `checks_total`: Totaal aantal geconfigureerde checks
 - `checks_stale`: Ruwe telling van bestanden die te oud zijn of niet bereikbaar zijn (inclusief buiten `active_window`)
 - `checks_alerting`: Window-aware telling; bestanden buiten hun `active_window` tellen hier niet mee
@@ -190,7 +190,7 @@ De `status`-waarden hebben een vaste prioriteitsvolgorde: `"unhealthy"` > `"degr
 | `checks_alerting` groter dan `0` | `"degraded"` |
 | Geen van bovenstaande | `"healthy"` |
 
-Een database-uitval overschrijft altijd een eventuele `"degraded"`-signaal van notificaties of de bestandscontrole.
+Een database-uitval overschrijft altijd een eventueel `"degraded"`-signaal van notificaties of de bestandsbewaking.
 
 ---
 
@@ -687,7 +687,7 @@ De health check kan automatisch worden uitgevoerd via de ingebouwde scheduler. B
 - `scheduler.enabled`: Schakel automatische health checks in/uit
 - `scheduler.schedule`: Cron-expressie (zie backup-sectie voor voorbeelden)
 
-Bij detectie van problemen (hoge bloat, veel connecties, langlopende queries) wordt een e-mailmelding verstuurd. Wanneer alle problemen zijn opgelost, volgt een herstelmelding. De tijdzone wordt bepaald door de systeemtijdzone (instelbaar via `TZ` environment variable).
+Bij detectie van problemen (hoge bloat, veel connecties, langlopende queries) wordt een e-mailmelding verstuurd. Wanneer alle problemen zijn opgelost, volgt een herstelmelding. De tijdzone wordt bepaald door de systeemtijdzone (instelbaar via de `TZ`-omgevingsvariabele).
 
 ---
 
@@ -711,7 +711,7 @@ Backups worden asynchroon uitgevoerd:
 Na het aanmaken van een backup wordt deze automatisch gevalideerd via `pg_restore --list` (controleert TOC en checksums). Alleen gevalideerde backups worden als succesvol gemarkeerd en naar S3 gesynchroniseerd.
 
 Deze aanpak biedt voordelen:
-- Request retourneert direct (geen timeout issues)
+- Request retourneert direct (geen problemen met time-outs)
 - Fouten zijn zichtbaar via het status endpoint
 - Er kan slechts één backup tegelijk draaien
 - Bij connectieverlies loopt backup door op de server
@@ -738,7 +738,7 @@ Backups kunnen automatisch worden uitgevoerd via de ingebouwde scheduler. Config
 - `enabled`: Schakel automatische backups in/uit
 - `schedule`: Cron-expressie voor het backup-schema
 
-De tijdzone voor alle geplande taken (backup én onderhoud) wordt bepaald door de systeemtijdzone. In Docker: stel `TZ=Europe/Amsterdam` in als environment variable.
+De tijdzone voor alle geplande taken (backup én onderhoud) wordt bepaald door de systeemtijdzone. In Docker: stel `TZ=Europe/Amsterdam` in als omgevingsvariabele.
 
 **Cron-expressieformaat:** `minuut uur dag maand weekdag`
 
@@ -794,7 +794,7 @@ Backups kunnen automatisch worden gesynchroniseerd naar S3-compatibele storage (
 
 **Gedrag:**
 - Na elke succesvolle backup wordt het bestand asynchroon naar S3 geüpload
-- Bij het verwijderen van lokale backups (handmatig of door retention) wordt ook de S3-kopie verwijderd
+- Bij het verwijderen van lokale backups (handmatig of door retentie) wordt ook de S3-kopie verwijderd
 - S3-fouten blokkeren de backup niet; de status is zichtbaar via `GET /api/db/backup/status`
 - Uploads gebruiken multipart voor grote bestanden
 
@@ -1075,18 +1075,18 @@ Validatie gebeurt via `pg_restore --list` die de TOC en interne checksums contro
 
 ---
 
-## Bestandscontrole
+## Bestandsbewaking
 
-De bestandscontrole bewaakt bestanden op schijf en signaleert wanneer ze ouder zijn dan een geconfigureerde maximale leeftijd. Dit is handig om mislukte downloads of updates vanuit externe processen te detecteren, zoals nieuwsbulletins of weerberichten.
+De bestandsbewaking houdt bestanden op schijf in de gaten en signaleert wanneer ze ouder zijn dan een geconfigureerde maximale leeftijd. Dit is handig om mislukte downloads of updates vanuit externe processen te detecteren, zoals nieuwsbulletins of weerberichten.
 
 Controles draaien automatisch met een vast interval. Standaard is dat 60 seconden; dit is aan te passen via `file_monitor.interval_seconds`. Na een herstart geldt de eerste controle als een "grace run": de resultaten worden wel gemeten, maar er worden nog geen notificaties verstuurd. Zo voorkom je valse alarmen.
 
 > [!IMPORTANT]
 > **Breaking change:** het veld `interval_minutes` in de statusresponse is vervangen door `interval_seconds`. Externe afnemers moeten de nieuwe veldnaam gebruiken.
 
-### Status van de bestandscontrole
+### Status van de bestandsbewaking
 
-Toont de resultaten van de meest recente bestandscontrole, plus de huidige runstatus.
+Toont de resultaten van de meest recente controle, plus de huidige runstatus.
 
 **Endpoint:** `GET /api/file-monitor/status`
 **Authenticatie:** Vereist
@@ -1202,8 +1202,8 @@ De volgende voorbeelden tonen losse items uit de `checks`-array voor specifieke 
 - `path`: Bestandspad op schijf.
 - `max_age_minutes`: Maximaal toegestane leeftijd.
 - `file_exists`: Of het bestand bestaat (`true`, `false`, of `null` bij fouten).
-- `file_age_minutes`: Leeftijd in minuten (ontbreekt als het bestand ontbreekt of niet bereikbaar is).
-- `last_modified`: Laatste wijzigingstijd (ontbreekt als het bestand ontbreekt of niet bereikbaar is).
+- `file_age_minutes`: Leeftijd in minuten (ontbreekt als het bestand niet bestaat of niet bereikbaar is).
+- `last_modified`: Laatste wijzigingstijd (ontbreekt als het bestand niet bestaat of niet bereikbaar is).
 - `is_stale`: Of het bestand te oud is of niet bereikbaar is.
 - `in_alert`: Of voor dit bestand momenteel een alert actief is. Buiten de geconfigureerde `active_window` is dit altijd `false`, ook als `is_stale` `true` is.
 - `error`: Leesbare foutmelding bij toegangsproblemen (ontbreekt bij normaal gebruik).
@@ -1212,9 +1212,9 @@ De volgende voorbeelden tonen losse items uit de `checks`-array voor specifieke 
 > [!NOTE]
 > Het veld `file_exists` is nullable: `true` = bestand bestaat, `false` = bestand niet gevonden, `null` = onbekend (bijvoorbeeld bij een permissiefout). Gebruik het veld `error` voor details als `file_exists` `null` is.
 
-### Handmatig een bestandscontrole starten
+### Handmatig een controle starten
 
-Start een bestandscontrole op de achtergrond. Handig tijdens configuratie of storingsonderzoek, zodat operators niet hoeven te wachten op de volgende geplande tick.
+Start een controle op de achtergrond. Handig tijdens configuratie of storingsonderzoek, zodat operators niet hoeven te wachten op de volgende geplande controle.
 
 **Endpoint:** `POST /api/file-monitor/check`
 **Authenticatie:** Vereist
@@ -1252,9 +1252,9 @@ De handmatige trigger en de cronjob gebruiken dezelfde single-flight gate. Daard
 
 Strikte gelijkheid (`completed_run_id == myRunID`) bevestigt dat de zichtbare `checks` exact door jouw run zijn geproduceerd. Een hogere waarde betekent dat een latere run, bijvoorbeeld via cron, jouw run heeft ingehaald. Dat is prima voor de vraag "is het systeem nu gezond?", maar verliest de exacte correlatie. Gebruik voor nauwkeurige troubleshooting daarom de strikte vergelijking en houd rekening met een mogelijke race.
 
-### Integratie met de health-endpoint (bestandscontrole)
+### Integratie met het health-endpoint (bestandsbewaking)
 
-Als de bestandscontrole is ingeschakeld, geeft de health-endpoint (`GET /api/health`) een extra `file_monitor`-blok terug:
+Als de bestandsbewaking is ingeschakeld, geeft het health-endpoint (`GET /api/health`) een extra `file_monitor`-blok terug:
 
 ```json
 {
@@ -1276,9 +1276,9 @@ Als de bestandscontrole is ingeschakeld, geeft de health-endpoint (`GET /api/hea
 
 ---
 
-## Mediabestandcontrole
+## Aanwezigheidscontrole
 
-Waar de [bestandscontrole](#bestandscontrole) een vaste lijst configuratiebestanden bewaakt, is de mediabestandcontrole **database-gestuurd**: hij leest de playlist uit de Aeron-database en controleert of de bijbehorende audiobestanden daadwerkelijk op schijf staan. Zo signaleer je ontbrekende of verplaatste tracks vóórdat ze in de uitzending vallen.
+Waar de [bestandsbewaking](#bestandsbewaking) een vaste lijst configuratiebestanden in de gaten houdt, werkt de aanwezigheidscontrole **op basis van de database**: hij leest de playlist uit de Aeron-database en controleert of de bijbehorende audiobestanden daadwerkelijk op schijf staan. Zo signaleer je ontbrekende of verplaatste tracks voordat ze worden uitgezonden.
 
 De controle draait asynchroon: een `POST` start een run op de achtergrond en geeft direct een `run_id` terug; het resultaat lees je op met `GET .../status`.
 
@@ -1300,7 +1300,7 @@ Matchen gebeurt standaard hoofdletter-ongevoelig (`case_insensitive`), omdat de 
 - `no_reference` — het playlistitem heeft geen bruikbare referentie (bijv. de track bestaat niet meer in de database).
 - `stat_error` — het bestand kon niet gecontroleerd worden (time-out, geen rechten, mount onbereikbaar).
 
-### Mediabestandcontrole starten
+### Aanwezigheidscontrole starten
 
 Start een controle op de achtergrond voor de opgegeven scope.
 
@@ -1346,7 +1346,7 @@ Start een controle op de achtergrond voor de opgegeven scope.
 
 De handmatige trigger en de geplande cronrun delen dezelfde single-flight gate; ze kunnen elkaar dus niet overlappen.
 
-### Resultaat van de mediabestandcontrole
+### Resultaat van de aanwezigheidscontrole
 
 Toont de runstatus plus het resultaat van de meest recente run.
 
@@ -1416,17 +1416,17 @@ Toont de runstatus plus het resultaat van de meest recente run.
 - `checked_paths`: De concrete paden en zoekacties die zijn geprobeerd.
 - `matches`: De gevonden bestanden op schijf (één bij `present`, meerdere bij `ambiguous`).
 - `match_type`: Hoe gematcht is: `exact_path`, `filename` of `filename_noext` (ontbreekt bij geen match).
-- `error`: Foutmelding bij `stat_error` (ontbreekt verder).
+- `error`: Foutmelding bij `stat_error` (ontbreekt in andere gevallen).
 
 **Pollingrecept:** lees `run_id` uit de `POST`-response (`myRunID`), poll daarna `GET .../status` tot `completed_run_id >= myRunID && running == false`.
 
 ### Geplande controle en e-mailnotificaties
 
-Met `media_file_check.scheduler` draait de controle automatisch op een cron-schema. De geplande run controleert standaard **vandaag**; met `media_file_check.lookahead_days` kun je vooruitkijken — bij `lookahead_days: 2` checkt de run vandaag t/m overmorgen (inclusief), zodat ontbrekende bestanden opvallen vóórdat ze worden uitgezonden. `0` (standaard) is alleen vandaag. Handmatige API-runs gebruiken hun eigen `from`/`to`-bereik en negeren deze instelling. Als e-mailnotificaties zijn geconfigureerd, stuurt een geplande run een alert wanneer er problemen (`missing`, `ambiguous` of `stat_error`) worden gevonden, en een herstelmelding zodra een volgende run weer schoon is. Handmatige API-runs versturen geen e-mail, zodat ad-hoc scopes de alert-status niet verstoren.
+Met `media_file_check.scheduler` draait de controle automatisch op een cron-schema. De geplande run controleert standaard **vandaag**; met `media_file_check.lookahead_days` kun je vooruitkijken — bij `lookahead_days: 2` controleert de run vandaag t/m overmorgen (inclusief), zodat ontbrekende bestanden opvallen vóórdat ze worden uitgezonden. `0` (standaard) is alleen vandaag. Handmatige API-runs gebruiken hun eigen `from`/`to`-bereik en negeren deze instelling. Als e-mailnotificaties zijn geconfigureerd, stuurt een geplande run een alert wanneer er problemen (`missing`, `ambiguous` of `stat_error`) worden gevonden, en een herstelmelding zodra een volgende run weer schoon is. Handmatige API-runs versturen geen e-mail, zodat ad-hoc scopes de alert-status niet verstoren.
 
-### Integratie met de health-endpoint (mediabestandcontrole)
+### Integratie met het health-endpoint (aanwezigheidscontrole)
 
-Als de mediabestandcontrole is ingeschakeld, geeft `GET /api/health` een extra `media_file_check`-blok terug:
+Als de aanwezigheidscontrole is ingeschakeld, geeft `GET /api/health` een extra `media_file_check`-blok terug:
 
 ```json
 {
@@ -1441,7 +1441,7 @@ Als de mediabestandcontrole is ingeschakeld, geeft `GET /api/health` een extra `
 }
 ```
 
-- `problems`: aantal `missing`-, `ambiguous`- en `stat_error`-items in de meest recente **geplande** run. Dit telt alleen mee voor de algemene status `"degraded"` wanneer de geplande controle (`scheduler.enabled`) aanstaat, zodat ad-hoc API-runs met een afwijkende scope de health niet beïnvloeden.
+- `problems`: aantal `missing`-, `ambiguous`- en `stat_error`-items in de meest recente **geplande** run. Dit telt alleen mee voor de algemene status `"degraded"` wanneer de geplande controle (`scheduler.enabled`) aanstaat, zodat ad-hoc API-runs met een afwijkende scope die status niet beïnvloeden.
 
 ---
 
@@ -1744,8 +1744,8 @@ Het gedrag van de API kan worden geconfigureerd via `config.json`:
 }
 ```
 
-**Instellingen voor bestandscontrole:**
-- `file_monitor.enabled`: Schakel de bestandscontrole in.
+**Instellingen voor bestandsbewaking:**
+- `file_monitor.enabled`: Schakel de bestandsbewaking in.
 - `file_monitor.interval_seconds`: Pollinginterval in seconden (standaard 60; `0` of weglaten = standaard).
 - `file_monitor.checks`: Array met te bewaken bestanden (minimaal 1 item vereist wanneer ingeschakeld).
   - `name`: Optionele weergavenaam voor notificaties.
