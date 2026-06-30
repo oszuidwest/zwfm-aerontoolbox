@@ -12,7 +12,7 @@ func TestAPIRateLimiterAllowResetsAfterWindow(t *testing.T) {
 	t.Parallel()
 
 	now := time.Unix(1_700_000_000, 0)
-	limiter := newTestRateLimiter(1, time.Minute, func() time.Time {
+	limiter := newTestRateLimiter(1, func() time.Time {
 		return now
 	})
 
@@ -55,7 +55,7 @@ func TestAPIRateLimiterRetryAfterSeconds(t *testing.T) {
 	t.Parallel()
 
 	now := time.Unix(1_700_000_000, 0)
-	limiter := newTestRateLimiter(1, time.Minute, func() time.Time {
+	limiter := newTestRateLimiter(1, func() time.Time {
 		return now
 	})
 
@@ -78,7 +78,7 @@ func TestAPIRateLimiterBucketsAreIsolated(t *testing.T) {
 	t.Parallel()
 
 	now := time.Unix(1_700_000_000, 0)
-	limiter := newTestRateLimiter(1, time.Minute, func() time.Time {
+	limiter := newTestRateLimiter(1, func() time.Time {
 		return now
 	})
 
@@ -102,7 +102,7 @@ func TestAPIRateLimiterDenialLogSignalIsOncePerWindow(t *testing.T) {
 	t.Parallel()
 
 	now := time.Unix(1_700_000_000, 0)
-	limiter := newTestRateLimiter(1, time.Minute, func() time.Time {
+	limiter := newTestRateLimiter(1, func() time.Time {
 		return now
 	})
 
@@ -137,7 +137,7 @@ func TestAPIRateLimiterAllowConcurrent(t *testing.T) {
 	const goroutines = 64
 
 	now := time.Unix(1_700_000_000, 0)
-	limiter := newTestRateLimiter(goroutines, time.Minute, func() time.Time {
+	limiter := newTestRateLimiter(goroutines, func() time.Time {
 		return now
 	})
 
@@ -177,7 +177,7 @@ func TestRateLimitMiddlewareSkipsAPIHealthPath(t *testing.T) {
 	t.Parallel()
 
 	now := time.Unix(1_700_000_000, 0)
-	limiter := newTestRateLimiter(0, time.Minute, func() time.Time {
+	limiter := newTestRateLimiter(0, func() time.Time {
 		return now
 	})
 	server := &Server{}
@@ -197,10 +197,10 @@ func TestRateLimitMiddlewareSkipsAPIHealthPath(t *testing.T) {
 	}
 }
 
-func newTestRateLimiter(limit int, window time.Duration, now func() time.Time) *apiRateLimiter {
+func newTestRateLimiter(limit int, now func() time.Time) *apiRateLimiter {
 	return &apiRateLimiter{
 		limit:   limit,
-		window:  window,
+		window:  time.Minute,
 		clients: make(map[string]rateLimitState),
 		now:     now,
 	}
