@@ -143,6 +143,55 @@ func TestAPIConfigRespectsConfiguredValues(t *testing.T) {
 	}
 }
 
+func TestAPIConfigValidationRejectsNegativeValues(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{
+			name: "negative request timeout",
+			mutate: func(cfg *Config) {
+				cfg.API.RequestTimeoutSeconds = -1
+			},
+		},
+		{
+			name: "negative read timeout",
+			mutate: func(cfg *Config) {
+				cfg.API.ReadTimeoutSeconds = -1
+			},
+		},
+		{
+			name: "negative write timeout",
+			mutate: func(cfg *Config) {
+				cfg.API.WriteTimeoutSeconds = -1
+			},
+		},
+		{
+			name: "negative idle timeout",
+			mutate: func(cfg *Config) {
+				cfg.API.IdleTimeoutSeconds = -1
+			},
+		},
+		{
+			name: "negative max upload body bytes",
+			mutate: func(cfg *Config) {
+				cfg.API.MaxUploadBodyBytes = -1
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := minimalConfig()
+			tt.mutate(cfg)
+
+			if err := validate(cfg); err == nil {
+				t.Fatal("expected validation error for negative API config value, got nil")
+			}
+		})
+	}
+}
+
 func TestFileMonitorValidation_DuplicatePaths(t *testing.T) {
 	cfg := minimalConfig()
 	cfg.FileMonitor.Enabled = true

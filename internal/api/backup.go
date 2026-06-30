@@ -2,7 +2,9 @@ package api
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/service"
@@ -59,6 +61,12 @@ func (s *Server) handleDownloadBackupFile(w http.ResponseWriter, r *http.Request
 
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", "attachment; filename="+filename)
+
+	// Backup downloads can exceed the global WriteTimeout. Clear the socket
+	// write deadline so slow clients do not receive silently truncated dumps.
+	if err := http.NewResponseController(w).SetWriteDeadline(time.Time{}); err != nil {
+		slog.Warn("Could not clear write deadline for backup download", "filename", filename, "error", err)
+	}
 
 	//nolint:gosec // G703: filePath comes from Backup.GetFilePath after filename validation and os.Root lookup.
 	http.ServeFile(w, r, filePath)
