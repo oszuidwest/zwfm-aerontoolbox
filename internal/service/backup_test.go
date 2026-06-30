@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -185,5 +186,64 @@ func TestCleanupOldBackupsTracksS3DeleteAsChild(t *testing.T) {
 	case <-closeDone:
 	case <-time.After(time.Second):
 		t.Fatal("Close did not return after retention S3 child delete completed")
+	}
+}
+
+func TestCleanupOldBackupsSchedulesS3DeleteAfterShutdownStarts(t *testing.T) {
+	const filename = "aeron-backup-2026-06-28-120000.dump"
+
+	deleted := make(chan string, 1)
+	store := &fakeBackupObjectStore{
+		deleteFunc: func(ctx context.Context, filename string) error {
+			select {
+			case deleted <- filename:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			return nil
+		},
+	}
+	svc := newTestBackupService(t, store)
+
+	createBackupFile(t, svc, filename, time.Now().Add(-48*time.Hour))
+	if !svc.runner.TryStart() {
+		t.Fatal("TryStart returned false")
+	}
+
+	closeDone := make(chan struct{})
+	go func() {
+		svc.Close()
+		close(closeDone)
+	}()
+
+	for svc.runner.TryGoBackground(func() {}) {
+		runtime.Gosched()
+	}
+
+	runDone := make(chan struct{})
+	svc.runner.Go(func() {
+		svc.cleanupOldBackups()
+		close(runDone)
+	})
+
+	select {
+	case <-runDone:
+	case <-time.After(time.Second):
+		t.Fatal("cleanupOldBackups did not return")
+	}
+
+	select {
+	case got := <-deleted:
+		if got != filename {
+			t.Fatalf("deleted filename = %q, want %q", got, filename)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("retention S3 delete was not scheduled after shutdown started")
+	}
+
+	select {
+	case <-closeDone:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not return after retention S3 delete completed")
 	}
 }
