@@ -91,3 +91,62 @@ func TestFileMonitorRoutesEnabledPassThrough(t *testing.T) {
 		t.Fatalf("success = false, want true; error: %s", got.Error)
 	}
 }
+
+func TestIsValidAPIKey(t *testing.T) {
+	configuredKeys := []string{"first-test-key", "second-test-key"}
+	cfg := &config.Config{}
+	cfg.API.Enabled = true
+
+	svc, err := service.New(nil, cfg)
+	if err != nil {
+		t.Fatalf("service.New: %v", err)
+	}
+	t.Cleanup(svc.Close)
+
+	server := New(svc, "test")
+	tests := []struct {
+		name string
+		keys []string
+		key  string
+		want bool
+	}{
+		{
+			name: "first configured key",
+			keys: configuredKeys,
+			key:  "first-test-key",
+			want: true,
+		},
+		{
+			name: "second configured key",
+			keys: configuredKeys,
+			key:  "second-test-key",
+			want: true,
+		},
+		{
+			name: "unknown key",
+			keys: configuredKeys,
+			key:  "unknown-test-key",
+			want: false,
+		},
+		{
+			name: "empty key",
+			keys: configuredKeys,
+			key:  "",
+			want: false,
+		},
+		{
+			name: "no keys configured",
+			keys: nil,
+			key:  "any-test-key",
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg.API.Keys = tt.keys
+			if got := server.isValidAPIKey(tt.key); got != tt.want {
+				t.Fatalf("isValidAPIKey(%q) = %v, want %v", tt.key, got, tt.want)
+			}
+		})
+	}
+}
