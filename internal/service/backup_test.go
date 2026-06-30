@@ -28,6 +28,26 @@ func (f *fakeBackupObjectStore) delete(ctx context.Context, filename string) err
 	return f.deleteFunc(ctx, filename)
 }
 
+// newBlockingStore returns a store whose delete closes started on entry and then
+// blocks until release is closed (or the context is cancelled). It exercises the
+// window where an S3 delete is in flight while Close is draining.
+func newBlockingStore() (store *fakeBackupObjectStore, started, release chan struct{}) {
+	started = make(chan struct{})
+	release = make(chan struct{})
+	store = &fakeBackupObjectStore{
+		deleteFunc: func(ctx context.Context, _ string) error {
+			close(started)
+			select {
+			case <-release:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		},
+	}
+	return store, started, release
+}
+
 func newTestBackupService(t *testing.T, store backupObjectStore) *BackupService {
 	t.Helper()
 
@@ -66,19 +86,7 @@ func createBackupFile(t *testing.T, svc *BackupService, filename string, modTime
 }
 
 func TestDeleteTracksS3DeleteAsBackgroundWork(t *testing.T) {
-	started := make(chan struct{})
-	release := make(chan struct{})
-	store := &fakeBackupObjectStore{
-		deleteFunc: func(ctx context.Context, filename string) error {
-			close(started)
-			select {
-			case <-release:
-				return nil
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		},
-	}
+	store, started, release := newBlockingStore()
 	svc := newTestBackupService(t, store)
 
 	createBackupFile(t, svc, "aeron-backup-2026-06-29-120000.dump", time.Now())
@@ -140,19 +148,7 @@ func TestNewBackupServiceLeavesObjectStoreNilWhenS3Disabled(t *testing.T) {
 }
 
 func TestCleanupOldBackupsTracksS3DeleteAsChild(t *testing.T) {
-	started := make(chan struct{})
-	release := make(chan struct{})
-	store := &fakeBackupObjectStore{
-		deleteFunc: func(ctx context.Context, filename string) error {
-			close(started)
-			select {
-			case <-release:
-				return nil
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		},
-	}
+	store, started, release := newBlockingStore()
 	svc := newTestBackupService(t, store)
 
 	createBackupFile(t, svc, "aeron-backup-2026-06-28-120000.dump", time.Now().Add(-48*time.Hour))
@@ -245,5 +241,98 @@ func TestCleanupOldBackupsSchedulesS3DeleteAfterShutdownStarts(t *testing.T) {
 	case <-closeDone:
 	case <-time.After(time.Second):
 		t.Fatal("Close did not return after retention S3 delete completed")
+	}
+}
+
+func TestCleanupMaxBackupsTracksS3DeleteAsChild(t *testing.T) {
+	store, started, release := newBlockingStore()
+	svc := newTestBackupService(t, store)
+	svc.config.Backup.MaxBackups = 1
+
+	const (
+		newest = "aeron-backup-2026-06-29-120000.dump"
+		oldest = "aeron-backup-2026-06-29-110000.dump"
+	)
+	createBackupFile(t, svc, newest, time.Now())
+	createBackupFile(t, svc, oldest, time.Now().Add(-time.Hour))
+
+	if !svc.runner.TryStart() {
+		t.Fatal("TryStart returned false")
+	}
+
+	closeDone := make(chan struct{})
+	go func() {
+		svc.Close()
+		close(closeDone)
+	}()
+
+	// Wait until shutdown has started so we exercise the post-Close path:
+	// TryGoBackground would now drop the delete, GoChild must still run it.
+	for svc.runner.TryGoBackground(func() {}) {
+		runtime.Gosched()
+	}
+
+	runDone := make(chan struct{})
+	svc.runner.Go(func() {
+		svc.cleanupOldBackups()
+		close(runDone)
+	})
+
+	select {
+	case <-runDone:
+	case <-time.After(time.Second):
+		t.Fatal("cleanupOldBackups did not return")
+	}
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("max_backups S3 delete was not scheduled after shutdown started")
+	}
+
+	// max_backups removes the oldest excess backup and keeps the newest.
+	if _, err := os.Stat(filepath.Join(svc.config.Backup.GetPath(), oldest)); !os.IsNotExist(err) {
+		t.Fatalf("oldest backup should be deleted, stat err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(svc.config.Backup.GetPath(), newest)); err != nil {
+		t.Fatalf("newest backup should remain: %v", err)
+	}
+
+	close(release)
+	select {
+	case <-closeDone:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not return after max_backups S3 delete completed")
+	}
+}
+
+func TestDeleteSkipsS3DeleteAfterClose(t *testing.T) {
+	called := make(chan struct{}, 1)
+	store := &fakeBackupObjectStore{
+		deleteFunc: func(context.Context, string) error {
+			called <- struct{}{}
+			return nil
+		},
+	}
+	svc := newTestBackupService(t, store)
+
+	const filename = "aeron-backup-2026-06-29-120000.dump"
+	createBackupFile(t, svc, filename, time.Now())
+
+	svc.Close()
+
+	// Local removal must still succeed and report success after shutdown.
+	if err := svc.Delete(filename); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(svc.config.Backup.GetPath(), filename)); !os.IsNotExist(err) {
+		t.Fatalf("local backup should be deleted, stat err = %v", err)
+	}
+
+	// After Close, TryGoBackground drops the work: the S3 delete must not run.
+	select {
+	case <-called:
+		t.Fatal("S3 delete ran after Close; expected it to be dropped")
+	case <-time.After(50 * time.Millisecond):
 	}
 }
