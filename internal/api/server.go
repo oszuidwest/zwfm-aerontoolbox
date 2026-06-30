@@ -2,9 +2,10 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
 	"log/slog"
 	"net/http"
-	"slices"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -186,7 +187,19 @@ func (s *Server) requireEnabled(message string, enabled func(*config.Config) boo
 }
 
 func (s *Server) isValidAPIKey(key string) bool {
-	return key != "" && slices.Contains(s.service.Config().API.Keys, key)
+	if key == "" {
+		return false
+	}
+
+	// Hash both sides to a fixed length so ConstantTimeCompare never returns
+	// early on a length mismatch, which would leak the configured key length.
+	keyHash := sha256.Sum256([]byte(key))
+	valid := 0
+	for _, configuredKey := range s.service.Config().API.Keys {
+		configuredHash := sha256.Sum256([]byte(configuredKey))
+		valid |= subtle.ConstantTimeCompare(keyHash[:], configuredHash[:])
+	}
+	return valid == 1
 }
 
 func parseQueryBoolParam(value string) *bool {

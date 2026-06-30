@@ -19,6 +19,7 @@ type Config struct {
 	TargetHeight  int
 	Quality       int
 	RejectSmaller bool
+	MaxPixels     int64
 }
 
 // ProcessingResult reports original and stored image characteristics.
@@ -186,16 +187,29 @@ func extractImageInfo(imageData []byte) (*Info, error) {
 	}, nil
 }
 
-// validateImageDimensions checks minimum size requirements when RejectSmaller is set.
+// validateImageDimensions checks minimum and maximum size requirements.
 func validateImageDimensions(info *Info, config Config) error {
+	if exceedsMaxPixels(info.Width, info.Height, config.MaxPixels) {
+		return types.NewValidationError("dimensions", fmt.Sprintf(
+			"image is too large: %dx%d (%d pixels exceeds maximum %d)",
+			info.Width, info.Height, int64(info.Width)*int64(info.Height), config.MaxPixels))
+	}
+
 	if config.RejectSmaller && (info.Width < config.TargetWidth || info.Height < config.TargetHeight) {
-		return &types.ValidationError{
-			Field: "dimensions",
-			Message: fmt.Sprintf("image is too small: %dx%d (minimum %dx%d required)",
-				info.Width, info.Height, config.TargetWidth, config.TargetHeight),
-		}
+		return types.NewValidationError("dimensions", fmt.Sprintf(
+			"image is too small: %dx%d (minimum %dx%d required)",
+			info.Width, info.Height, config.TargetWidth, config.TargetHeight))
 	}
 	return nil
+}
+
+// exceedsMaxPixels reports whether width*height exceeds maxPixels, rearranged
+// as division so the product cannot overflow int64 for hostile dimensions.
+func exceedsMaxPixels(width, height int, maxPixels int64) bool {
+	if maxPixels <= 0 || width <= 0 || height <= 0 {
+		return false
+	}
+	return int64(width) > maxPixels/int64(height)
 }
 
 // isAlreadyTargetSize returns true if image matches target dimensions exactly.

@@ -110,6 +110,7 @@ func (s *MediaService) UploadImage(ctx context.Context, params *ImageUploadParam
 		TargetHeight:  s.config.Image.TargetHeight,
 		Quality:       s.config.Image.Quality,
 		RejectSmaller: s.config.Image.RejectSmaller,
+		MaxPixels:     s.config.Image.GetMaxPixels(),
 	}
 	slog.Debug("Image processing started",
 		"inputSize", len(imageData),
@@ -200,7 +201,7 @@ func (s *MediaService) DeleteAllImages(ctx context.Context, entityType types.Ent
 func DefaultPlaylistOptions() database.PlaylistOptions {
 	return database.PlaylistOptions{
 		ExportTypes: []int{},
-		SortBy:      "starttime",
+		SortBy:      "start_time",
 	}
 }
 
