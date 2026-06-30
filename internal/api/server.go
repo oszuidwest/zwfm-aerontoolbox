@@ -55,10 +55,16 @@ func (s *Server) router() http.Handler {
 	router.Use(middleware.Recoverer)
 	router.Use(middleware.Compress(5))
 
+	// Route HEAD to the matching GET handler so probes that use HEAD (some load
+	// balancers, GNU wget --spider) hit /health instead of getting a 405.
+	router.Use(middleware.GetHead)
+
 	router.NotFound(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		respondError(w, http.StatusNotFound, "Endpoint not found")
 	})
+
+	router.Get("/health", s.handleHealth)
 
 	router.Route("/api", func(r chi.Router) {
 		r.Use(middleware.SetHeader("Content-Type", "application/json; charset=utf-8"))
@@ -67,13 +73,11 @@ func (s *Server) router() http.Handler {
 			respondError(w, http.StatusNotFound, "Endpoint not found")
 		})
 
-		r.Get("/health", s.handleHealth)
-
 		r.Group(func(r chi.Router) {
 			r.Use(s.authMiddleware)
 			r.Use(middleware.Timeout(s.service.Config().API.GetRequestTimeout()))
 
-			r.Get("/health/details", s.handleHealthDetails)
+			r.Get("/health", s.handleHealthDetails)
 
 			s.setupEntityRoutes(r, "/artists", types.EntityTypeArtist)
 			s.setupEntityRoutes(r, "/tracks", types.EntityTypeTrack)

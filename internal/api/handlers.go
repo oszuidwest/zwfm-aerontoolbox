@@ -34,11 +34,10 @@ type ImageStatsResponse struct {
 
 // PublicHealthResponse is returned by the unauthenticated health endpoint.
 type PublicHealthResponse struct {
-	Status         string `json:"status"`
-	Version        string `json:"version"`
-	DatabaseStatus string `json:"database_status"`
+	Status string `json:"status"`
 }
 
+// dbPing is a package-level test seam; tests overriding it must not run in parallel.
 var dbPing = func(ctx context.Context, repo *database.Repository) error {
 	return repo.Ping(ctx)
 }
@@ -118,18 +117,20 @@ func (s *Server) validateAndGetEntityID(w http.ResponseWriter, r *http.Request, 
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	dbStatus, dbConnected := s.databaseStatus(r.Context())
+	_, dbConnected := s.databaseStatus(r.Context())
 
 	statusCode := http.StatusOK
+	success := true
+	errorMsg := ""
 	if !dbConnected {
 		statusCode = http.StatusServiceUnavailable
+		success = false
+		errorMsg = "Service unavailable"
 	}
 
-	respondJSON(w, statusCode, PublicHealthResponse{
-		Status:         overallHealthStatus(dbConnected, false),
-		Version:        s.version,
-		DatabaseStatus: dbStatus,
-	})
+	respondEnvelope(w, statusCode, success, PublicHealthResponse{
+		Status: overallHealthStatus(dbConnected, false),
+	}, errorMsg)
 }
 
 func (s *Server) handleHealthDetails(w http.ResponseWriter, r *http.Request) {

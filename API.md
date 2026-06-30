@@ -26,13 +26,15 @@ De Aeron Toolbox API biedt RESTful-endpoints voor het Aeron-radioautomatiserings
 
 **Basis-URL:** `http://localhost:8080/api`
 
+**Publieke readinessprobe:** `http://localhost:8080/health`
+
 ## Snel overzicht endpoints
 
 | Endpoint | Methode | Beschrijving | Auth |
 |----------|---------|--------------|------|
 | **Algemeen** |
-| `/api/health` | GET | API-status controleren | Nee |
-| `/api/health/details` | GET | Gedetailleerde health en operationele signalen | Ja |
+| `/health` | GET | Readiness-status controleren | Nee |
+| `/api/health` | GET | Gedetailleerde health en operationele signalen | Ja |
 | **Artiesten** |
 | `/api/artists` | GET | Statistieken over artiesten | Ja |
 | `/api/artists/{id}` | GET | Specifieke artiest ophalen | Ja |
@@ -70,7 +72,7 @@ De Aeron Toolbox API biedt RESTful-endpoints voor het Aeron-radioautomatiserings
 
 ## Authenticatie
 
-Wanneer authenticatie is ingeschakeld in de configuratie, vereisen alle endpoints (behalve `GET /api/health`) een API-sleutel.
+Wanneer authenticatie is ingeschakeld in de configuratie, vereisen alle API-endpoints een API-sleutel. De platformprobe `GET /health` valt buiten `/api` en vereist geen API-sleutel.
 
 **Header:** `X-API-Key: jouw-api-sleutel`
 
@@ -126,6 +128,7 @@ Alle fouten volgen dit formaat:
 - `404` Not Found - Bron niet gevonden
 - `409` Conflict - Operatie al bezig (backup)
 - `500` Internal Server Error - Serverfout
+- `503` Service Unavailable - Readiness faalt doordat de database niet bereikbaar is
 
 ---
 
@@ -133,9 +136,9 @@ Alle fouten volgen dit formaat:
 
 ### Statuscontrole
 
-Controleer de publieke liveness/readiness-status van de API. Deze endpoint is bewust minimaal zodat load balancers en container health checks geen operationele details nodig hebben.
+Controleer de publieke readiness-status van de API. Deze endpoint is bewust minimaal zodat load balancers en container health checks geen operationele details nodig hebben. Gebruik deze endpoint niet als liveness-restarttrigger: een database-uitval levert `503` op, en een procesrestart herstelt de database niet.
 
-**Endpoint:** `GET /api/health`
+**Endpoint:** `GET /health`
 **Authenticatie:** Niet vereist
 
 **Response:** `200 OK`
@@ -143,18 +146,29 @@ Controleer de publieke liveness/readiness-status van de API. Deze endpoint is be
 {
   "success": true,
   "data": {
-    "status": "healthy",
-    "version": "dev",
-    "database_status": "connected"
+    "status": "healthy"
   }
 }
 ```
+
+**Response:** `503 Service Unavailable` wanneer de database niet bereikbaar is
+```json
+{
+  "success": false,
+  "data": {
+    "status": "unhealthy"
+  },
+  "error": "Service unavailable"
+}
+```
+
+`GET /health` is de enige JSON-response die bij een non-2xx status nog een `data`-object kan bevatten. Zo kunnen probes de HTTP-statuscode gebruiken, terwijl operators en monitoring nog de readiness-verdict kunnen lezen. Gedetailleerde oorzaken staan achter authenticatie op `GET /api/health`.
 
 ### Gedetailleerde statuscontrole
 
 Controleer de gedetailleerde operationele status.
 
-**Endpoint:** `GET /api/health/details`
+**Endpoint:** `GET /api/health`
 **Authenticatie:** Vereist
 
 **Response:** `200 OK`
@@ -209,6 +223,8 @@ De `status`-waarden hebben een vaste prioriteitsvolgorde: `"unhealthy"` > `"degr
 | Geen van bovenstaande | `"healthy"` |
 
 Een database-uitval overschrijft altijd een eventuele `"degraded"`-signaal van notificaties of de bestandscontrole.
+
+`GET /api/health` blijft `200 OK` zolang de API de gedetailleerde status kan leveren. Lees `status` en `database_status` voor het operationele verdict.
 
 ---
 
@@ -1270,9 +1286,9 @@ De handmatige trigger en de cronjob gebruiken dezelfde single-flight gate. Daard
 
 Strikte gelijkheid (`completed_run_id == myRunID`) bevestigt dat de zichtbare `checks` exact door jouw run zijn geproduceerd. Een hogere waarde betekent dat een latere run, bijvoorbeeld via cron, jouw run heeft ingehaald. Dat is prima voor de vraag "is het systeem nu gezond?", maar verliest de exacte correlatie. Gebruik voor nauwkeurige troubleshooting daarom de strikte vergelijking en houd rekening met een mogelijke race.
 
-### Integratie met de health-endpoint (bestandscontrole)
+### Integratie met de gedetailleerde health-endpoint (bestandscontrole)
 
-Als de bestandscontrole is ingeschakeld, geeft de health-endpoint (`GET /api/health`) een extra `file_monitor`-blok terug:
+Als de bestandscontrole is ingeschakeld, geeft de gedetailleerde health-endpoint (`GET /api/health`) een extra `file_monitor`-blok terug. De publieke `GET /health` blijft bewust minimaal en bevat dit blok niet:
 
 ```json
 {
@@ -1290,7 +1306,7 @@ Als de bestandscontrole is ingeschakeld, geeft de health-endpoint (`GET /api/hea
 ```
 
 - `checks_stale`: ruwe telling van bestanden die te oud zijn of niet bereikbaar zijn, inclusief bestanden buiten hun `active_window`.
-- `checks_alerting`: window-aware telling; bestanden buiten hun `active_window` tellen hier niet mee. Wanneer de database verbonden is en `checks_alerting > 0`, wordt de algemene status `"degraded"` (`"unhealthy"` heeft altijd prioriteit). Een bestand dat 's nachts verouderd raakt maar alleen overdag wordt ververst, telt hier dus niet mee.
+- `checks_alerting`: window-aware telling; bestanden buiten hun `active_window` tellen hier niet mee. Wanneer de database verbonden is en `checks_alerting > 0`, wordt de algemene status van `GET /api/health` `"degraded"` (`"unhealthy"` heeft altijd prioriteit). Een bestand dat 's nachts verouderd raakt maar alleen overdag wordt ververst, telt hier dus niet mee.
 
 ---
 
@@ -1442,9 +1458,9 @@ Toont de runstatus plus het resultaat van de meest recente run.
 
 Met `media_file_check.scheduler` draait de controle automatisch op een cron-schema. De geplande run controleert standaard **vandaag**; met `media_file_check.lookahead_days` kun je vooruitkijken — bij `lookahead_days: 2` checkt de run vandaag t/m overmorgen (inclusief), zodat ontbrekende bestanden opvallen vóórdat ze worden uitgezonden. `0` (standaard) is alleen vandaag. Handmatige API-runs gebruiken hun eigen `from`/`to`-bereik en negeren deze instelling. Als e-mailnotificaties zijn geconfigureerd, stuurt een geplande run een alert wanneer er problemen (`missing`, `ambiguous` of `stat_error`) worden gevonden, en een herstelmelding zodra een volgende run weer schoon is. Handmatige API-runs versturen geen e-mail, zodat ad-hoc scopes de alert-status niet verstoren.
 
-### Integratie met de health-endpoint (mediabestandcontrole)
+### Integratie met de gedetailleerde health-endpoint (mediabestandcontrole)
 
-Als de mediabestandcontrole is ingeschakeld, geeft `GET /api/health` een extra `media_file_check`-blok terug:
+Als de mediabestandcontrole is ingeschakeld, geeft `GET /api/health` een extra `media_file_check`-blok terug. De publieke `GET /health` blijft bewust minimaal en bevat dit blok niet:
 
 ```json
 {
@@ -1770,7 +1786,7 @@ Het gedrag van de API kan worden geconfigureerd via `config.json`:
   - `path`: Absoluut pad naar het bestand.
   - `max_age_minutes`: Maximaal toegestane leeftijd in minuten (minimaal 1).
   - `stat_timeout_seconds`: Maximale tijd in seconden voor `os.Stat` (standaard 5; `0` of weglaten = standaard). Beschermt tegen vastgelopen NFS- of SMB-mounts.
-  - `active_window`: Optioneel tijdvenster `"HH:MM-HH:MM"` waarin alerts en `GET /api/health`-degradatie actief zijn. Buiten dit venster blijft `is_stale` zichtbaar in `GET /api/file-monitor/status`, maar wordt er geen alert- of herstelmail verstuurd en blijft `GET /api/health` gezond. Een eindtijd vóór de starttijd betekent dat het venster over middernacht heen loopt, bijvoorbeeld `"22:00-06:00"`. Gelijke start- en eindtijd zijn ongeldig; laat het veld weg voor altijd actief.
+  - `active_window`: Optioneel tijdvenster `"HH:MM-HH:MM"` waarin alerts en de bestandscontrole-degradatie in `GET /api/health` actief zijn. Buiten dit venster blijft `is_stale` zichtbaar in `GET /api/file-monitor/status`, maar wordt er geen alert- of herstelmail verstuurd en telt dit bestand niet mee als degraded-signaal voor `GET /api/health`. Een eindtijd vóór de starttijd betekent dat het venster over middernacht heen loopt, bijvoorbeeld `"22:00-06:00"`. Gelijke start- en eindtijd zijn ongeldig; laat het veld weg voor altijd actief.
 
 Het controle-interval staat los van `max_age_minutes` en wordt geconfigureerd via `interval_seconds` (standaard 60 s).
 

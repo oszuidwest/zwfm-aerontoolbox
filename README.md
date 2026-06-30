@@ -134,7 +134,7 @@ Test de configuratie via `POST /api/notifications/test-email`.
 
 ```bash
 # Health check
-curl http://localhost:8080/api/health
+curl http://localhost:8080/health
 
 # Artiestafbeelding uploaden (via URL)
 curl -X POST http://localhost:8080/api/artists/{id}/image \
