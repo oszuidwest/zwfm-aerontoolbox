@@ -9,7 +9,7 @@ Het radioautomatiseringssysteem Aeron mist tooling voor beheer en onderhoud. Aer
 
 - **Afbeeldingen:** upload en optimaliseer albumhoezen en artiestfoto's
 - **Media:** doorzoek artiesten, tracks en playlists met metadata
-- **Onderhoud:** bewaak de gezondheid van de database met automatische meldingen bij problemen
+- **Onderhoud:** bewaak de conditie van de database en ontvang automatisch een melding bij problemen
 - **Backups:** maak, valideer en download databasebackups (optioneel naar S3)
 - **Bestandscontrole:** controleer of bestanden actueel zijn, met meldingen bij verouderde of ontbrekende bestanden
 - **Mediabestanden:** controleer op basis van de database of de audio uit de playlist daadwerkelijk op schijf staat

@@ -1441,7 +1441,7 @@ Als de aanwezigheidscontrole is ingeschakeld, geeft `GET /api/health` een extra 
 }
 ```
 
-- `problems`: aantal `missing`-, `ambiguous`- en `stat_error`-items in de meest recente **geplande** run. Dit telt alleen mee voor de algemene status `"degraded"` wanneer de geplande controle (`scheduler.enabled`) aanstaat, zodat ad-hoc API-runs met een afwijkende scope de gezondheidsstatus niet beïnvloeden.
+- `problems`: aantal `missing`-, `ambiguous`- en `stat_error`-items in de meest recente **geplande** run. Dit telt alleen mee voor de algemene status `"degraded"` wanneer de geplande controle (`scheduler.enabled`) aanstaat, zodat ad-hoc API-runs met een afwijkende scope die status niet beïnvloeden.
 
 ---
 
