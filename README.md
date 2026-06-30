@@ -23,7 +23,7 @@ Het radioautomatiseringssysteem Aeron mist tooling voor beheer en onderhoud. Aer
 wget https://raw.githubusercontent.com/oszuidwest/zwfm-aerontoolbox/main/config.example.json -O config.json
 wget https://raw.githubusercontent.com/oszuidwest/zwfm-aerontoolbox/main/docker-compose.example.yml -O docker-compose.yml
 
-# Zet in config.json een lange willekeurige api.keys waarde, pas daarna de rest aan:
+# Genereer een sleutel en plak de uitvoer in config.json bij api.keys:
 openssl rand -base64 32
 
 docker compose up -d
@@ -54,7 +54,7 @@ Download een kant-en-klare Linux- of macOS-binary via de [releases-pagina](https
 git clone https://github.com/oszuidwest/zwfm-aerontoolbox.git
 cd zwfm-aerontoolbox
 cp config.example.json config.json
-# Zet in config.json een lange willekeurige api.keys waarde:
+# Genereer een sleutel en plak de uitvoer in config.json bij api.keys:
 openssl rand -base64 32
 go build -o zwfm-aerontoolbox .
 ./zwfm-aerontoolbox -config=config.json -port=8080

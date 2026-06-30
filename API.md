@@ -1674,7 +1674,7 @@ Het gedrag van de API kan worden geconfigureerd via `config.json`:
   },
   "api": {
     "enabled": true,
-    "keys": ["jouw-lange-willekeurige-api-sleutel-hier"],
+    "keys": ["vervang-dit-door-een-lange-willekeurige-api-sleutel"],
     "request_timeout_seconds": 30
   },
   "maintenance": {

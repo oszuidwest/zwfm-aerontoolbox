@@ -49,6 +49,8 @@ type APIConfig struct {
 	RequestTimeoutSeconds int      `json:"request_timeout_seconds" validate:"gte=0"`
 }
 
+const apiKeyPlaceholder = "vervang-dit-door-een-lange-willekeurige-api-sleutel" //nolint:gosec // Public example value, explicitly rejected by validation.
+
 // MaintenanceConfig holds thresholds used by database health checks.
 type MaintenanceConfig struct {
 	BloatThreshold              float64         `json:"bloat_threshold" validate:"gte=0,lte=100"`
@@ -441,10 +443,29 @@ func newConfigValidator() *validator.Validate {
 	})
 
 	v.RegisterStructValidation(validateS3Config, S3Config{})
+	v.RegisterStructValidation(validateAPIConfig, APIConfig{})
 	v.RegisterStructValidation(validateFileMonitorConfig, FileMonitorConfig{})
 	v.RegisterStructValidation(validateMediaFileCheckConfig, MediaFileCheckConfig{})
 
 	return v
+}
+
+// validateAPIConfig rejects the documented placeholder as a live credential.
+func validateAPIConfig(sl validator.StructLevel) {
+	api := sl.Current().Interface().(APIConfig)
+	if !api.Enabled {
+		return
+	}
+	if len(api.Keys) == 0 {
+		sl.ReportError(api.Keys, "keys", "Keys", "required_when_enabled", "")
+		return
+	}
+	for _, key := range api.Keys {
+		if key == apiKeyPlaceholder {
+			sl.ReportError(api.Keys, "keys", "Keys", "api_key_placeholder", "")
+			return
+		}
+	}
 }
 
 // validateS3Config checks that S3 has either a region or custom endpoint when enabled.
@@ -575,6 +596,8 @@ func tagMessage(tag, param string) string {
 		return "is required when no endpoint is specified"
 	case "required_when_enabled":
 		return "must have at least one entry when enabled"
+	case "api_key_placeholder":
+		return "must replace the example placeholder with a random key"
 	case "media_check_no_source":
 		return "requires at least one search dir or drive mount when enabled"
 	case "media_check_drive_key":
