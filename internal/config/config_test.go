@@ -97,6 +97,68 @@ func TestInterval_ZeroFallsBackToDefault(t *testing.T) {
 	}
 }
 
+func TestAPIValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		enabled bool
+		keys    []string
+		wantErr bool
+	}{
+		{
+			name:    "disabled with no keys",
+			enabled: false,
+			keys:    nil,
+			wantErr: false,
+		},
+		{
+			name:    "enabled with key",
+			enabled: true,
+			keys:    []string{"long-random-test-key"},
+			wantErr: false,
+		},
+		{
+			name:    "enabled with empty slice",
+			enabled: true,
+			keys:    []string{},
+			wantErr: true,
+		},
+		{
+			name:    "enabled with nil keys",
+			enabled: true,
+			keys:    nil,
+			wantErr: true,
+		},
+		{
+			name:    "enabled with empty string key",
+			enabled: true,
+			keys:    []string{""},
+			wantErr: true,
+		},
+		{
+			name:    "enabled with placeholder key",
+			enabled: true,
+			keys:    []string{apiKeyPlaceholder},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := minimalConfig()
+			cfg.API.Enabled = tt.enabled
+			cfg.API.Keys = tt.keys
+
+			err := validate(cfg)
+			if tt.wantErr && err == nil {
+				t.Fatal("expected validation error, got nil")
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("unexpected validation error: %v", err)
+			}
+		})
+	}
+}
+
 func TestFileMonitorValidation_DuplicatePaths(t *testing.T) {
 	cfg := minimalConfig()
 	cfg.FileMonitor.Enabled = true

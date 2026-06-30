@@ -23,7 +23,9 @@ Het radioautomatiseringssysteem Aeron mist tooling voor beheer en onderhoud. Aer
 wget https://raw.githubusercontent.com/oszuidwest/zwfm-aerontoolbox/main/config.example.json -O config.json
 wget https://raw.githubusercontent.com/oszuidwest/zwfm-aerontoolbox/main/docker-compose.example.yml -O docker-compose.yml
 
-# Pas config.json aan naar jouw situatie, dan:
+# Genereer een sleutel en plak de uitvoer in config.json bij api.keys:
+openssl rand -base64 32
+
 docker compose up -d
 ```
 
@@ -52,6 +54,8 @@ Download een kant-en-klare Linux- of macOS-binary via de [releases-pagina](https
 git clone https://github.com/oszuidwest/zwfm-aerontoolbox.git
 cd zwfm-aerontoolbox
 cp config.example.json config.json
+# Genereer een sleutel en plak de uitvoer in config.json bij api.keys:
+openssl rand -base64 32
 go build -o zwfm-aerontoolbox .
 ./zwfm-aerontoolbox -config=config.json -port=8080
 ```
@@ -73,6 +77,10 @@ Kopieer [`config.example.json`](config.example.json) naar `config.json`. De bela
 | `media_file_check` | Controleert database-gestuurd of playlist-audio op schijf staat (exacte `drive_mounts` + `search_dirs` als fallback) |
 | `notifications` | E-mailmeldingen via Microsoft Graph API |
 | `log` | Logniveau (`debug`, `info`, `warn`, `error`) en formaat (`text`, `json`) |
+
+### Authenticatie
+
+De voorbeeldconfiguratie zet API-authenticatie standaard aan. Vervang de placeholder in `api.keys` door een lange willekeurige sleutel en stuur die mee als `X-API-Key`. Zet `api.enabled` alleen op `false` voor lokale tests of volledig afgeschermde netwerken; zonder authenticatie zijn muterende endpoints, backupdownloads en beheerstatussen bereikbaar voor iedereen die de HTTP-poort kan benaderen.
 
 ### Backupfunctionaliteit
 

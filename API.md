@@ -69,9 +69,11 @@ De Aeron Toolbox API biedt RESTful-endpoints voor het Aeron-radioautomatiserings
 
 ## Authenticatie
 
-Wanneer authenticatie is ingeschakeld in de configuratie, vereisen alle endpoints (behalve `GET /api/health`) een API-sleutel.
+De voorbeeldconfiguratie schakelt authenticatie standaard in. Alle endpoints behalve `GET /api/health` vereisen dan een API-sleutel.
 
 **Header:** `X-API-Key: jouw-api-sleutel`
+
+Gebruik in productie een lange willekeurige sleutel in `api.keys`. Zet `api.enabled` alleen op `false` voor lokale tests of volledig afgeschermde netwerken; zonder authenticatie zijn muterende endpoints, backupdownloads en operationele statusinformatie bereikbaar voor iedereen die de HTTP-poort kan benaderen.
 
 **Response bij ontbrekende autorisatie:**
 ```json
@@ -1672,7 +1674,7 @@ Het gedrag van de API kan worden geconfigureerd via `config.json`:
   },
   "api": {
     "enabled": true,
-    "keys": ["jouw-veilige-api-sleutel-hier"],
+    "keys": ["vervang-dit-door-een-lange-willekeurige-api-sleutel"],
     "request_timeout_seconds": 30
   },
   "maintenance": {

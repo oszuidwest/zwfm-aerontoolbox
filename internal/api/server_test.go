@@ -63,6 +63,39 @@ func TestFileMonitorRoutesDisabledReturnNotFound(t *testing.T) {
 	}
 }
 
+func TestProtectedRoutesRequireAPIKeyWhenAuthEnabled(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.API.Enabled = true
+	cfg.API.Keys = []string{"test-api-key"}
+
+	svc, err := service.New(nil, cfg)
+	if err != nil {
+		t.Fatalf("service.New: %v", err)
+	}
+	t.Cleanup(svc.Close)
+
+	handler := New(svc, "test").router()
+	req := httptest.NewRequest(http.MethodGet, "/api/playlist", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status code = %d, want %d; body: %s", rec.Code, http.StatusUnauthorized, rec.Body.String())
+	}
+
+	var got Response
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got.Success {
+		t.Fatal("success = true, want false")
+	}
+	if got.Error != "Unauthorized: invalid or missing API key" {
+		t.Fatalf("error = %q, want unauthorized API key message", got.Error)
+	}
+}
+
 func TestFileMonitorRoutesEnabledPassThrough(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.FileMonitor.Enabled = true
