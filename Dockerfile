@@ -32,13 +32,16 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
 # Runtime stage
 FROM alpine:3.24.1
 
+ARG POSTGRESQL_CLIENT_PACKAGE=postgresql18-client
+
 LABEL org.opencontainers.image.source="https://github.com/oszuidwest/zwfm-aerontoolbox"
 LABEL org.opencontainers.image.description="Headless REST API toolbox for the Aeron radio automation system"
 LABEL org.opencontainers.image.licenses="MIT"
 
-# Install runtime dependencies (postgresql16-client for pg_dump backup functionality)
+# Install runtime dependencies. pg_dump/pg_restore must be the same or a newer
+# major version than the PostgreSQL server used for backup functionality.
 RUN apk --no-cache upgrade && \
-    apk --no-cache add ca-certificates tzdata postgresql16-client
+    apk --no-cache add ca-certificates tzdata "${POSTGRESQL_CLIENT_PACKAGE}"
 
 # Create non-root user
 RUN addgroup -g 1000 aeron && \
