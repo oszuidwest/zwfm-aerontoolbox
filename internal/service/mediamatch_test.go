@@ -6,9 +6,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/oszuidwest/zwfm-aerontoolbox/internal/config"
 )
 
 func TestNormalizeDriveKey(t *testing.T) {
@@ -95,7 +98,7 @@ func buildTestMatcher(t *testing.T, driveDirs map[string]string, searchDirs []st
 		driveRoots:      driveRoots,
 		searchDirs:      searchDirs,
 		caseInsensitive: caseInsensitive,
-		statTimeout:     5 * time.Second,
+		statTimeout:     config.DefaultMediaFileCheckStatTimeoutSeconds * time.Second,
 	}
 }
 
@@ -107,6 +110,52 @@ func writeFile(t *testing.T, path string) {
 	if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func waitForTestSignal(t *testing.T, ch <-chan struct{}, label string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for %s", label)
+	}
+}
+
+func receiveMatchOutcome(t *testing.T, ch <-chan matchOutcome) matchOutcome {
+	t.Helper()
+	var out matchOutcome
+	select {
+	case out = <-ch:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for match outcome")
+	}
+	return out
+}
+
+func receiveFileIndex(t *testing.T, ch <-chan *fileIndex) *fileIndex {
+	t.Helper()
+	var idx *fileIndex
+	select {
+	case idx = <-ch:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for file index")
+	}
+	return idx
+}
+
+func waitForStatInflightEmpty(t *testing.T, svc *MediaFileCheckService) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		svc.statInflightMu.Lock()
+		n := len(svc.statInflight)
+		svc.statInflightMu.Unlock()
+		if n == 0 {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("timed out waiting for stat in-flight cleanup")
 }
 
 func TestMatch_DriveMappingExactPath(t *testing.T) {
@@ -293,12 +342,152 @@ func TestMatch_StatTimeoutUsesSingleFlight(t *testing.T) {
 		t.Fatalf("first status=%q error=%q, want stat timeout", out.Status, out.Error)
 	}
 
+	start := time.Now()
 	out = m.match(&matchInput{FilePath: `O:\Audio\frozen.wav`})
+	elapsed := time.Since(start)
 	if out.Status != MediaStatusStatError || !strings.Contains(out.Error, "stat timeout") {
 		t.Fatalf("second status=%q error=%q, want stat timeout", out.Status, out.Error)
 	}
+	if elapsed > 200*time.Millisecond {
+		t.Fatalf("second match took %v, want near-immediate return on already-budgeted stat flight", elapsed)
+	}
 	if got := starts.Load(); got != 1 {
 		t.Fatalf("mediaRootStat starts = %d, want 1 shared in-flight stat", got)
+	}
+}
+
+func TestMatch_StatSingleFlightSuccessPath(t *testing.T) {
+	prev := mediaRootStat
+	t.Cleanup(func() { mediaRootStat = prev })
+
+	dir := t.TempDir()
+	full := filepath.Join(dir, "Audio", "hit.wav")
+	writeFile(t, full)
+	info, err := os.Stat(full)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	closeRelease := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(closeRelease)
+
+	var starts atomic.Int32
+	mediaRootStat = func(_ *os.Root, _ string) (os.FileInfo, error) {
+		if starts.Add(1) == 1 {
+			close(started)
+		}
+		<-release
+		return info, nil
+	}
+
+	svc := &MediaFileCheckService{
+		statInflight: make(map[string]*statInFlight),
+	}
+	m := buildTestMatcher(t, map[string]string{"O:": dir}, nil, true)
+	m.ctx = context.Background()
+	m.statTimeout = time.Second
+	m.startStatFlight = svc.startOrJoinMediaStatFlight
+
+	input := &matchInput{FilePath: `O:\Audio\hit.wav`}
+	first := make(chan matchOutcome, 1)
+	go func() { first <- m.match(input) }()
+	waitForTestSignal(t, started, "first stat start")
+
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		closeRelease()
+	}()
+	second := m.match(input)
+	firstOut := receiveMatchOutcome(t, first)
+
+	for _, out := range []matchOutcome{firstOut, second} {
+		if out.Status != MediaStatusPresent || out.MatchType != matchTypeExactPath {
+			t.Fatalf("status=%q matchType=%q, want present/exact_path", out.Status, out.MatchType)
+		}
+	}
+	if got := starts.Load(); got != 1 {
+		t.Fatalf("mediaRootStat starts = %d, want 1 shared successful stat", got)
+	}
+	waitForStatInflightEmpty(t, svc)
+}
+
+func TestMatch_StatFlightContextCancel(t *testing.T) {
+	prev := mediaRootStat
+	block := make(chan struct{})
+	t.Cleanup(func() { mediaRootStat = prev })
+	t.Cleanup(func() { close(block) })
+
+	started := make(chan struct{})
+	var starts atomic.Int32
+	mediaRootStat = func(_ *os.Root, _ string) (os.FileInfo, error) {
+		if starts.Add(1) == 1 {
+			close(started)
+		}
+		<-block
+		return nil, os.ErrNotExist
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	svc := &MediaFileCheckService{
+		statInflight: make(map[string]*statInFlight),
+	}
+	m := buildTestMatcher(t, map[string]string{"O:": t.TempDir()}, nil, true)
+	m.ctx = ctx
+	m.statTimeout = time.Second
+	m.startStatFlight = svc.startOrJoinMediaStatFlight
+
+	outCh := make(chan matchOutcome, 1)
+	go func() { outCh <- m.match(&matchInput{FilePath: `O:\Audio\frozen.wav`}) }()
+	waitForTestSignal(t, started, "stat start")
+	cancel()
+
+	out := receiveMatchOutcome(t, outCh)
+	if out.Status != MediaStatusStatError || !strings.Contains(out.Error, context.Canceled.Error()) {
+		t.Fatalf("status=%q error=%q, want context-canceled stat_error", out.Status, out.Error)
+	}
+	if got := starts.Load(); got != 1 {
+		t.Fatalf("mediaRootStat starts = %d, want 1", got)
+	}
+}
+
+func TestMatch_CompletedStatFlightIsRemoved(t *testing.T) {
+	prev := mediaRootStat
+	t.Cleanup(func() { mediaRootStat = prev })
+
+	dir := t.TempDir()
+	full := filepath.Join(dir, "Audio", "hit.wav")
+	writeFile(t, full)
+	info, err := os.Stat(full)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var starts atomic.Int32
+	mediaRootStat = func(_ *os.Root, _ string) (os.FileInfo, error) {
+		starts.Add(1)
+		return info, nil
+	}
+
+	svc := &MediaFileCheckService{
+		statInflight: make(map[string]*statInFlight),
+	}
+	m := buildTestMatcher(t, map[string]string{"O:": dir}, nil, true)
+	m.ctx = context.Background()
+	m.statTimeout = time.Second
+	m.startStatFlight = svc.startOrJoinMediaStatFlight
+
+	for range 2 {
+		out := m.match(&matchInput{FilePath: `O:\Audio\hit.wav`})
+		if out.Status != MediaStatusPresent {
+			t.Fatalf("status = %q, want present", out.Status)
+		}
+		waitForStatInflightEmpty(t, svc)
+	}
+	if got := starts.Load(); got != 2 {
+		t.Fatalf("mediaRootStat starts = %d, want a fresh stat after completed flight cleanup", got)
 	}
 }
 
@@ -318,14 +507,14 @@ func TestMatch_DriveMappingPrefersExactOverIndex(t *testing.T) {
 }
 
 func TestBuildFileIndexRecordsWalkError(t *testing.T) {
-	idx := buildFileIndex(context.Background(), []string{filepath.Join(t.TempDir(), "missing")}, true)
+	idx := buildFileIndexWithWalkDir(context.Background(), []string{filepath.Join(t.TempDir(), "missing")}, true, mediaWalkDir)
 
 	if err := idx.err(); err == nil {
 		t.Fatal("expected index error for missing root, got nil")
 	}
 }
 
-func TestGetIndexTimeoutUsesSingleFlight(t *testing.T) {
+func TestMatch_IndexTimeoutReportsStatError(t *testing.T) {
 	prev := mediaWalkDir
 	block := make(chan struct{})
 	t.Cleanup(func() { mediaWalkDir = prev })
@@ -338,30 +527,62 @@ func TestGetIndexTimeoutUsesSingleFlight(t *testing.T) {
 		return nil
 	}
 
-	svc := &MediaFileCheckService{
-		indexInflight: make(map[string]*indexInFlight),
-	}
-	newMatcher := func() *mediaMatcher {
-		return &mediaMatcher{
-			searchDirs:       []string{"/frozen-share"},
-			caseInsensitive:  true,
-			indexTimeout:     10 * time.Millisecond,
-			ctx:              context.Background(),
-			startIndexFlight: svc.startOrJoinMediaIndexFlight,
-		}
-	}
+	m := buildTestMatcher(t, nil, []string{"/frozen-share"}, true)
+	m.ctx = context.Background()
+	m.indexTimeout = 10 * time.Millisecond
 
-	idx := newMatcher().getIndex()
-	if err := idx.err(); err == nil || !strings.Contains(err.Error(), "media file index timeout") {
-		t.Fatalf("first index error = %v, want timeout", err)
-	}
-
-	idx = newMatcher().getIndex()
-	if err := idx.err(); err == nil || !strings.Contains(err.Error(), "media file index timeout") {
-		t.Fatalf("second index error = %v, want timeout", err)
+	out := m.match(&matchInput{FileName: `O:\Audio\frozen.wav`})
+	if out.Status != MediaStatusStatError || !strings.Contains(out.Error, "media file index timeout") {
+		t.Fatalf("status=%q error=%q, want index timeout stat_error", out.Status, out.Error)
 	}
 	if got := starts.Load(); got != 1 {
-		t.Fatalf("mediaWalkDir starts = %d, want 1 shared in-flight index build", got)
+		t.Fatalf("mediaWalkDir starts = %d, want 1 bounded index build", got)
+	}
+}
+
+func TestGetIndexContextCancel(t *testing.T) {
+	prev := mediaWalkDir
+	block := make(chan struct{})
+	t.Cleanup(func() { mediaWalkDir = prev })
+	t.Cleanup(func() { close(block) })
+
+	started := make(chan struct{})
+	var starts atomic.Int32
+	mediaWalkDir = func(_ string, _ fs.WalkDirFunc) error {
+		if starts.Add(1) == 1 {
+			close(started)
+		}
+		<-block
+		return nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	m := buildTestMatcher(t, nil, []string{"/frozen-share"}, true)
+	m.ctx = ctx
+	m.indexTimeout = time.Hour
+
+	idxCh := make(chan *fileIndex, 1)
+	go func() { idxCh <- m.getIndex() }()
+	waitForTestSignal(t, started, "index walk start")
+	cancel()
+
+	idx := receiveFileIndex(t, idxCh)
+	if err := idx.err(); err == nil || !strings.Contains(err.Error(), "media file index canceled: context canceled") {
+		t.Fatalf("index error = %v, want context-canceled index error", err)
+	}
+	if got := starts.Load(); got != 1 {
+		t.Fatalf("mediaWalkDir starts = %d, want 1", got)
+	}
+}
+
+func TestIndexErrReportsBuiltIndexError(t *testing.T) {
+	m := buildTestMatcher(t, nil, nil, true)
+	idx := emptyFileIndex()
+	idx.addError("boom")
+	m.index = idx
+
+	if err := m.indexErr(); err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("indexErr = %v, want stored index error", err)
 	}
 }
 

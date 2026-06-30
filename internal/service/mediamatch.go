@@ -11,9 +11,9 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
+	"github.com/oszuidwest/zwfm-aerontoolbox/internal/config"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/util"
 )
 
@@ -128,9 +128,15 @@ type fileIndex struct {
 	errors []string
 }
 
-// buildFileIndex indexes regular files by full filename and stem.
+// buildFileIndexWithWalkDir indexes regular files by full filename and stem.
 // Per-file walk errors are logged and skipped; ctx cancellation aborts the walk.
-func buildFileIndex(ctx context.Context, dirs []string, caseInsensitive bool) *fileIndex {
+// walkDir is injected so callers can snapshot mediaWalkDir before spawning.
+func buildFileIndexWithWalkDir(
+	ctx context.Context,
+	dirs []string,
+	caseInsensitive bool,
+	walkDir func(string, fs.WalkDirFunc) error,
+) *fileIndex {
 	idx := &fileIndex{
 		byName: make(map[string][]string),
 		byStem: make(map[string][]string),
@@ -150,7 +156,7 @@ func buildFileIndex(ctx context.Context, dirs []string, caseInsensitive bool) *f
 			idx.addError(fmt.Sprintf("index build canceled before %s: %v", dir, ctx.Err()))
 			break
 		}
-		err := mediaWalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		err := walkDir(dir, func(path string, d fs.DirEntry, err error) error {
 			if ctx != nil && ctx.Err() != nil {
 				return ctx.Err()
 			}
@@ -213,29 +219,16 @@ type statFlightStarter func(
 	statFn func() (os.FileInfo, error),
 ) (*statInFlight, bool)
 
-type indexInFlight struct {
-	startedNano atomic.Int64
-	done        chan struct{}
-	index       *fileIndex
-}
-
-type indexFlightStarter func(
-	key string,
-	now time.Time,
-	buildFn func() *fileIndex,
-) (*indexInFlight, bool)
-
 // mediaMatcher resolves database references to files on disk using two
 // strategies: exact path translation via drive mounts, then a filename index
 // over the configured search dirs (built lazily on first fallback).
 type mediaMatcher struct {
-	driveRoots       map[string]*rootDir
-	searchDirs       []string
-	caseInsensitive  bool
-	statTimeout      time.Duration
-	indexTimeout     time.Duration
-	startStatFlight  statFlightStarter
-	startIndexFlight indexFlightStarter
+	driveRoots      map[string]*rootDir
+	searchDirs      []string
+	caseInsensitive bool
+	statTimeout     time.Duration
+	indexTimeout    time.Duration
+	startStatFlight statFlightStarter
 
 	ctx        context.Context
 	indexMu    sync.Mutex
@@ -354,6 +347,11 @@ func (m *mediaMatcher) match(in *matchInput) matchOutcome {
 			return out
 		}
 		out.CheckedPaths = append(out.CheckedPaths, describeSearch("by name", names))
+		if err := idx.err(); err != nil {
+			out.Status = MediaStatusStatError
+			out.Error = err.Error()
+			return out
+		}
 	}
 	out.Status = MediaStatusMissing
 	return out
@@ -400,7 +398,7 @@ func (m *mediaMatcher) statDriveMapped(ref string) (candidate string, exists boo
 
 // getIndex returns the lazily-built filename index, or nil when no search dirs
 // are configured. The index is built at most once per matcher; concurrent callers
-// that fall through to the index strategy share the same bounded build attempt.
+// that fall through to the index strategy wait for that bounded build attempt.
 func (m *mediaMatcher) getIndex() *fileIndex {
 	m.indexMu.Lock()
 	defer m.indexMu.Unlock()
@@ -430,15 +428,39 @@ func (m *mediaMatcher) getIndex() *fileIndex {
 }
 
 func (m *mediaMatcher) buildIndex() *fileIndex {
-	buildFn := func() *fileIndex {
-		return buildFileIndex(m.ctx, m.searchDirs, m.caseInsensitive)
-	}
-	if m.startIndexFlight == nil {
-		return buildFn()
+	ch := make(chan *fileIndex, 1)
+	walkDir := mediaWalkDir
+	go func() {
+		ch <- buildFileIndexWithWalkDir(m.ctx, m.searchDirs, m.caseInsensitive, walkDir)
+	}()
+
+	timeout := m.indexTimeout
+	if timeout <= 0 {
+		timeout = mediaCheckRunTimeout
 	}
 
-	flight, isNew := m.startIndexFlight(fileIndexFlightKey(m.searchDirs, m.caseInsensitive), time.Now(), buildFn)
-	return m.waitIndexFlight(flight, isNew)
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	var ctxDone <-chan struct{}
+	if m.ctx != nil {
+		ctxDone = m.ctx.Done()
+	}
+
+	select {
+	case idx := <-ch:
+		if idx == nil {
+			idx = emptyFileIndex()
+			idx.addError("media file index failed without result")
+		}
+		return idx
+	case <-timer.C:
+		return indexTimeoutResult(timeout)
+	case <-ctxDone:
+		idx := emptyFileIndex()
+		idx.addError(fmt.Sprintf("media file index canceled: %v", m.ctx.Err()))
+		return idx
+	}
 }
 
 func (m *mediaMatcher) indexErr() error {
@@ -446,10 +468,6 @@ func (m *mediaMatcher) indexErr() error {
 		return nil
 	}
 	return m.index.err()
-}
-
-func fileIndexFlightKey(dirs []string, caseInsensitive bool) string {
-	return fmt.Sprintf("%t\x00%s", caseInsensitive, strings.Join(dirs, "\x00"))
 }
 
 // lookup collects the distinct on-disk paths matching any of the given keys.
@@ -471,10 +489,10 @@ func (m *mediaMatcher) statRootWithTimeout(key string, root *os.Root, name strin
 		return statRootWithTimeout(root, name, m.statTimeout)
 	}
 
-	statFn := func() (os.FileInfo, error) {
-		return mediaRootStat(root, name)
-	}
-	flight, isNew := m.startStatFlight(key, time.Now(), statFn)
+	statFn := mediaRootStat
+	flight, isNew := m.startStatFlight(key, time.Now(), func() (os.FileInfo, error) {
+		return statFn(root, name)
+	})
 	info, err := m.waitStatFlight(flight, isNew)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -488,7 +506,7 @@ func (m *mediaMatcher) statRootWithTimeout(key string, root *os.Root, name strin
 func (m *mediaMatcher) waitStatFlight(flight *statInFlight, isNew bool) (os.FileInfo, error) {
 	timeout := m.statTimeout
 	if timeout <= 0 {
-		timeout = 5 * time.Second
+		timeout = config.DefaultMediaFileCheckStatTimeoutSeconds * time.Second
 	}
 
 	remaining := timeout
@@ -523,10 +541,11 @@ func (m *mediaMatcher) waitStatFlight(flight *statInFlight, isNew bool) (os.File
 func statRootWithTimeout(root *os.Root, name string, timeout time.Duration) (bool, error) {
 	type result struct{ err error }
 	ch := make(chan result, 1)
+	statFn := mediaRootStat
 	go func() {
 		// A frozen mount can leave this goroutine stuck in Stat after the caller
 		// times out; the buffered channel prevents an additional blocked send.
-		_, err := mediaRootStat(root, name)
+		_, err := statFn(root, name)
 		ch <- result{err: err}
 	}()
 
@@ -546,45 +565,6 @@ func statRootWithTimeout(root *os.Root, name string, timeout time.Duration) (boo
 		return false, r.err
 	case <-timer.C:
 		return false, fmt.Errorf("stat timeout after %s", timeout)
-	}
-}
-
-func (m *mediaMatcher) waitIndexFlight(flight *indexInFlight, isNew bool) *fileIndex {
-	timeout := m.indexTimeout
-	if timeout <= 0 {
-		timeout = mediaCheckRunTimeout
-	}
-
-	remaining := timeout
-	if !isNew {
-		remaining = timeout - time.Since(time.Unix(0, flight.startedNano.Load()))
-		if remaining <= 0 {
-			return indexTimeoutResult(timeout)
-		}
-	}
-
-	timer := time.NewTimer(remaining)
-	defer timer.Stop()
-
-	var ctxDone <-chan struct{}
-	if m.ctx != nil {
-		ctxDone = m.ctx.Done()
-	}
-
-	select {
-	case <-flight.done:
-		if flight.index == nil {
-			idx := emptyFileIndex()
-			idx.addError("media file index failed without result")
-			return idx
-		}
-		return flight.index
-	case <-timer.C:
-		return indexTimeoutResult(timeout)
-	case <-ctxDone:
-		idx := emptyFileIndex()
-		idx.addError(fmt.Sprintf("media file index canceled: %v", m.ctx.Err()))
-		return idx
 	}
 }
 

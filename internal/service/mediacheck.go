@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -102,9 +103,6 @@ type MediaFileCheckService struct {
 	statInflightMu sync.Mutex
 	statInflight   map[string]*statInFlight
 
-	indexInflightMu sync.Mutex
-	indexInflight   map[string]*indexInFlight
-
 	publishedMu    sync.RWMutex
 	lastResult     *MediaCheckResult
 	lastScheduled  *MediaCheckResult
@@ -118,12 +116,11 @@ func newMediaFileCheckService(
 	repo *database.Repository, cfg *config.Config, notifySvc *notify.NotificationService,
 ) *MediaFileCheckService {
 	return &MediaFileCheckService{
-		repo:          repo,
-		config:        cfg,
-		notify:        notifySvc,
-		runner:        async.New(),
-		statInflight:  make(map[string]*statInFlight),
-		indexInflight: make(map[string]*indexInFlight),
+		repo:         repo,
+		config:       cfg,
+		notify:       notifySvc,
+		runner:       async.New(),
+		statInflight: make(map[string]*statInFlight),
 	}
 }
 
@@ -204,13 +201,18 @@ func (s *MediaFileCheckService) executeRun(ctx context.Context, opts *database.M
 	}
 	// Workers embed their verdict in results and never return an error, so Wait
 	// only blocks for completion. A run-level failure surfaces as a context error
-	// (timeout/cancel) or an index-build error, in that precedence.
+	// (timeout/cancel), an index-build error, or both when the timeout caused the
+	// index build to be incomplete.
 	_ = g.Wait()
-	if err := ctx.Err(); err != nil {
-		result.Error = err.Error()
-	}
-	if err := matcher.indexErr(); err != nil && result.Error == "" {
-		result.Error = err.Error()
+	ctxErr := ctx.Err()
+	indexErr := matcher.indexErr()
+	switch {
+	case indexErr != nil && ctxErr != nil:
+		result.Error = errors.Join(indexErr, ctxErr).Error()
+	case indexErr != nil:
+		result.Error = indexErr.Error()
+	case ctxErr != nil:
+		result.Error = ctxErr.Error()
 	}
 
 	result.Items = results
@@ -250,19 +252,20 @@ func (s *MediaFileCheckService) buildMatcher(ctx context.Context) (matcher *medi
 	}
 
 	matcher = &mediaMatcher{
-		driveRoots:       driveRoots,
-		searchDirs:       mfc.SearchDirs,
-		caseInsensitive:  mfc.IsCaseInsensitive(),
-		statTimeout:      mfc.StatTimeout(),
-		indexTimeout:     mediaCheckRunTimeout,
-		ctx:              ctx,
-		startStatFlight:  s.startOrJoinMediaStatFlight,
-		startIndexFlight: s.startOrJoinMediaIndexFlight,
+		driveRoots:      driveRoots,
+		searchDirs:      mfc.SearchDirs,
+		caseInsensitive: mfc.IsCaseInsensitive(),
+		statTimeout:     mfc.StatTimeout(),
+		indexTimeout:    mediaCheckRunTimeout,
+		ctx:             ctx,
+		startStatFlight: s.startOrJoinMediaStatFlight,
 	}
 
 	cleanup = func() {
 		for _, rd := range driveRoots {
 			if rd.root != nil {
+				// Timed-out stat goroutines may still be unwinding; ErrClosed from
+				// a post-cleanup os.Root.Stat is expected and safe.
 				if err := rd.root.Close(); err != nil {
 					slog.Debug("Media file check: failed to close drive root", "dir", rd.dir, "error", err)
 				}
@@ -302,40 +305,6 @@ func (s *MediaFileCheckService) startOrJoinMediaStatFlight(
 			delete(s.statInflight, key)
 		}
 		s.statInflightMu.Unlock()
-	}()
-
-	return flight, true
-}
-
-func (s *MediaFileCheckService) startOrJoinMediaIndexFlight(
-	key string,
-	now time.Time,
-	buildFn func() *fileIndex,
-) (*indexInFlight, bool) {
-	s.indexInflightMu.Lock()
-	defer s.indexInflightMu.Unlock()
-
-	if s.indexInflight == nil {
-		s.indexInflight = make(map[string]*indexInFlight)
-	}
-	if existing, ok := s.indexInflight[key]; ok {
-		return existing, false
-	}
-
-	flight := &indexInFlight{done: make(chan struct{})}
-	flight.startedNano.Store(now.UnixNano())
-	s.indexInflight[key] = flight
-
-	go func() {
-		flight.startedNano.Store(time.Now().UnixNano())
-		flight.index = buildFn()
-		close(flight.done)
-
-		s.indexInflightMu.Lock()
-		if s.indexInflight[key] == flight {
-			delete(s.indexInflight, key)
-		}
-		s.indexInflightMu.Unlock()
 	}()
 
 	return flight, true
