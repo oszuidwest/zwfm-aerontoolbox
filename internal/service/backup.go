@@ -30,7 +30,7 @@ type BackupService struct {
 	repo       *database.Repository
 	config     *config.Config
 	backupRoot *os.Root
-	s3         *s3Service // nil if S3 is disabled
+	s3         backupObjectStore // nil if S3 is disabled
 	runner     *async.Runner
 	notify     *notify.NotificationService
 
@@ -93,11 +93,13 @@ func newBackupService(
 		}
 		svc.backupRoot = root
 
-		s3svc, err := newS3Service(&cfg.Backup.S3)
-		if err != nil {
-			return nil, err
+		if cfg.Backup.S3.Enabled {
+			s3svc, err := newS3Service(&cfg.Backup.S3)
+			if err != nil {
+				return nil, err
+			}
+			svc.s3 = s3svc
 		}
-		svc.s3 = s3svc
 	}
 
 	return svc, nil
@@ -116,6 +118,8 @@ func (s *BackupService) Close() {
 
 // BackupRequest selects optional backup parameters.
 type BackupRequest struct {
+	// Compression uses 0 as "use configured default"; explicit pg_dump
+	// compression levels are 1-9 because JSON omission also decodes to 0.
 	Compression int `json:"compression"`
 }
 
@@ -218,14 +222,15 @@ func (s *BackupService) buildPgDumpArgs(compression int) []string {
 	}
 }
 
-// compressionLevel applies the default and validates the 0-9 pg_dump range.
+// compressionLevel applies the default and validates the pg_dump range.
 func (s *BackupService) compressionLevel(requested int) (int, error) {
 	level := requested
 	if level == 0 {
 		level = s.config.Backup.GetDefaultCompression()
 	}
 	if level < 0 || level > 9 {
-		return 0, types.NewValidationError("compression", fmt.Sprintf("invalid compression value: %d (use 0-9)", level))
+		return 0, types.NewValidationError("compression",
+			fmt.Sprintf("invalid compression value: %d (use 0 for default, or 1-9)", level))
 	}
 	return level, nil
 }
@@ -463,6 +468,9 @@ func (s *BackupService) execute(ctx context.Context, req BackupRequest) error {
 		})
 	}
 
+	// Must stay synchronous within the primary runner slot: cleanupOldBackups
+	// schedules its S3 deletes via GoChild, which is only safe while that slot
+	// is still held (so Close waits for them instead of dropping them).
 	s.cleanupOldBackups()
 	return nil
 }
@@ -601,8 +609,8 @@ func (s *BackupService) List() (*BackupListResponse, error) {
 	}, nil
 }
 
-// Delete removes a managed backup locally and schedules remote deletion.
-func (s *BackupService) Delete(filename string) error {
+// removeLocalBackup validates and removes the managed backup file locally.
+func (s *BackupService) removeLocalBackup(filename string) error {
 	if err := s.ensureBackupFile(filename); err != nil {
 		return err
 	}
@@ -612,23 +620,49 @@ func (s *BackupService) Delete(filename string) error {
 	}
 
 	slog.Info("Backup deleted", "filename", filename)
+	return nil
+}
 
-	// Delete from S3 asynchronously. TryGoBackground is used because Delete()
-	// is called from an HTTP handler, not from within an active primary run.
+// Delete removes a managed backup from an HTTP-handler path and schedules the
+// remote deletion as independent background work, warning if shutdown drops it.
+func (s *BackupService) Delete(filename string) error {
+	if err := s.removeLocalBackup(filename); err != nil {
+		return err
+	}
+
 	if s.s3 != nil {
-		if !s.runner.TryGoBackground(func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-
-			if err := s.s3.delete(ctx, filename); err != nil {
-				slog.Warn("Failed to delete S3 backup", "filename", filename, "error", err)
-			}
-		}) {
+		if !s.runner.TryGoBackground(func() { s.deleteS3Backup(filename) }) {
 			slog.Warn("S3 deletion skipped: backup service is closed", "filename", filename)
 		}
 	}
 
 	return nil
+}
+
+// deleteDuringRun removes a managed backup from inside the primary backup run,
+// scheduling the remote deletion as a child so Close waits for it.
+func (s *BackupService) deleteDuringRun(filename string) error {
+	if err := s.removeLocalBackup(filename); err != nil {
+		return err
+	}
+
+	if s.s3 != nil {
+		s.runner.GoChild(func() { s.deleteS3Backup(filename) })
+	}
+
+	return nil
+}
+
+// deleteS3Backup removes one backup object from remote storage. A failure leaves
+// an orphaned remote object (the local copy is already gone), so it is logged at
+// Error for parity with the upload path.
+func (s *BackupService) deleteS3Backup(filename string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := s.s3.delete(ctx, filename); err != nil {
+		slog.Error("Failed to delete S3 backup", "filename", filename, "error", err)
+	}
 }
 
 // ValidationResult is the on-demand backup validation result.
@@ -683,7 +717,7 @@ func (s *BackupService) cleanupOldBackups() {
 
 	for _, backup := range backups.Backups {
 		if backup.CreatedAt.Before(cutoff) {
-			if err := s.Delete(backup.Filename); err != nil {
+			if err := s.deleteDuringRun(backup.Filename); err != nil {
 				slog.Warn("Failed to delete backup (retention)", "filename", backup.Filename, "error", err)
 			} else {
 				deleted++
@@ -699,7 +733,7 @@ func (s *BackupService) cleanupOldBackups() {
 	}
 	if len(backups.Backups) > maxBackups {
 		for i := maxBackups; i < len(backups.Backups); i++ {
-			if err := s.Delete(backups.Backups[i].Filename); err != nil {
+			if err := s.deleteDuringRun(backups.Backups[i].Filename); err != nil {
 				slog.Warn("Failed to delete backup (max_backups)", "filename", backups.Backups[i].Filename, "error", err)
 			} else {
 				deleted++

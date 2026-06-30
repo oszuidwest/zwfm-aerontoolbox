@@ -73,6 +73,8 @@ Wanneer authenticatie is ingeschakeld in de configuratie, vereisen alle endpoint
 
 **Header:** `X-API-Key: jouw-api-sleutel`
 
+Gebruik per omgeving unieke, willekeurig gegenereerde API-sleutels van minimaal 32 bytes entropy (bijvoorbeeld `openssl rand -base64 32`). Hergebruik geen wachtwoorden, woordenboekwoorden of korte gedeelde secrets.
+
 **Response bij ontbrekende autorisatie:**
 ```json
 {
@@ -811,7 +813,7 @@ Een nieuwe databasebackup starten op de achtergrond.
 ```
 
 **Parameters:**
-- `compression` (optioneel): Compressieniveau 0-9 (standaard: 9)
+- `compression` (optioneel): Laat weg of zet op `0` om `backup.default_compression` te gebruiken; expliciete pg_dump-compressieniveaus zijn `1-9`.
 
 **Response:** `202 Accepted`
 ```json

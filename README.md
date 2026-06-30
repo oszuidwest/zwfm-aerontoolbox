@@ -74,6 +74,8 @@ Kopieer [`config.example.json`](config.example.json) naar `config.json`. De bela
 | `notifications` | E-mailmeldingen via Microsoft Graph API |
 | `log` | Logniveau (`debug`, `info`, `warn`, `error`) en formaat (`text`, `json`) |
 
+Gebruik voor `api.keys` per omgeving unieke, willekeurig gegenereerde API-sleutels met minimaal 32 bytes entropy, bijvoorbeeld via `openssl rand -base64 32`.
+
 ### Backupfunctionaliteit
 
 Voor backups heb je `pg_dump` en `pg_restore` nodig op het systeem:
