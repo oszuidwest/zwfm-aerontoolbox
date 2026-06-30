@@ -7,7 +7,6 @@ import (
 	"image"
 	"image/jpeg"
 	"image/png"
-	"math/big"
 
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/util"
@@ -192,8 +191,8 @@ func extractImageInfo(imageData []byte) (*Info, error) {
 func validateImageDimensions(info *Info, config Config) error {
 	if exceedsMaxPixels(info.Width, info.Height, config.MaxPixels) {
 		return types.NewValidationError("dimensions", fmt.Sprintf(
-			"image is too large: %dx%d (%s pixels exceeds maximum %d)",
-			info.Width, info.Height, pixelCountString(info.Width, info.Height), config.MaxPixels))
+			"image is too large: %dx%d (%d pixels exceeds maximum %d)",
+			info.Width, info.Height, int64(info.Width)*int64(info.Height), config.MaxPixels))
 	}
 
 	if config.RejectSmaller && (info.Width < config.TargetWidth || info.Height < config.TargetHeight) {
@@ -211,11 +210,6 @@ func exceedsMaxPixels(width, height int, maxPixels int64) bool {
 		return false
 	}
 	return int64(width) > maxPixels/int64(height)
-}
-
-func pixelCountString(width, height int) string {
-	pixels := new(big.Int).Mul(big.NewInt(int64(width)), big.NewInt(int64(height)))
-	return pixels.String()
 }
 
 // isAlreadyTargetSize returns true if image matches target dimensions exactly.

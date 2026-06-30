@@ -234,15 +234,15 @@ func jpegWithDimensions(t *testing.T, width, height uint16) []byte {
 	t.Helper()
 
 	data := []byte{0xff, 0xd8}
-	sof0 := []byte{
-		8,
-		byte(height >> 8), byte(height),
-		byte(width >> 8), byte(width),
+	sof0 := []byte{8}
+	sof0 = binary.BigEndian.AppendUint16(sof0, height)
+	sof0 = binary.BigEndian.AppendUint16(sof0, width)
+	sof0 = append(sof0,
 		3,
 		1, 0x11, 0,
 		2, 0x11, 0,
 		3, 0x11, 0,
-	}
+	)
 	data = appendJPEGMarker(data, 0xc0, sof0)
 	sos := []byte{
 		3,
