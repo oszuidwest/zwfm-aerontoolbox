@@ -103,6 +103,9 @@ func TestAPIConfigDefaults(t *testing.T) {
 	if got, want := cfg.GetRequestTimeout(), 30*time.Second; got != want {
 		t.Errorf("GetRequestTimeout() = %s, want %s", got, want)
 	}
+	if got, want := cfg.GetUploadReadTimeout(), 180*time.Second; got != want {
+		t.Errorf("GetUploadReadTimeout() = %s, want %s", got, want)
+	}
 	if got, want := cfg.GetReadTimeout(), 30*time.Second; got != want {
 		t.Errorf("GetReadTimeout() = %s, want %s", got, want)
 	}
@@ -119,26 +122,30 @@ func TestAPIConfigDefaults(t *testing.T) {
 
 func TestAPIConfigRespectsConfiguredValues(t *testing.T) {
 	cfg := &APIConfig{
-		RequestTimeoutSeconds: 11,
-		ReadTimeoutSeconds:    12,
-		WriteTimeoutSeconds:   13,
-		IdleTimeoutSeconds:    14,
-		MaxUploadBodyBytes:    15,
+		RequestTimeoutSeconds:    11,
+		UploadReadTimeoutSeconds: 12,
+		ReadTimeoutSeconds:       13,
+		WriteTimeoutSeconds:      14,
+		IdleTimeoutSeconds:       15,
+		MaxUploadBodyBytes:       16,
 	}
 
 	if got, want := cfg.GetRequestTimeout(), 11*time.Second; got != want {
 		t.Errorf("GetRequestTimeout() = %s, want %s", got, want)
 	}
-	if got, want := cfg.GetReadTimeout(), 12*time.Second; got != want {
+	if got, want := cfg.GetUploadReadTimeout(), 12*time.Second; got != want {
+		t.Errorf("GetUploadReadTimeout() = %s, want %s", got, want)
+	}
+	if got, want := cfg.GetReadTimeout(), 13*time.Second; got != want {
 		t.Errorf("GetReadTimeout() = %s, want %s", got, want)
 	}
-	if got, want := cfg.GetWriteTimeout(), 13*time.Second; got != want {
+	if got, want := cfg.GetWriteTimeout(), 14*time.Second; got != want {
 		t.Errorf("GetWriteTimeout() = %s, want %s", got, want)
 	}
-	if got, want := cfg.GetIdleTimeout(), 14*time.Second; got != want {
+	if got, want := cfg.GetIdleTimeout(), 15*time.Second; got != want {
 		t.Errorf("GetIdleTimeout() = %s, want %s", got, want)
 	}
-	if got, want := cfg.GetMaxUploadBodyBytes(), int64(15); got != want {
+	if got, want := cfg.GetMaxUploadBodyBytes(), int64(16); got != want {
 		t.Errorf("GetMaxUploadBodyBytes() = %d, want %d", got, want)
 	}
 }
@@ -152,6 +159,12 @@ func TestAPIConfigValidationRejectsNegativeValues(t *testing.T) {
 			name: "negative request timeout",
 			mutate: func(cfg *Config) {
 				cfg.API.RequestTimeoutSeconds = -1
+			},
+		},
+		{
+			name: "negative upload read timeout",
+			mutate: func(cfg *Config) {
+				cfg.API.UploadReadTimeoutSeconds = -1
 			},
 		},
 		{

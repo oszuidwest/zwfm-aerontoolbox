@@ -23,6 +23,7 @@
     "enabled": false,
     "keys": [],
     "request_timeout_seconds": 30,
+    "upload_read_timeout_seconds": 180,
     "read_timeout_seconds": 30,
     "write_timeout_seconds": 60,
     "idle_timeout_seconds": 120,

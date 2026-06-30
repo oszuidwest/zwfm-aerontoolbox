@@ -2,6 +2,8 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"time"
@@ -10,6 +12,8 @@ import (
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/service"
 )
 
+const maxCreateBackupBodyBytes = 1 << 20
+
 // BackupDeleteResponse is returned after a backup file is deleted.
 type BackupDeleteResponse struct {
 	Message  string `json:"message"`
@@ -17,8 +21,16 @@ type BackupDeleteResponse struct {
 }
 
 func (s *Server) handleCreateBackup(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxCreateBackupBodyBytes)
+
 	var req service.BackupRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err.Error() != "EOF" {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			respondError(w, http.StatusRequestEntityTooLarge, "Request body too large")
+			return
+		}
+		slog.Warn("Invalid backup request content", "path", r.URL.Path, "remote_addr", r.RemoteAddr, "error", err)
 		respondError(w, http.StatusBadRequest, "Invalid request content")
 		return
 	}
@@ -70,7 +82,9 @@ func (s *Server) handleDownloadBackupFile(w http.ResponseWriter, r *http.Request
 	// Backup downloads can exceed the global WriteTimeout. Clear the socket
 	// write deadline so slow clients do not receive silently truncated dumps.
 	if err := http.NewResponseController(w).SetWriteDeadline(time.Time{}); err != nil {
-		slog.Warn("Could not clear write deadline for backup download", "filename", filename, "error", err)
+		slog.Warn("Could not clear write deadline for backup download; download may be truncated by WriteTimeout",
+			"filename", filename,
+			"error", err)
 	}
 
 	http.ServeContent(w, r, filename, info.ModTime(), file)
