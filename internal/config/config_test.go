@@ -99,7 +99,7 @@ func TestInterval_ZeroFallsBackToDefault(t *testing.T) {
 
 func TestImageConfigMaxPixels(t *testing.T) {
 	cfg := &ImageConfig{}
-	if got, want := cfg.GetMaxPixels(), int64(DefaultMaxImagePixels); got != want {
+	if got, want := cfg.GetMaxPixels(), int64(DefaultMaxPixels); got != want {
 		t.Errorf("GetMaxPixels() = %d, want %d", got, want)
 	}
 

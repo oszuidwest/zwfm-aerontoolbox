@@ -7,6 +7,7 @@ import (
 	"image"
 	"image/jpeg"
 	"image/png"
+	"math/big"
 
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/util"
@@ -191,25 +192,30 @@ func extractImageInfo(imageData []byte) (*Info, error) {
 func validateImageDimensions(info *Info, config Config) error {
 	if exceedsMaxPixels(info.Width, info.Height, config.MaxPixels) {
 		return types.NewValidationError("dimensions", fmt.Sprintf(
-			"image is too large: %dx%d (maximum %d pixels)",
-			info.Width, info.Height, config.MaxPixels))
+			"image is too large: %dx%d (%s pixels exceeds maximum %d)",
+			info.Width, info.Height, pixelCountString(info.Width, info.Height), config.MaxPixels))
 	}
 
 	if config.RejectSmaller && (info.Width < config.TargetWidth || info.Height < config.TargetHeight) {
-		return &types.ValidationError{
-			Field: "dimensions",
-			Message: fmt.Sprintf("image is too small: %dx%d (minimum %dx%d required)",
-				info.Width, info.Height, config.TargetWidth, config.TargetHeight),
-		}
+		return types.NewValidationError("dimensions", fmt.Sprintf(
+			"image is too small: %dx%d (minimum %dx%d required)",
+			info.Width, info.Height, config.TargetWidth, config.TargetHeight))
 	}
 	return nil
 }
 
+// exceedsMaxPixels reports whether width*height exceeds maxPixels, rearranged
+// as division so the product cannot overflow int64 for hostile dimensions.
 func exceedsMaxPixels(width, height int, maxPixels int64) bool {
 	if maxPixels <= 0 || width <= 0 || height <= 0 {
 		return false
 	}
 	return int64(width) > maxPixels/int64(height)
+}
+
+func pixelCountString(width, height int) string {
+	pixels := new(big.Int).Mul(big.NewInt(int64(width)), big.NewInt(int64(height)))
+	return pixels.String()
 }
 
 // isAlreadyTargetSize returns true if image matches target dimensions exactly.

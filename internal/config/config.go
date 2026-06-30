@@ -243,7 +243,7 @@ const (
 	DefaultMaxIdleConnections          = 5
 	DefaultConnMaxLifetimeMinutes      = 5
 	DefaultMaxImageDownloadSizeBytes   = 50 * 1024 * 1024
-	DefaultMaxImagePixels              = 25_000_000
+	DefaultMaxPixels                   = 25_000_000
 	DefaultRequestTimeoutSeconds       = 30
 	DefaultBloatThreshold              = 10.0
 	DefaultDeadTupleThreshold          = 10000
@@ -268,7 +268,7 @@ func (c *ImageConfig) GetMaxDownloadBytes() int64 {
 
 // GetMaxPixels returns the decoded image pixel cap or its default.
 func (c *ImageConfig) GetMaxPixels() int64 {
-	return cmp.Or(c.MaxPixels, DefaultMaxImagePixels)
+	return cmp.Or(c.MaxPixels, DefaultMaxPixels)
 }
 
 // GetRequestTimeout returns the configured HTTP timeout or its default.

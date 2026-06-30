@@ -14,7 +14,7 @@
   - [Playlist-endpoints](#playlist-endpoints)
   - [Database onderhoud](#database-onderhoud)
   - [Backup-endpoints](#backup-endpoints)
-  - [Bestandscontrole](#bestandscontrole)
+  - [Bestandsbewaking](#bestandsbewaking)
   - [Aanwezigheidscontrole](#aanwezigheidscontrole)
   - [Notificaties](#notificaties)
 - [Codevoorbeelden](#codevoorbeelden)
@@ -51,9 +51,9 @@ De Aeron Toolbox API biedt RESTful-endpoints voor het Aeron-radioautomatiserings
 | `/api/playlist?block_id={id}` | GET | Tracks in playlistblok | Ja |
 | **Database onderhoud** |
 | `/api/db/maintenance/health` | GET | Database health en statistieken | Ja |
-| **Bestandscontrole** |
-| `/api/file-monitor/status` | GET | Status bestandscontrole | Ja |
-| `/api/file-monitor/check` | POST | Handmatige bestandscontrole starten | Ja |
+| **Bestandsbewaking** |
+| `/api/file-monitor/status` | GET | Status bestandsbewaking | Ja |
+| `/api/file-monitor/check` | POST | Handmatige controle starten | Ja |
 | **Aanwezigheidscontrole** |
 | `/api/media/files/check` | POST | Controle op ontbrekende audiobestanden starten | Ja |
 | `/api/media/files/check/status` | GET | Resultaat van de aanwezigheidscontrole | Ja |
@@ -175,8 +175,8 @@ Het `notifications`-veld is altijd aanwezig en toont:
   - `days_left`: Aantal resterende dagen
   - `error`: Foutmelding bij ophalen (bijv. onvoldoende rechten)
 
-Het `file_monitor`-veld is alleen aanwezig wanneer de bestandscontrole is ingeschakeld en toont:
-- `enabled`: Of de bestandscontrole is geconfigureerd
+Het `file_monitor`-veld is alleen aanwezig wanneer de bestandsbewaking is ingeschakeld en toont:
+- `enabled`: Of de bestandsbewaking is geconfigureerd
 - `checks_total`: Totaal aantal geconfigureerde checks
 - `checks_stale`: Ruwe telling van bestanden die te oud zijn of niet bereikbaar zijn (inclusief buiten `active_window`)
 - `checks_alerting`: Window-aware telling; bestanden buiten hun `active_window` tellen hier niet mee
@@ -190,7 +190,7 @@ De `status`-waarden hebben een vaste prioriteitsvolgorde: `"unhealthy"` > `"degr
 | `checks_alerting` groter dan `0` | `"degraded"` |
 | Geen van bovenstaande | `"healthy"` |
 
-Een database-uitval overschrijft altijd een eventueel `"degraded"`-signaal van notificaties of de bestandscontrole.
+Een database-uitval overschrijft altijd een eventueel `"degraded"`-signaal van notificaties of de bestandsbewaking.
 
 ---
 
@@ -1075,18 +1075,18 @@ Validatie gebeurt via `pg_restore --list` die de TOC en interne checksums contro
 
 ---
 
-## Bestandscontrole
+## Bestandsbewaking
 
-De bestandscontrole bewaakt bestanden op schijf en signaleert wanneer ze ouder zijn dan een geconfigureerde maximale leeftijd. Dit is handig om mislukte downloads of updates vanuit externe processen te detecteren, zoals nieuwsbulletins of weerberichten.
+De bestandsbewaking houdt bestanden op schijf in de gaten en signaleert wanneer ze ouder zijn dan een geconfigureerde maximale leeftijd. Dit is handig om mislukte downloads of updates vanuit externe processen te detecteren, zoals nieuwsbulletins of weerberichten.
 
 Controles draaien automatisch met een vast interval. Standaard is dat 60 seconden; dit is aan te passen via `file_monitor.interval_seconds`. Na een herstart geldt de eerste controle als een "grace run": de resultaten worden wel gemeten, maar er worden nog geen notificaties verstuurd. Zo voorkom je valse alarmen.
 
 > [!IMPORTANT]
 > **Breaking change:** het veld `interval_minutes` in de statusresponse is vervangen door `interval_seconds`. Externe afnemers moeten de nieuwe veldnaam gebruiken.
 
-### Status van de bestandscontrole
+### Status van de bestandsbewaking
 
-Toont de resultaten van de meest recente bestandscontrole, plus de huidige runstatus.
+Toont de resultaten van de meest recente controle, plus de huidige runstatus.
 
 **Endpoint:** `GET /api/file-monitor/status`
 **Authenticatie:** Vereist
@@ -1212,9 +1212,9 @@ De volgende voorbeelden tonen losse items uit de `checks`-array voor specifieke 
 > [!NOTE]
 > Het veld `file_exists` is nullable: `true` = bestand bestaat, `false` = bestand niet gevonden, `null` = onbekend (bijvoorbeeld bij een permissiefout). Gebruik het veld `error` voor details als `file_exists` `null` is.
 
-### Handmatig een bestandscontrole starten
+### Handmatig een controle starten
 
-Start een bestandscontrole op de achtergrond. Handig tijdens configuratie of storingsonderzoek, zodat operators niet hoeven te wachten op de volgende geplande controle.
+Start een controle op de achtergrond. Handig tijdens configuratie of storingsonderzoek, zodat operators niet hoeven te wachten op de volgende geplande controle.
 
 **Endpoint:** `POST /api/file-monitor/check`
 **Authenticatie:** Vereist
@@ -1252,9 +1252,9 @@ De handmatige trigger en de cronjob gebruiken dezelfde single-flight gate. Daard
 
 Strikte gelijkheid (`completed_run_id == myRunID`) bevestigt dat de zichtbare `checks` exact door jouw run zijn geproduceerd. Een hogere waarde betekent dat een latere run, bijvoorbeeld via cron, jouw run heeft ingehaald. Dat is prima voor de vraag "is het systeem nu gezond?", maar verliest de exacte correlatie. Gebruik voor nauwkeurige troubleshooting daarom de strikte vergelijking en houd rekening met een mogelijke race.
 
-### Integratie met het health-endpoint (bestandscontrole)
+### Integratie met het health-endpoint (bestandsbewaking)
 
-Als de bestandscontrole is ingeschakeld, geeft het health-endpoint (`GET /api/health`) een extra `file_monitor`-blok terug:
+Als de bestandsbewaking is ingeschakeld, geeft het health-endpoint (`GET /api/health`) een extra `file_monitor`-blok terug:
 
 ```json
 {
@@ -1278,7 +1278,7 @@ Als de bestandscontrole is ingeschakeld, geeft het health-endpoint (`GET /api/he
 
 ## Aanwezigheidscontrole
 
-Waar de [bestandscontrole](#bestandscontrole) een vaste lijst configuratiebestanden bewaakt, werkt de aanwezigheidscontrole **op basis van de database**: hij leest de playlist uit de Aeron-database en controleert of de bijbehorende audiobestanden daadwerkelijk op schijf staan. Zo signaleer je ontbrekende of verplaatste tracks voordat ze worden uitgezonden.
+Waar de [bestandsbewaking](#bestandsbewaking) een vaste lijst configuratiebestanden in de gaten houdt, werkt de aanwezigheidscontrole **op basis van de database**: hij leest de playlist uit de Aeron-database en controleert of de bijbehorende audiobestanden daadwerkelijk op schijf staan. Zo signaleer je ontbrekende of verplaatste tracks voordat ze worden uitgezonden.
 
 De controle draait asynchroon: een `POST` start een run op de achtergrond en geeft direct een `run_id` terug; het resultaat lees je op met `GET .../status`.
 
@@ -1749,8 +1749,8 @@ Het gedrag van de API kan worden geconfigureerd via `config.json`:
 - `image.max_image_download_size_bytes`: Maximale downloadgrootte voor externe image-URL's (standaard 52428800, 50 MiB).
 - `image.max_pixels`: Maximale gedecodeerde afbeeldingsgrootte in pixels vóór optimalisatie (standaard 25000000). Grotere afbeeldingen worden na `DecodeConfig` afgewezen voordat de volledige pixelbuffer wordt gedecodeerd.
 
-**Instellingen voor bestandscontrole:**
-- `file_monitor.enabled`: Schakel de bestandscontrole in.
+**Instellingen voor bestandsbewaking:**
+- `file_monitor.enabled`: Schakel de bestandsbewaking in.
 - `file_monitor.interval_seconds`: Pollinginterval in seconden (standaard 60; `0` of weglaten = standaard).
 - `file_monitor.checks`: Array met te bewaken bestanden (minimaal 1 item vereist wanneer ingeschakeld).
   - `name`: Optionele weergavenaam voor notificaties.
