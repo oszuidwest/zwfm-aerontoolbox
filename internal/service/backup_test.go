@@ -80,6 +80,62 @@ func TestBackupServiceOpenFileRejectsInvalidFilename(t *testing.T) {
 	}
 }
 
+func TestBackupServiceOpenFileRejectsNonBackupNames(t *testing.T) {
+	backupPath := t.TempDir()
+	for _, filename := range []string{
+		"notaprefix.dump",
+		"aeron-backup-2026-01-02-030405.txt",
+	} {
+		if err := os.WriteFile(filepath.Join(backupPath, filename), []byte("backup-data"), 0o600); err != nil {
+			t.Fatalf("write backup file %q: %v", filename, err)
+		}
+	}
+
+	svc := newBackupTestService(t, backupPath)
+	t.Cleanup(svc.Close)
+
+	for _, filename := range []string{
+		"notaprefix.dump",
+		"aeron-backup-2026-01-02-030405.txt",
+	} {
+		t.Run(filename, func(t *testing.T) {
+			file, _, err := svc.OpenFile(filename)
+			if file != nil {
+				_ = file.Close()
+			}
+			if err == nil {
+				t.Fatal("OpenFile accepted non-backup filename")
+			}
+			var validationErr *types.ValidationError
+			if !errors.As(err, &validationErr) {
+				t.Fatalf("OpenFile error = %T %[1]v, want *types.ValidationError", err)
+			}
+		})
+	}
+}
+
+func TestBackupServiceOpenFileRejectsDirectory(t *testing.T) {
+	backupPath := t.TempDir()
+	if err := os.Mkdir(filepath.Join(backupPath, testBackupFilename), 0o700); err != nil {
+		t.Fatalf("create backup directory: %v", err)
+	}
+
+	svc := newBackupTestService(t, backupPath)
+	t.Cleanup(svc.Close)
+
+	file, _, err := svc.OpenFile(testBackupFilename)
+	if file != nil {
+		_ = file.Close()
+	}
+	if err == nil {
+		t.Fatal("OpenFile accepted directory named like a backup")
+	}
+	var validationErr *types.ValidationError
+	if !errors.As(err, &validationErr) {
+		t.Fatalf("OpenFile error = %T %[1]v, want *types.ValidationError", err)
+	}
+}
+
 func TestBackupServiceOpenFileRejectsSymlinkEscape(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation requires elevated privileges on many Windows systems")

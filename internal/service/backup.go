@@ -176,7 +176,9 @@ func validateBackupFilename(filename string) error {
 	return nil
 }
 
-func (s *BackupService) validateBackupFileName(filename string) error {
+// checkBackupAccess verifies backup support is enabled and filename names a
+// managed backup file.
+func (s *BackupService) checkBackupAccess(filename string) error {
 	if err := s.checkEnabled(); err != nil {
 		return err
 	}
@@ -190,7 +192,7 @@ func (s *BackupService) validateBackupFileName(filename string) error {
 // confirms the file is present. A missing file maps to NotFoundError; any other
 // stat error (e.g. permission denied) maps to OperationError.
 func (s *BackupService) ensureBackupFile(filename string) error {
-	if err := s.validateBackupFileName(filename); err != nil {
+	if err := s.checkBackupAccess(filename); err != nil {
 		return err
 	}
 	if _, err := s.backupRoot.Stat(filename); err != nil {
@@ -230,7 +232,7 @@ func (s *BackupService) compressionLevel(requested int) (int, error) {
 
 // OpenFile opens a managed backup file through the backup root.
 func (s *BackupService) OpenFile(filename string) (*os.File, os.FileInfo, error) {
-	if err := s.validateBackupFileName(filename); err != nil {
+	if err := s.checkBackupAccess(filename); err != nil {
 		return nil, nil, err
 	}
 
@@ -257,6 +259,8 @@ func (s *BackupService) OpenFile(filename string) (*os.File, os.FileInfo, error)
 
 // validateBackupFile checks backup integrity with pg_restore --list.
 func (s *BackupService) validateBackupFile(ctx context.Context, file *os.File) error {
+	// pg_restore inherits the current file offset from stdin, so rewind before
+	// validating in case a future caller has already read from the handle.
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return types.NewOperationError("backup validation", fmt.Errorf("seek file: %w", err))
 	}
@@ -275,14 +279,14 @@ func (s *BackupService) validateBackupFile(ctx context.Context, file *os.File) e
 	return nil
 }
 
-func (s *BackupService) validateManagedBackupFile(ctx context.Context, filename string) (err error) {
+func (s *BackupService) validateManagedBackupFile(ctx context.Context, filename string) error {
 	file, _, err := s.OpenFile(filename)
 	if err != nil {
 		return err
 	}
 	defer func() {
-		if closeErr := file.Close(); closeErr != nil && err == nil {
-			err = types.NewOperationError("backup validation", fmt.Errorf("close file: %w", closeErr))
+		if closeErr := file.Close(); closeErr != nil {
+			slog.Warn("Failed to close backup validation file", "filename", filename, "error", closeErr)
 		}
 	}()
 
@@ -472,14 +476,14 @@ func (s *BackupService) Status() *BackupStatus {
 	return &status
 }
 
-func (s *BackupService) uploadBackupToS3(ctx context.Context, filename string) (err error) {
+func (s *BackupService) uploadBackupToS3(ctx context.Context, filename string) error {
 	file, _, err := s.OpenFile(filename)
 	if err != nil {
 		return err
 	}
 	defer func() {
-		if closeErr := file.Close(); closeErr != nil && err == nil {
-			err = types.NewOperationError("S3 upload", fmt.Errorf("close file: %w", closeErr))
+		if closeErr := file.Close(); closeErr != nil {
+			slog.Warn("Failed to close backup upload file", "filename", filename, "error", closeErr)
 		}
 	}()
 
