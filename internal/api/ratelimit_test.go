@@ -173,7 +173,7 @@ func TestAPIRateLimiterAllowConcurrent(t *testing.T) {
 	}
 }
 
-func TestRateLimitMiddlewareSkipsPublicHealthPaths(t *testing.T) {
+func TestRateLimitMiddlewareSkipsAPIHealthPath(t *testing.T) {
 	t.Parallel()
 
 	now := time.Unix(1_700_000_000, 0)
@@ -185,21 +185,15 @@ func TestRateLimitMiddlewareSkipsPublicHealthPaths(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 
-	for _, path := range []string{"/health", "/api/health"} {
-		t.Run(path, func(t *testing.T) {
-			t.Parallel()
+	for range 2 {
+		req := httptest.NewRequest(http.MethodGet, "/api/health", http.NoBody)
+		rec := httptest.NewRecorder()
 
-			for range 2 {
-				req := httptest.NewRequest(http.MethodGet, path, http.NoBody)
-				rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
 
-				handler.ServeHTTP(rec, req)
-
-				if rec.Code != http.StatusNoContent {
-					t.Fatalf("status code = %d, want %d; body: %s", rec.Code, http.StatusNoContent, rec.Body.String())
-				}
-			}
-		})
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("status code = %d, want %d; body: %s", rec.Code, http.StatusNoContent, rec.Body.String())
+		}
 	}
 }
 

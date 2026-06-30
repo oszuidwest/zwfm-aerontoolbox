@@ -139,7 +139,7 @@ func (s *Server) router() http.Handler {
 }
 
 func isPublicHealthPath(path string) bool {
-	return path == "/health" || path == "/api/health"
+	return path == "/api/health"
 }
 
 // Shutdown gracefully stops the active HTTP server. It is a no-op before Start.
