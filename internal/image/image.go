@@ -190,11 +190,9 @@ func extractImageInfo(imageData []byte) (*Info, error) {
 // validateImageDimensions checks minimum and maximum size requirements.
 func validateImageDimensions(info *Info, config Config) error {
 	if exceedsMaxPixels(info.Width, info.Height, config.MaxPixels) {
-		return &types.ValidationError{
-			Field: "dimensions",
-			Message: fmt.Sprintf("image is too large: %dx%d (maximum %d pixels)",
-				info.Width, info.Height, config.MaxPixels),
-		}
+		return types.NewValidationError("dimensions", fmt.Sprintf(
+			"image is too large: %dx%d (maximum %d pixels)",
+			info.Width, info.Height, config.MaxPixels))
 	}
 
 	if config.RejectSmaller && (info.Width < config.TargetWidth || info.Height < config.TargetHeight) {
