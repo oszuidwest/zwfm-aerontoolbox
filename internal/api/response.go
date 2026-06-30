@@ -33,13 +33,25 @@ func respondJSON(w http.ResponseWriter, statusCode int, data any) {
 }
 
 func respondError(w http.ResponseWriter, statusCode int, errorMsg string) {
+	clientMsg := clientErrorMessage(statusCode, errorMsg)
+	if statusCode >= http.StatusInternalServerError && errorMsg != "" && errorMsg != clientMsg {
+		slog.Error("API internal error", "status", statusCode, "error", errorMsg)
+	}
+
 	w.WriteHeader(statusCode)
 	if err := json.NewEncoder(w).Encode(Response{
 		Success: false,
-		Error:   errorMsg,
+		Error:   clientMsg,
 	}); err != nil {
 		slog.Debug("Failed to write error response to client", "error", err)
 	}
+}
+
+func clientErrorMessage(statusCode int, errorMsg string) string {
+	if statusCode >= http.StatusInternalServerError {
+		return http.StatusText(statusCode)
+	}
+	return errorMsg
 }
 
 func errorCode(err error) int {
