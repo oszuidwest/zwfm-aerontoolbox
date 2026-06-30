@@ -191,6 +191,18 @@ func TestAPIConfigValidationRejectsNegativeValues(t *testing.T) {
 				cfg.API.MaxUploadBodyBytes = -1
 			},
 		},
+		{
+			name: "negative rate limit requests",
+			mutate: func(cfg *Config) {
+				cfg.API.RateLimitRequests = -1
+			},
+		},
+		{
+			name: "negative rate limit window",
+			mutate: func(cfg *Config) {
+				cfg.API.RateLimitWindowSeconds = -1
+			},
+		},
 	}
 
 	for _, tt := range tests {

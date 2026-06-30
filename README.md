@@ -76,7 +76,7 @@ Kopieer [`config.example.json`](config.example.json) naar `config.json`. De bela
 
 Gebruik voor `api.keys` per omgeving unieke, willekeurig gegenereerde API-sleutels met minimaal 32 bytes entropie, bijvoorbeeld via `openssl rand -base64 32`.
 
-Voor rate limiting kun je `api.rate_limit_enabled` aanzetten. `rate_limit_requests` requests per `rate_limit_window_seconds` worden dan toegestaan per API-sleutel, of per remote adres wanneer geen sleutel is meegestuurd.
+Voor rate limiting kun je `api.rate_limit_enabled` aanzetten. `rate_limit_requests` requests per `rate_limit_window_seconds` worden dan toegestaan per API-sleutel, of per direct peer-adres (`RemoteAddr`) wanneer geen geldige sleutel is meegestuurd. Achter een reverse proxy die client-IP's verbergt, delen alle unauthenticated requests achter die proxy dus één budget.
 
 ### Backupfunctionaliteit
 
@@ -138,7 +138,7 @@ Test de configuratie via `POST /api/notifications/test-email`.
 
 ```bash
 # Health check
-curl http://localhost:8080/api/health
+curl http://localhost:8080/health
 
 # Artiestafbeelding uploaden (via URL)
 curl -X POST http://localhost:8080/api/artists/{id}/image \

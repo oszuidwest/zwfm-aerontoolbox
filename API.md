@@ -31,7 +31,7 @@ De Aeron Toolbox API biedt RESTful-endpoints voor het Aeron-radioautomatiserings
 | Endpoint | Methode | Beschrijving | Auth |
 |----------|---------|--------------|------|
 | **Algemeen** |
-| `/api/health` | GET | API-status controleren | Nee |
+| `/health` (`/api/health`) | GET | API-status controleren | Nee |
 | **Artiesten** |
 | `/api/artists` | GET | Statistieken over artiesten | Ja |
 | `/api/artists/{id}` | GET | Specifieke artiest ophalen | Ja |
@@ -69,13 +69,13 @@ De Aeron Toolbox API biedt RESTful-endpoints voor het Aeron-radioautomatiserings
 
 ## Authenticatie
 
-Wanneer authenticatie is ingeschakeld in de configuratie, vereisen alle endpoints (behalve `GET /api/health`) een API-sleutel.
+Wanneer authenticatie is ingeschakeld in de configuratie, vereisen alle endpoints (behalve `GET /health` en `GET /api/health`) een API-sleutel.
 
 **Header:** `X-API-Key: jouw-api-sleutel`
 
 Gebruik per omgeving unieke, willekeurig gegenereerde API-sleutels van minimaal 32 bytes entropie (bijvoorbeeld `openssl rand -base64 32`). Hergebruik geen wachtwoorden, woordenboekwoorden of korte gedeelde secrets.
 
-Optionele rate limiting kan worden ingeschakeld met `api.rate_limit_enabled`. De limiter telt per API-sleutel, of per remote adres wanneer geen sleutel is meegestuurd.
+Optionele rate limiting kan worden ingeschakeld met `api.rate_limit_enabled`. De limiter telt per API-sleutel, of per direct peer-adres (`RemoteAddr`) wanneer geen geldige sleutel is meegestuurd. Achter een reverse proxy die client-IP's verbergt, delen alle unauthenticated requests achter die proxy dus één budget.
 
 **Response bij ontbrekende autorisatie:**
 ```json
@@ -138,8 +138,10 @@ Alle fouten volgen dit formaat:
 
 Controleer de status van de API.
 
-**Endpoint:** `GET /api/health`
+**Endpoint:** `GET /health` (ook beschikbaar als `GET /api/health` voor compatibiliteit)
 **Authenticatie:** Niet vereist
+
+Deze publieke health-route wordt niet rate-limited.
 
 **Response:** `200 OK`
 ```json
@@ -1256,7 +1258,7 @@ Strikte gelijkheid (`completed_run_id == myRunID`) bevestigt dat de zichtbare `c
 
 ### Integratie met het health-endpoint (bestandsbewaking)
 
-Als de bestandsbewaking is ingeschakeld, geeft het health-endpoint (`GET /api/health`) een extra `file_monitor`-blok terug:
+Als de bestandsbewaking is ingeschakeld, geeft het health-endpoint (`GET /health`, ook beschikbaar als `GET /api/health`) een extra `file_monitor`-blok terug:
 
 ```json
 {
@@ -1428,7 +1430,7 @@ Met `media_file_check.scheduler` draait de controle automatisch op een cron-sche
 
 ### Integratie met het health-endpoint (aanwezigheidscontrole)
 
-Als de aanwezigheidscontrole is ingeschakeld, geeft `GET /api/health` een extra `media_file_check`-blok terug:
+Als de aanwezigheidscontrole is ingeschakeld, geeft `GET /health` (ook beschikbaar als `GET /api/health`) een extra `media_file_check`-blok terug:
 
 ```json
 {
@@ -1771,6 +1773,9 @@ Het gedrag van de API kan worden geconfigureerd via `config.json`:
 - `api.idle_timeout_seconds`: Maximale idle tijd voor keep-alive verbindingen (standaard 120).
 - `api.max_upload_body_bytes`: Maximale JSON request-body voor image upload endpoints
   (standaard 73400320, ongeveer 70 MiB).
+- `api.rate_limit_enabled`: Schakel fixed-window rate limiting in voor API-endpoints behalve de publieke health-route.
+- `api.rate_limit_requests`: Aantal toegestane requests per bucket per window (standaard 120).
+- `api.rate_limit_window_seconds`: Lengte van het rate-limitwindow in seconden (standaard 60).
 
 Voor deze API-instellingen betekent `0` of weglaten: gebruik de applicatiestandaard. Het betekent dus niet "onbeperkt".
 
@@ -1782,7 +1787,7 @@ Voor deze API-instellingen betekent `0` of weglaten: gebruik de applicatiestanda
   - `path`: Absoluut pad naar het bestand.
   - `max_age_minutes`: Maximaal toegestane leeftijd in minuten (minimaal 1).
   - `stat_timeout_seconds`: Maximale tijd in seconden voor `os.Stat` (standaard 5; `0` of weglaten = standaard). Beschermt tegen vastgelopen NFS- of SMB-mounts.
-  - `active_window`: Optioneel tijdvenster `"HH:MM-HH:MM"` waarin alerts en `GET /api/health`-degradatie actief zijn. Buiten dit venster blijft `is_stale` zichtbaar in `GET /api/file-monitor/status`, maar wordt er geen alert- of herstelmail verstuurd en blijft `GET /api/health` gezond. Een eindtijd vóór de starttijd betekent dat het venster over middernacht heen loopt, bijvoorbeeld `"22:00-06:00"`. Gelijke start- en eindtijd zijn ongeldig; laat het veld weg voor altijd actief.
+  - `active_window`: Optioneel tijdvenster `"HH:MM-HH:MM"` waarin alerts en health-degradatie actief zijn. Buiten dit venster blijft `is_stale` zichtbaar in `GET /api/file-monitor/status`, maar wordt er geen alert- of herstelmail verstuurd en blijft `GET /health` (`GET /api/health`) gezond. Een eindtijd vóór de starttijd betekent dat het venster over middernacht heen loopt, bijvoorbeeld `"22:00-06:00"`. Gelijke start- en eindtijd zijn ongeldig; laat het veld weg voor altijd actief.
 
 Het controle-interval staat los van `max_age_minutes` en wordt geconfigureerd via `interval_seconds` (standaard 60 s).
 

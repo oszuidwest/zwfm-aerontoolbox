@@ -3,6 +3,7 @@ package api
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"log/slog"
 	"math"
 	"net"
 	"net/http"
@@ -15,8 +16,8 @@ import (
 
 type rateLimitState struct {
 	windowStart time.Time
-	lastSeen    time.Time
 	count       int
+	denyLogged  bool
 }
 
 type apiRateLimiter struct {
@@ -39,7 +40,7 @@ func newAPIRateLimiter(cfg *config.APIConfig) *apiRateLimiter {
 	}
 }
 
-func (l *apiRateLimiter) allow(key string) (bool, time.Duration) {
+func (l *apiRateLimiter) allow(key string) (bool, time.Duration, bool) {
 	now := l.now()
 
 	l.mu.Lock()
@@ -49,17 +50,25 @@ func (l *apiRateLimiter) allow(key string) (bool, time.Duration) {
 	if st.windowStart.IsZero() || now.Sub(st.windowStart) >= l.window {
 		st = rateLimitState{windowStart: now}
 	}
-	st.lastSeen = now
 
-	if st.count >= l.limit {
-		l.clients[key] = st
-		return false, st.windowStart.Add(l.window).Sub(now)
+	allowed := st.count < l.limit
+	var retryAfter time.Duration
+	var logDenied bool
+	if allowed {
+		st.count++
+	} else {
+		logDenied = !st.denyLogged
+		st.denyLogged = true
+		retryAfter = st.windowStart.Add(l.window).Sub(now)
 	}
 
-	st.count++
 	l.clients[key] = st
+	if !allowed {
+		return false, retryAfter, logDenied
+	}
+
 	l.cleanupLocked(now)
-	return true, 0
+	return true, 0, false
 }
 
 func (l *apiRateLimiter) cleanupLocked(now time.Time) {
@@ -68,7 +77,7 @@ func (l *apiRateLimiter) cleanupLocked(now time.Time) {
 	}
 	maxIdle := 2 * l.window
 	for key, st := range l.clients {
-		if now.Sub(st.lastSeen) > maxIdle {
+		if now.Sub(st.windowStart) > maxIdle {
 			delete(l.clients, key)
 		}
 	}
@@ -77,8 +86,20 @@ func (l *apiRateLimiter) cleanupLocked(now time.Time) {
 func (s *Server) rateLimitMiddleware(limiter *apiRateLimiter) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ok, retryAfter := limiter.allow(s.rateLimitKey(r))
+			if isPublicHealthPath(r.URL.Path) {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			key := s.rateLimitKey(r)
+			ok, retryAfter, logDenied := limiter.allow(key)
 			if !ok {
+				if logDenied {
+					slog.Warn("Rate limit exceeded",
+						"bucket", key,
+						"path", r.URL.Path,
+						"method", r.Method)
+				}
 				w.Header().Set("Retry-After", retryAfterSeconds(retryAfter))
 				respondError(w, http.StatusTooManyRequests, "Rate limit exceeded")
 				return

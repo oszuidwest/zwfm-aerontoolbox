@@ -54,8 +54,8 @@ type APIConfig struct {
 	IdleTimeoutSeconds       int      `json:"idle_timeout_seconds" validate:"gte=0"`
 	MaxUploadBodyBytes       int64    `json:"max_upload_body_bytes" validate:"gte=0"`
 	RateLimitEnabled         bool     `json:"rate_limit_enabled"`
-	RateLimitRequests        int      `json:"rate_limit_requests" validate:"gte=0"`
-	RateLimitWindowSeconds   int      `json:"rate_limit_window_seconds" validate:"gte=0"`
+	RateLimitRequests        int      `json:"rate_limit_requests" validate:"omitempty,gte=1"`
+	RateLimitWindowSeconds   int      `json:"rate_limit_window_seconds" validate:"omitempty,gte=1"`
 }
 
 // MaintenanceConfig holds thresholds used by database health checks.

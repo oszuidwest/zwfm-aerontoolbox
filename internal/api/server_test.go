@@ -100,8 +100,8 @@ func TestRateLimiterLimitsAuthenticatedProtectedRequests(t *testing.T) {
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("second status code = %d, want %d; body: %s", rec.Code, http.StatusTooManyRequests, rec.Body.String())
 	}
-	if rec.Header().Get("Retry-After") == "" {
-		t.Fatal("Retry-After header is empty")
+	if got, want := rec.Header().Get("Retry-After"), "60"; got != want {
+		t.Fatalf("Retry-After = %q, want %q", got, want)
 	}
 }
 

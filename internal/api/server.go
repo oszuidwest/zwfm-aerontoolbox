@@ -68,8 +68,11 @@ func (s *Server) router() http.Handler {
 		respondError(w, http.StatusNotFound, "Endpoint not found")
 	})
 
+	jsonHeader := middleware.SetHeader("Content-Type", "application/json; charset=utf-8")
+	router.With(jsonHeader).Get("/health", s.handleHealth)
+
 	router.Route("/api", func(r chi.Router) {
-		r.Use(middleware.SetHeader("Content-Type", "application/json; charset=utf-8"))
+		r.Use(jsonHeader)
 		if limiter := newAPIRateLimiter(&s.service.Config().API); limiter != nil {
 			r.Use(s.rateLimitMiddleware(limiter))
 		}
@@ -133,6 +136,10 @@ func (s *Server) router() http.Handler {
 	})
 
 	return router
+}
+
+func isPublicHealthPath(path string) bool {
+	return path == "/health" || path == "/api/health"
 }
 
 // Shutdown gracefully stops the active HTTP server. It is a no-op before Start.
