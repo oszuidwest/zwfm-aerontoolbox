@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -50,18 +51,22 @@ func (s *Server) handleBackupStatus(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDownloadBackupFile(w http.ResponseWriter, r *http.Request) {
 	filename := chi.URLParam(r, "filename")
 
-	filePath, err := s.service.Backup.GetFilePath(filename)
+	file, info, err := s.service.Backup.OpenFile(filename)
 	if err != nil {
 		statusCode := errorCode(err)
 		respondError(w, statusCode, err.Error())
 		return
 	}
+	defer func() {
+		if err := file.Close(); err != nil {
+			slog.Debug("Failed to close backup download file", "filename", filename, "error", err)
+		}
+	}()
 
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", "attachment; filename="+filename)
 
-	//nolint:gosec // G703: filePath comes from Backup.GetFilePath after filename validation and os.Root lookup.
-	http.ServeFile(w, r, filePath)
+	http.ServeContent(w, r, filename, info.ModTime(), file)
 }
 
 func (s *Server) handleDeleteBackup(w http.ResponseWriter, r *http.Request) {
