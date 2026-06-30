@@ -2,17 +2,14 @@ package api
 
 import (
 	"context"
-	"database/sql"
-	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"sync"
 	"testing"
 
-	"github.com/jmoiron/sqlx"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/config"
+	"github.com/oszuidwest/zwfm-aerontoolbox/internal/database"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/service"
 )
 
@@ -99,6 +96,8 @@ func TestFileMonitorRoutesEnabledPassThrough(t *testing.T) {
 }
 
 func TestPublicHealthOmitsInternalDetails(t *testing.T) {
+	stubDBPing(t, nil)
+
 	cfg := healthTestConfig()
 	cfg.API.Enabled = true
 	cfg.API.Keys = []string{"test-key"}
@@ -125,7 +124,32 @@ func TestPublicHealthOmitsInternalDetails(t *testing.T) {
 	}
 }
 
+func TestPublicHealthReturnsUnavailableWhenDatabaseDisconnected(t *testing.T) {
+	stubDBPing(t, errors.New("db down"))
+
+	cfg := healthTestConfig()
+	handler := newHealthTestServer(t, cfg).router()
+	req := httptest.NewRequest(http.MethodGet, "/api/health", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status code = %d, want %d; body: %s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+	}
+
+	data := decodeResponseData(t, rec)
+	if got := data["status"]; got != "unhealthy" {
+		t.Fatalf("status = %#v, want unhealthy", got)
+	}
+	if got := data["database_status"]; got != "disconnected" {
+		t.Fatalf("database_status = %#v, want disconnected", got)
+	}
+}
+
 func TestDetailedHealthRequiresAuthAndIncludesOperatorDetails(t *testing.T) {
+	stubDBPing(t, nil)
+
 	cfg := healthTestConfig()
 	cfg.API.Enabled = true
 	cfg.API.Keys = []string{"test-key"}
@@ -190,15 +214,8 @@ func healthTestConfig() *config.Config {
 
 func newHealthTestServer(t *testing.T, cfg *config.Config) *Server {
 	t.Helper()
-	registerHealthTestDriver()
 
-	db, err := sql.Open(healthTestDriverName, "")
-	if err != nil {
-		t.Fatalf("sql.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-
-	svc, err := service.New(sqlx.NewDb(db, healthTestDriverName), cfg)
+	svc, err := service.New(nil, cfg)
 	if err != nil {
 		t.Fatalf("service.New: %v", err)
 	}
@@ -207,36 +224,14 @@ func newHealthTestServer(t *testing.T, cfg *config.Config) *Server {
 	return New(svc, "test")
 }
 
-const healthTestDriverName = "health-test"
+func stubDBPing(t *testing.T, err error) {
+	t.Helper()
 
-var registerHealthTestDriverOnce sync.Once
-
-func registerHealthTestDriver() {
-	registerHealthTestDriverOnce.Do(func() {
-		sql.Register(healthTestDriverName, healthTestDriver{})
+	previous := dbPing
+	dbPing = func(context.Context, *database.Repository) error {
+		return err
+	}
+	t.Cleanup(func() {
+		dbPing = previous
 	})
-}
-
-type healthTestDriver struct{}
-
-func (healthTestDriver) Open(string) (driver.Conn, error) {
-	return healthTestConn{}, nil
-}
-
-type healthTestConn struct{}
-
-func (healthTestConn) Prepare(string) (driver.Stmt, error) {
-	return nil, errors.New("prepare not implemented")
-}
-
-func (healthTestConn) Close() error {
-	return nil
-}
-
-func (healthTestConn) Begin() (driver.Tx, error) {
-	return nil, errors.New("transactions not implemented")
-}
-
-func (healthTestConn) Ping(context.Context) error {
-	return nil
 }

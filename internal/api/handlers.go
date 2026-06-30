@@ -39,6 +39,10 @@ type PublicHealthResponse struct {
 	DatabaseStatus string `json:"database_status"`
 }
 
+var dbPing = func(ctx context.Context, repo *database.Repository) error {
+	return repo.Ping(ctx)
+}
+
 // HealthResponse is returned by the authenticated detailed health endpoint.
 type HealthResponse struct {
 	Status         string                `json:"status"`
@@ -116,7 +120,12 @@ func (s *Server) validateAndGetEntityID(w http.ResponseWriter, r *http.Request, 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	dbStatus, dbConnected := s.databaseStatus(r.Context())
 
-	respondJSON(w, http.StatusOK, PublicHealthResponse{
+	statusCode := http.StatusOK
+	if !dbConnected {
+		statusCode = http.StatusServiceUnavailable
+	}
+
+	respondJSON(w, statusCode, PublicHealthResponse{
 		Status:         overallHealthStatus(dbConnected, false),
 		Version:        s.version,
 		DatabaseStatus: dbStatus,
@@ -178,7 +187,7 @@ func (s *Server) handleHealthDetails(w http.ResponseWriter, r *http.Request) {
 func (s *Server) databaseStatus(ctx context.Context) (string, bool) {
 	dbStatus := "connected"
 	dbConnected := true
-	if err := s.service.Repository().Ping(ctx); err != nil {
+	if err := dbPing(ctx, s.service.Repository()); err != nil {
 		dbStatus = "disconnected"
 		dbConnected = false
 		slog.Warn("Database health check failed", "error", err)
