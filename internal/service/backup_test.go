@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"io"
 	"os"
@@ -33,6 +34,30 @@ func newBackupTestService(t *testing.T, backupPath string) *BackupService {
 		backupRoot: root,
 		runner:     async.New(),
 	}
+}
+
+func writePgRestoreStub(t *testing.T) string {
+	t.Helper()
+
+	pgRestorePath := filepath.Join(t.TempDir(), "pg_restore")
+	script := `#!/bin/sh
+if [ "$#" -ne 1 ] || [ "$1" != "--list" ]; then
+  echo "unexpected args: $*" >&2
+  exit 3
+fi
+input=$(cat)
+if [ "$input" != "backup-data" ]; then
+  echo "unexpected stdin: $input" >&2
+  exit 4
+fi
+`
+	if err := os.WriteFile(pgRestorePath, []byte(script), 0o600); err != nil {
+		t.Fatalf("write pg_restore helper: %v", err)
+	}
+	if err := os.Chmod(pgRestorePath, 0o700); err != nil { //nolint:gosec // test helper script must be executable.
+		t.Fatalf("chmod pg_restore helper: %v", err)
+	}
+	return pgRestorePath
 }
 
 func TestBackupServiceOpenFileReadsManagedBackup(t *testing.T) {
@@ -77,6 +102,10 @@ func TestBackupServiceOpenFileRejectsInvalidFilename(t *testing.T) {
 	}
 	if err == nil {
 		t.Fatal("OpenFile accepted path traversal filename")
+	}
+	var validationErr *types.ValidationError
+	if !errors.As(err, &validationErr) {
+		t.Fatalf("OpenFile error = %T %[1]v, want *types.ValidationError", err)
 	}
 }
 
@@ -172,28 +201,9 @@ func TestBackupServiceValidateStreamsRootedFileToPgRestore(t *testing.T) {
 		t.Fatalf("write backup file: %v", err)
 	}
 
-	pgRestorePath := filepath.Join(t.TempDir(), "pg_restore")
-	script := `#!/bin/sh
-if [ "$#" -ne 1 ] || [ "$1" != "--list" ]; then
-  echo "unexpected args: $*" >&2
-  exit 3
-fi
-input=$(cat)
-if [ "$input" != "backup-data" ]; then
-  echo "unexpected stdin: $input" >&2
-  exit 4
-fi
-`
-	if err := os.WriteFile(pgRestorePath, []byte(script), 0o600); err != nil {
-		t.Fatalf("write pg_restore helper: %v", err)
-	}
-	if err := os.Chmod(pgRestorePath, 0o700); err != nil { //nolint:gosec // test helper script must be executable.
-		t.Fatalf("chmod pg_restore helper: %v", err)
-	}
-
 	svc := newBackupTestService(t, backupPath)
 	t.Cleanup(svc.Close)
-	svc.pgRestorePath = pgRestorePath
+	svc.pgRestorePath = writePgRestoreStub(t)
 
 	result, err := svc.Validate(testBackupFilename)
 	if err != nil {
@@ -201,6 +211,43 @@ fi
 	}
 	if !result.Valid {
 		t.Fatalf("validation result = invalid: %s", result.Error)
+	}
+}
+
+func TestBackupServiceValidateRewindsFileBeforePgRestore(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test uses a POSIX shell helper")
+	}
+
+	backupPath := t.TempDir()
+	if err := os.WriteFile(filepath.Join(backupPath, testBackupFilename), []byte("backup-data"), 0o600); err != nil {
+		t.Fatalf("write backup file: %v", err)
+	}
+
+	svc := newBackupTestService(t, backupPath)
+	t.Cleanup(svc.Close)
+	svc.pgRestorePath = writePgRestoreStub(t)
+
+	file, _, err := svc.OpenFile(testBackupFilename)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	defer func() {
+		if err := file.Close(); err != nil {
+			t.Fatalf("close opened backup: %v", err)
+		}
+	}()
+
+	buf := make([]byte, len("backup-"))
+	if _, err := io.ReadFull(file, buf); err != nil {
+		t.Fatalf("read prefix from backup: %v", err)
+	}
+	if string(buf) != "backup-" {
+		t.Fatalf("backup prefix = %q, want backup-", buf)
+	}
+
+	if err := svc.validateBackupFile(context.Background(), file); err != nil {
+		t.Fatalf("validateBackupFile after partial read: %v", err)
 	}
 }
 

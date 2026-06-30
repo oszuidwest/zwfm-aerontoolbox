@@ -61,7 +61,7 @@ func ptrOrNil(s string) *string {
 	return aws.String(s)
 }
 
-// upload streams one local backup file to remote storage.
+// upload streams one backup file to remote storage.
 func (s *s3Service) upload(ctx context.Context, filename string, body io.Reader) error {
 	key := s.prefix + filename
 	start := time.Now()

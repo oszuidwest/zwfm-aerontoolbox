@@ -103,14 +103,14 @@ func newBackupService(
 	return svc, nil
 }
 
-// Close waits for any running backup or tracked follow-up work.
+// Close waits for any running backup or tracked follow-up work and releases
+// the backup root.
 func (s *BackupService) Close() {
 	s.runner.Close()
 	if s.backupRoot != nil {
 		if err := s.backupRoot.Close(); err != nil {
 			slog.Warn("Failed to close backup root", "error", err)
 		}
-		s.backupRoot = nil
 	}
 }
 
@@ -230,7 +230,12 @@ func (s *BackupService) compressionLevel(requested int) (int, error) {
 	return level, nil
 }
 
-// OpenFile opens a managed backup file through the backup root.
+// OpenFile opens a managed backup file through the backup root. The caller
+// owns the returned file and must close it.
+//
+// It returns ConfigError when backups are disabled, ValidationError for invalid
+// backup names or non-regular files, NotFoundError for missing backups, and
+// OperationError for other open/stat failures.
 func (s *BackupService) OpenFile(filename string) (*os.File, os.FileInfo, error) {
 	if err := s.checkBackupAccess(filename); err != nil {
 		return nil, nil, err
@@ -259,8 +264,8 @@ func (s *BackupService) OpenFile(filename string) (*os.File, os.FileInfo, error)
 
 // validateBackupFile checks backup integrity with pg_restore --list.
 func (s *BackupService) validateBackupFile(ctx context.Context, file *os.File) error {
-	// pg_restore inherits the current file offset from stdin, so rewind before
-	// validating in case a future caller has already read from the handle.
+	// The pg_restore child reads from the same open-file-description offset as
+	// the parent fd assigned to stdin, so validation must start from byte zero.
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return types.NewOperationError("backup validation", fmt.Errorf("seek file: %w", err))
 	}
@@ -286,7 +291,7 @@ func (s *BackupService) validateManagedBackupFile(ctx context.Context, filename 
 	}
 	defer func() {
 		if closeErr := file.Close(); closeErr != nil {
-			slog.Warn("Failed to close backup validation file", "filename", filename, "error", closeErr)
+			slog.Debug("Failed to close backup validation file", "filename", filename, "error", closeErr)
 		}
 	}()
 
@@ -483,7 +488,7 @@ func (s *BackupService) uploadBackupToS3(ctx context.Context, filename string) e
 	}
 	defer func() {
 		if closeErr := file.Close(); closeErr != nil {
-			slog.Warn("Failed to close backup upload file", "filename", filename, "error", closeErr)
+			slog.Debug("Failed to close backup upload file", "filename", filename, "error", closeErr)
 		}
 	}()
 
@@ -641,7 +646,7 @@ func (s *BackupService) Validate(filename string) (*ValidationResult, error) {
 	}
 	defer func() {
 		if closeErr := file.Close(); closeErr != nil {
-			slog.Warn("Failed to close backup validation file", "filename", filename, "error", closeErr)
+			slog.Debug("Failed to close backup validation file", "filename", filename, "error", closeErr)
 		}
 	}()
 
