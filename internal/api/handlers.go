@@ -2,9 +2,12 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -296,8 +299,40 @@ func (s *Server) handleImageUpload(entityType types.EntityType) http.HandlerFunc
 			return
 		}
 
+		uploadReadTimeout := s.service.Config().API.GetUploadReadTimeout()
+		if err := http.NewResponseController(w).SetReadDeadline(time.Now().Add(uploadReadTimeout)); err != nil {
+			slog.Warn("Could not set read deadline for image upload; large upload may time out",
+				"entity_type", entityType,
+				"id", entityID,
+				"timeout", uploadReadTimeout,
+				"error", err)
+		}
+
+		r.Body = http.MaxBytesReader(w, r.Body, s.service.Config().API.GetMaxUploadBodyBytes())
+
 		var req ImageUploadRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			var maxBytesErr *http.MaxBytesError
+			if errors.As(err, &maxBytesErr) {
+				respondError(w, http.StatusRequestEntityTooLarge, "Request body too large")
+				return
+			}
+			if isTimeoutError(err) {
+				slog.Warn("Image upload request timed out while reading body",
+					"entity_type", entityType,
+					"id", entityID,
+					"path", r.URL.Path,
+					"remote_addr", r.RemoteAddr,
+					"error", err)
+				respondError(w, http.StatusRequestTimeout, "Request body read timeout")
+				return
+			}
+			slog.Warn("Invalid image upload request content",
+				"entity_type", entityType,
+				"id", entityID,
+				"path", r.URL.Path,
+				"remote_addr", r.RemoteAddr,
+				"error", err)
 			respondError(w, http.StatusBadRequest, "Invalid request content")
 			return
 		}
@@ -327,6 +362,11 @@ func (s *Server) handleImageUpload(entityType types.EntityType) http.HandlerFunc
 		response := s.uploadResponse(result, entityType)
 		respondJSON(w, http.StatusOK, response)
 	}
+}
+
+func isTimeoutError(err error) bool {
+	var netErr net.Error
+	return (errors.As(err, &netErr) && netErr.Timeout()) || errors.Is(err, context.DeadlineExceeded)
 }
 
 func (s *Server) handleDeleteImage(entityType types.EntityType) http.HandlerFunc {
