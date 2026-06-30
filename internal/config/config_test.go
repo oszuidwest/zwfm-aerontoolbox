@@ -97,6 +97,37 @@ func TestInterval_ZeroFallsBackToDefault(t *testing.T) {
 	}
 }
 
+func TestMetricsPath(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  MetricsConfig
+		want string
+	}{
+		{
+			name: "default",
+			cfg:  MetricsConfig{},
+			want: "/metrics",
+		},
+		{
+			name: "leading slash",
+			cfg:  MetricsConfig{Path: "/internal/metrics"},
+			want: "/internal/metrics",
+		},
+		{
+			name: "missing leading slash",
+			cfg:  MetricsConfig{Path: "internal/metrics"},
+			want: "/internal/metrics",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.cfg.GetPath(); got != tt.want {
+				t.Fatalf("GetPath() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestFileMonitorValidation_DuplicatePaths(t *testing.T) {
 	cfg := minimalConfig()
 	cfg.FileMonitor.Enabled = true

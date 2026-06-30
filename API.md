@@ -9,6 +9,7 @@
 - [Foutmeldingen](#foutmeldingen)
 - [Endpoints](#endpoints)
   - [Statuscontrole](#statuscontrole)
+  - [Metrics](#metrics)
   - [Artiestendpoints](#artiestendpoints)
   - [Trackendpoints](#trackendpoints)
   - [Playlist-endpoints](#playlist-endpoints)
@@ -32,6 +33,7 @@ De Aeron Toolbox API biedt RESTful-endpoints voor het Aeron-radioautomatiserings
 |----------|---------|--------------|------|
 | **Algemeen** |
 | `/api/health` | GET | API-status controleren | Nee |
+| `/metrics` | GET | Prometheus-compatible metrics ophalen wanneer ingeschakeld | Nee |
 | **Artiesten** |
 | `/api/artists` | GET | Statistieken over artiesten | Ja |
 | `/api/artists/{id}` | GET | Specifieke artiest ophalen | Ja |
@@ -69,7 +71,7 @@ De Aeron Toolbox API biedt RESTful-endpoints voor het Aeron-radioautomatiserings
 
 ## Authenticatie
 
-Wanneer authenticatie is ingeschakeld in de configuratie, vereisen alle endpoints (behalve `GET /api/health`) een API-sleutel.
+Wanneer authenticatie is ingeschakeld in de configuratie, vereisen alle endpoints (behalve `GET /api/health` en de optionele metrics-endpoint) een API-sleutel.
 
 **Header:** `X-API-Key: jouw-api-sleutel`
 
@@ -191,6 +193,61 @@ De `status`-waarden hebben een vaste prioriteitsvolgorde: `"unhealthy"` > `"degr
 | Geen van bovenstaande | `"healthy"` |
 
 Een database-uitval overschrijft altijd een eventueel `"degraded"`-signaal van notificaties of de bestandscontrole.
+
+---
+
+### Metrics
+
+Haal Prometheus-compatible metrics op. Deze endpoint staat standaard uit en is
+alleen beschikbaar wanneer `metrics.enabled: true` is geconfigureerd. De
+metrics-route staat buiten de `/api` prefix en gebruikt geen JSON-wrapper.
+
+**Endpoint:** `GET /metrics` (of de waarde van `metrics.path`)
+**Authenticatie:** Niet vereist
+
+**Response:** `200 OK`
+```text
+# HELP aeron_toolbox_up Whether the Aeron Toolbox process is running.
+# TYPE aeron_toolbox_up gauge
+aeron_toolbox_up 1
+# HELP aeron_toolbox_health_status Current health status as one sample per status label.
+# TYPE aeron_toolbox_health_status gauge
+aeron_toolbox_health_status{status="healthy"} 1
+aeron_toolbox_health_status{status="degraded"} 0
+aeron_toolbox_health_status{status="unhealthy"} 0
+# HELP aeron_toolbox_database_connected Whether the configured database answered the last metrics health probe.
+# TYPE aeron_toolbox_database_connected gauge
+aeron_toolbox_database_connected 1
+```
+
+De output bevat onder andere:
+- HTTP request counters en latency-histograms met `method`, chi-routepatroon en HTTP-status als labels.
+- Database-connectiviteit en dezelfde algemene health-status als `GET /api/health`.
+- Backup job-status, laatste succesvolle backup en laatste backupduur.
+- Bestandscontrole en mediabestandcontrole: running/completed-status en probleem- of alerttellingen.
+- Notificatieconfiguratie en of er sinds processtart een verzendfout is geregistreerd.
+
+De metrics bevatten geen API-sleutels, databasewachtwoorden, bestandsnamen,
+database-namen of ruwe foutmeldingen. Gebruik de endpoint alleen vanaf een
+vertrouwd monitoring-netwerk of plaats hem achter je reverse-proxy access
+controls.
+
+Voorbeeld Prometheus scrape-configuratie:
+
+```yaml
+scrape_configs:
+  - job_name: "aeron-toolbox"
+    metrics_path: "/metrics"
+    static_configs:
+      - targets: ["localhost:8080"]
+```
+
+Voorbeeld alerts:
+- `aeron_toolbox_database_connected == 0`
+- `aeron_toolbox_backup_enabled == 1 and aeron_toolbox_backup_last_completed == 1 and aeron_toolbox_backup_last_success == 0`
+- `aeron_toolbox_file_monitor_checks_alerting > 0`
+- `aeron_toolbox_media_file_check_problems > 0`
+- `rate(aeron_toolbox_http_requests_total{status=~"5.."}[5m]) > 0`
 
 ---
 
@@ -1737,12 +1794,20 @@ Het gedrag van de API kan worden geconfigureerd via `config.json`:
       "recipients": ""
     }
   },
+  "metrics": {
+    "enabled": false,
+    "path": "/metrics"
+  },
   "log": {
     "level": "info",
     "format": "text"
   }
 }
 ```
+
+**Instellingen voor metrics:**
+- `metrics.enabled`: Schakel de Prometheus-compatible metrics-endpoint in of uit. Standaard `false`.
+- `metrics.path`: Scrape-pad. Standaard `/metrics`; een ontbrekende eerste slash wordt automatisch toegevoegd.
 
 **Instellingen voor bestandscontrole:**
 - `file_monitor.enabled`: Schakel de bestandscontrole in.
