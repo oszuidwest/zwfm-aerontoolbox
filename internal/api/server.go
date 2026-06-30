@@ -184,6 +184,8 @@ func (s *Server) isValidAPIKey(key string) bool {
 		return false
 	}
 
+	// Hash both sides to a fixed length so ConstantTimeCompare never returns
+	// early on a length mismatch, which would leak the configured key length.
 	keyHash := sha256.Sum256([]byte(key))
 	valid := 0
 	for _, configuredKey := range s.service.Config().API.Keys {
