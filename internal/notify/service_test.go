@@ -33,9 +33,8 @@ func TestSendAsync_DroppedOnClose(t *testing.T) {
 func TestFormatBackupFailureIncludesOperationalContext(t *testing.T) {
 	started := time.Date(2026, 6, 29, 10, 0, 0, 0, time.UTC)
 	ended := started.Add(2*time.Minute + 3*time.Second)
-	svc := New(&config.Config{})
 
-	subject, body := svc.formatBackupFailure(&BackupResult{
+	subject, body := (&NotificationService{}).formatBackupFailure(&BackupResult{
 		StartedAt: &started,
 		EndedAt:   &ended,
 		Filename:  "aeron-backup.dump",

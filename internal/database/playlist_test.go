@@ -1,6 +1,7 @@
 package database
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -19,47 +20,120 @@ func TestBuildPlaylistQueryRequiresBlockID(t *testing.T) {
 }
 
 func TestBuildPlaylistQueryFiltersSortAndPagination(t *testing.T) {
-	trackImage := false
-	artistImage := true
-	opts := &PlaylistOptions{
-		BlockID:     "block-1",
-		ExportTypes: []int{1, 2},
-		TrackImage:  &trackImage,
-		ArtistImage: &artistImage,
-		SortBy:      "artist",
-		SortDesc:    true,
-		Limit:       25,
-		Offset:      50,
+	tests := []struct {
+		name        string
+		trackImage  bool
+		artistImage bool
+		limit       int
+		offset      int
+	}{
+		{
+			name:        "track image false artist image false",
+			trackImage:  false,
+			artistImage: false,
+			limit:       25,
+			offset:      50,
+		},
+		{
+			name:        "track image false artist image true",
+			trackImage:  false,
+			artistImage: true,
+			limit:       25,
+			offset:      50,
+		},
+		{
+			name:        "track image true artist image false",
+			trackImage:  true,
+			artistImage: false,
+			limit:       25,
+			offset:      50,
+		},
+		{
+			name:        "track image true artist image true",
+			trackImage:  true,
+			artistImage: true,
+			limit:       25,
+			offset:      50,
+		},
+		{
+			name:        "limit without offset",
+			trackImage:  false,
+			artistImage: true,
+			limit:       25,
+			offset:      0,
+		},
 	}
 
-	query, params, err := BuildPlaylistQuery("aeron", opts)
-	if err != nil {
-		t.Fatalf("BuildPlaylistQuery: %v", err)
-	}
-
-	wants := []string{
+	commonWants := []string{
 		"FROM aeron.playlistitem pi",
-		"pi.blockid = $1",
-		"COALESCE(t.exporttype, 1) NOT IN ($2,$3)",
-		"t.picture IS NULL",
-		"a.picture IS NOT NULL",
+		"WHERE pi.blockid = $1",
+		"AND COALESCE(t.exporttype, 1) NOT IN ($2,$3)",
 		"ORDER BY t.artist DESC",
-		"LIMIT $4 OFFSET $5",
-	}
-	for _, want := range wants {
-		if !strings.Contains(query, want) {
-			t.Fatalf("query missing %q:\n%s", want, query)
-		}
 	}
 
-	wantParams := []any{"block-1", 1, 2, 25, 50}
-	if len(params) != len(wantParams) {
-		t.Fatalf("params = %v, want %v", params, wantParams)
-	}
-	for i := range wantParams {
-		if params[i] != wantParams[i] {
-			t.Fatalf("params[%d] = %v, want %v", i, params[i], wantParams[i])
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			trackImage := tt.trackImage
+			artistImage := tt.artistImage
+			opts := &PlaylistOptions{
+				BlockID:     "block-1",
+				ExportTypes: []int{1, 2},
+				TrackImage:  &trackImage,
+				ArtistImage: &artistImage,
+				SortBy:      "artist",
+				SortDesc:    true,
+				Limit:       tt.limit,
+				Offset:      tt.offset,
+			}
+
+			query, params, err := BuildPlaylistQuery("aeron", opts)
+			if err != nil {
+				t.Fatalf("BuildPlaylistQuery: %v", err)
+			}
+
+			wantTrackPredicate := "AND t.picture IS NULL"
+			notWantTrackPredicate := "AND t.picture IS NOT NULL"
+			if tt.trackImage {
+				wantTrackPredicate, notWantTrackPredicate = notWantTrackPredicate, wantTrackPredicate
+			}
+
+			wantArtistPredicate := "AND a.picture IS NULL"
+			notWantArtistPredicate := "AND a.picture IS NOT NULL"
+			if tt.artistImage {
+				wantArtistPredicate, notWantArtistPredicate = notWantArtistPredicate, wantArtistPredicate
+			}
+
+			for _, want := range commonWants {
+				if !strings.Contains(query, want) {
+					t.Fatalf("query missing %q:\n%s", want, query)
+				}
+			}
+			for _, want := range []string{wantTrackPredicate, wantArtistPredicate, "LIMIT $4"} {
+				if !strings.Contains(query, want) {
+					t.Fatalf("query missing %q:\n%s", want, query)
+				}
+			}
+			for _, notWant := range []string{notWantTrackPredicate, notWantArtistPredicate} {
+				if strings.Contains(query, notWant) {
+					t.Fatalf("query contains %q:\n%s", notWant, query)
+				}
+			}
+			if tt.offset > 0 {
+				if !strings.Contains(query, "LIMIT $4 OFFSET $5") {
+					t.Fatalf("query missing LIMIT/OFFSET clause:\n%s", query)
+				}
+			} else if strings.Contains(query, " OFFSET ") {
+				t.Fatalf("query contains unexpected OFFSET:\n%s", query)
+			}
+
+			wantParams := []any{"block-1", 1, 2, tt.limit}
+			if tt.offset > 0 {
+				wantParams = append(wantParams, tt.offset)
+			}
+			if !reflect.DeepEqual(params, wantParams) {
+				t.Fatalf("params = %v, want %v", params, wantParams)
+			}
+		})
 	}
 }
 
