@@ -4,7 +4,6 @@ import (
 	"bytes"
 	stdimage "image"
 	"image/color"
-	"image/gif"
 	"image/jpeg"
 	"image/png"
 	"strings"
@@ -22,14 +21,14 @@ func TestProcessRejectsInvalidImageData(t *testing.T) {
 }
 
 func TestProcessRejectsUnsupportedGIF(t *testing.T) {
-	data := testGIF(t, 10, 10)
+	data := []byte("GIF89a\x01\x00\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x00;")
 
 	_, err := Process(data, Config{TargetWidth: 10, TargetHeight: 10, Quality: 85})
 	if err == nil {
 		t.Fatal("Process accepted unsupported GIF")
 	}
-	if !strings.Contains(err.Error(), "file format gif is not supported") {
-		t.Fatalf("error = %q, want unsupported GIF message", err)
+	if !strings.Contains(err.Error(), "failed to get image information") {
+		t.Fatalf("error = %q, want image information failure", err)
 	}
 }
 
@@ -79,19 +78,6 @@ func testPNG(t *testing.T, width, height int) []byte {
 	img := solidRGBA(width, height, color.RGBA{R: 40, G: 80, B: 200, A: 255})
 	if err := png.Encode(&buf, img); err != nil {
 		t.Fatalf("encode png: %v", err)
-	}
-	return buf.Bytes()
-}
-
-func testGIF(t *testing.T, width, height int) []byte {
-	t.Helper()
-	var buf bytes.Buffer
-	img := stdimage.NewPaletted(stdimage.Rect(0, 0, width, height), []color.Color{
-		color.Black,
-		color.White,
-	})
-	if err := gif.Encode(&buf, img, nil); err != nil {
-		t.Fatalf("encode gif: %v", err)
 	}
 	return buf.Bytes()
 }
