@@ -201,7 +201,7 @@ func (s *MediaService) DeleteAllImages(ctx context.Context, entityType types.Ent
 func DefaultPlaylistOptions() database.PlaylistOptions {
 	return database.PlaylistOptions{
 		ExportTypes: []int{},
-		SortBy:      "starttime",
+		SortBy:      "start_time",
 	}
 }
 
