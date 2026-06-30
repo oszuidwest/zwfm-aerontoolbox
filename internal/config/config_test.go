@@ -97,6 +97,18 @@ func TestInterval_ZeroFallsBackToDefault(t *testing.T) {
 	}
 }
 
+func TestImageConfigMaxPixels(t *testing.T) {
+	cfg := &ImageConfig{}
+	if got, want := cfg.GetMaxPixels(), int64(DefaultMaxPixels); got != want {
+		t.Errorf("GetMaxPixels() = %d, want %d", got, want)
+	}
+
+	cfg.MaxPixels = 123
+	if got := cfg.GetMaxPixels(); got != 123 {
+		t.Errorf("GetMaxPixels() = %d, want configured value 123", got)
+	}
+}
+
 func TestFileMonitorValidation_DuplicatePaths(t *testing.T) {
 	cfg := minimalConfig()
 	cfg.FileMonitor.Enabled = true

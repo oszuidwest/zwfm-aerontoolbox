@@ -16,7 +16,8 @@
     "target_height": 640,
     "quality": 85,
     "reject_smaller": false,
-    "max_image_download_size_bytes": 52428800
+    "max_image_download_size_bytes": 52428800,
+    "max_pixels": 25000000
   },
   "api": {
     "enabled": false,

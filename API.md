@@ -1670,7 +1670,8 @@ Het gedrag van de API kan worden geconfigureerd via `config.json`:
     "target_height": 640,
     "quality": 85,
     "reject_smaller": false,
-    "max_image_download_size_bytes": 52428800
+    "max_image_download_size_bytes": 52428800,
+    "max_pixels": 25000000
   },
   "api": {
     "enabled": true,
@@ -1743,6 +1744,10 @@ Het gedrag van de API kan worden geconfigureerd via `config.json`:
   }
 }
 ```
+
+**Instellingen voor afbeeldingen:**
+- `image.max_image_download_size_bytes`: Maximale downloadgrootte voor externe image-URL's (standaard 52428800, 50 MiB).
+- `image.max_pixels`: Maximale gedecodeerde afbeeldingsgrootte in pixels vóór optimalisatie (standaard 25000000). Grotere afbeeldingen worden na `DecodeConfig` afgewezen voordat de volledige pixelbuffer wordt gedecodeerd.
 
 **Instellingen voor bestandsbewaking:**
 - `file_monitor.enabled`: Schakel de bestandsbewaking in.
