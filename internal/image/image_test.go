@@ -1,0 +1,94 @@
+package image
+
+import (
+	"bytes"
+	stdimage "image"
+	"image/color"
+	"image/jpeg"
+	"image/png"
+	"strings"
+	"testing"
+)
+
+func TestProcessRejectsInvalidImageData(t *testing.T) {
+	_, err := Process([]byte("not an image"), Config{TargetWidth: 10, TargetHeight: 10, Quality: 85})
+	if err == nil {
+		t.Fatal("Process accepted invalid image data")
+	}
+	if !strings.Contains(err.Error(), "failed to get image information") {
+		t.Fatalf("error = %q, want image information failure", err)
+	}
+}
+
+func TestProcessRejectsUnsupportedGIF(t *testing.T) {
+	data := []byte("GIF89a\x01\x00\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x00;")
+
+	_, err := Process(data, Config{TargetWidth: 10, TargetHeight: 10, Quality: 85})
+	if err == nil {
+		t.Fatal("Process accepted unsupported GIF")
+	}
+	// GIF is unsupported here because the decoder is intentionally not registered.
+}
+
+func TestProcessRejectsSmallerImageWhenConfigured(t *testing.T) {
+	data := testJPEG(t, 10, 10)
+
+	_, err := Process(data, Config{TargetWidth: 20, TargetHeight: 20, Quality: 85, RejectSmaller: true})
+	if err == nil {
+		t.Fatal("Process accepted smaller image with RejectSmaller")
+	}
+	if !strings.Contains(err.Error(), "image is too small") {
+		t.Fatalf("error = %q, want too small message", err)
+	}
+}
+
+func TestProcessSkipsAlreadyTargetSize(t *testing.T) {
+	data := testPNG(t, 12, 8)
+
+	result, err := Process(data, Config{TargetWidth: 12, TargetHeight: 8, Quality: 85})
+	if err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+	if result.Encoder != "original (no optimization needed)" {
+		t.Fatalf("encoder = %q, want skip encoder", result.Encoder)
+	}
+	if result.Original.Width != 12 || result.Original.Height != 8 {
+		t.Fatalf("original dimensions = %dx%d, want 12x8", result.Original.Width, result.Original.Height)
+	}
+	if !bytes.Equal(result.Data, data) {
+		t.Fatal("skipped result changed image bytes")
+	}
+}
+
+// testJPEG returns an encoded solid-color JPEG for image processing tests.
+func testJPEG(t *testing.T, width, height int) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	img := solidRGBA(width, height, color.RGBA{R: 200, G: 80, B: 40, A: 255})
+	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 90}); err != nil {
+		t.Fatalf("encode jpeg: %v", err)
+	}
+	return buf.Bytes()
+}
+
+// testPNG returns an encoded solid-color PNG for image processing tests.
+func testPNG(t *testing.T, width, height int) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	img := solidRGBA(width, height, color.RGBA{R: 40, G: 80, B: 200, A: 255})
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatalf("encode png: %v", err)
+	}
+	return buf.Bytes()
+}
+
+// solidRGBA builds a solid-color RGBA image for encoder fixtures.
+func solidRGBA(width, height int, c color.Color) *stdimage.RGBA {
+	img := stdimage.NewRGBA(stdimage.Rect(0, 0, width, height))
+	for y := range height {
+		for x := range width {
+			img.Set(x, y, c)
+		}
+	}
+	return img
+}
