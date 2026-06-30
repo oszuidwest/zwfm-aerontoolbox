@@ -53,6 +53,9 @@ type APIConfig struct {
 	WriteTimeoutSeconds      int      `json:"write_timeout_seconds" validate:"gte=0"`
 	IdleTimeoutSeconds       int      `json:"idle_timeout_seconds" validate:"gte=0"`
 	MaxUploadBodyBytes       int64    `json:"max_upload_body_bytes" validate:"gte=0"`
+	RateLimitEnabled         bool     `json:"rate_limit_enabled"`
+	RateLimitRequests        int      `json:"rate_limit_requests" validate:"omitempty,gte=1"`
+	RateLimitWindowSeconds   int      `json:"rate_limit_window_seconds" validate:"omitempty,gte=1"`
 }
 
 // MaintenanceConfig holds thresholds used by database health checks.
@@ -255,6 +258,8 @@ const (
 	DefaultWriteTimeoutSeconds         = 60
 	DefaultIdleTimeoutSeconds          = 120
 	DefaultMaxUploadBodyBytes          = 70 * 1024 * 1024
+	DefaultRateLimitRequests           = 120
+	DefaultRateLimitWindowSeconds      = 60
 	DefaultBloatThreshold              = 10.0
 	DefaultDeadTupleThreshold          = 10000
 	DefaultVacuumStalenessDays         = 7
@@ -309,6 +314,16 @@ func (c *APIConfig) GetIdleTimeout() time.Duration {
 // GetMaxUploadBodyBytes returns the image upload request-body cap or its default.
 func (c *APIConfig) GetMaxUploadBodyBytes() int64 {
 	return cmp.Or(c.MaxUploadBodyBytes, DefaultMaxUploadBodyBytes)
+}
+
+// GetRateLimitRequests returns the configured request cap or its default.
+func (c *APIConfig) GetRateLimitRequests() int {
+	return cmp.Or(c.RateLimitRequests, DefaultRateLimitRequests)
+}
+
+// GetRateLimitWindow returns the configured rate-limit window or its default.
+func (c *APIConfig) GetRateLimitWindow() time.Duration {
+	return time.Duration(cmp.Or(c.RateLimitWindowSeconds, DefaultRateLimitWindowSeconds)) * time.Second
 }
 
 // GetMaxOpenConns returns the configured open-connection cap or its default.

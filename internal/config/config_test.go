@@ -191,6 +191,18 @@ func TestAPIConfigValidationRejectsNegativeValues(t *testing.T) {
 				cfg.API.MaxUploadBodyBytes = -1
 			},
 		},
+		{
+			name: "negative rate limit requests",
+			mutate: func(cfg *Config) {
+				cfg.API.RateLimitRequests = -1
+			},
+		},
+		{
+			name: "negative rate limit window",
+			mutate: func(cfg *Config) {
+				cfg.API.RateLimitWindowSeconds = -1
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -214,6 +226,25 @@ func TestImageConfigMaxPixels(t *testing.T) {
 	cfg.MaxPixels = 123
 	if got := cfg.GetMaxPixels(); got != 123 {
 		t.Errorf("GetMaxPixels() = %d, want configured value 123", got)
+	}
+}
+
+func TestAPIRateLimitDefaults(t *testing.T) {
+	cfg := &APIConfig{}
+	if got := cfg.GetRateLimitRequests(); got != DefaultRateLimitRequests {
+		t.Fatalf("GetRateLimitRequests() = %d, want %d", got, DefaultRateLimitRequests)
+	}
+	if got := cfg.GetRateLimitWindow(); got != time.Duration(DefaultRateLimitWindowSeconds)*time.Second {
+		t.Fatalf("GetRateLimitWindow() = %s, want %ds", got, DefaultRateLimitWindowSeconds)
+	}
+
+	cfg.RateLimitRequests = 10
+	cfg.RateLimitWindowSeconds = 5
+	if got := cfg.GetRateLimitRequests(); got != 10 {
+		t.Fatalf("configured GetRateLimitRequests() = %d, want 10", got)
+	}
+	if got := cfg.GetRateLimitWindow(); got != 5*time.Second {
+		t.Fatalf("configured GetRateLimitWindow() = %s, want 5s", got)
 	}
 }
 

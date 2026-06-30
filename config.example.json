@@ -27,7 +27,10 @@
     "read_timeout_seconds": 30,
     "write_timeout_seconds": 60,
     "idle_timeout_seconds": 120,
-    "max_upload_body_bytes": 73400320
+    "max_upload_body_bytes": 73400320,
+    "rate_limit_enabled": false,
+    "rate_limit_requests": 120,
+    "rate_limit_window_seconds": 60
   },
   "maintenance": {
     "bloat_threshold": 10.0,
