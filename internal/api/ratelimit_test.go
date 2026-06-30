@@ -1,8 +1,6 @@
 package api
 
 import (
-	"net/http"
-	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
@@ -170,30 +168,6 @@ func TestAPIRateLimiterAllowConcurrent(t *testing.T) {
 	limiter.mu.Unlock()
 	if count != goroutines {
 		t.Fatalf("stored count = %d, want %d", count, goroutines)
-	}
-}
-
-func TestRateLimitMiddlewareSkipsAPIHealthPath(t *testing.T) {
-	t.Parallel()
-
-	now := time.Unix(1_700_000_000, 0)
-	limiter := newTestRateLimiter(0, func() time.Time {
-		return now
-	})
-	server := &Server{}
-	handler := server.rateLimitMiddleware(limiter)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
-	}))
-
-	for range 2 {
-		req := httptest.NewRequest(http.MethodGet, "/api/health", http.NoBody)
-		rec := httptest.NewRecorder()
-
-		handler.ServeHTTP(rec, req)
-
-		if rec.Code != http.StatusNoContent {
-			t.Fatalf("status code = %d, want %d; body: %s", rec.Code, http.StatusNoContent, rec.Body.String())
-		}
 	}
 }
 

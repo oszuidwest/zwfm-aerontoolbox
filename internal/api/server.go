@@ -63,6 +63,10 @@ func (s *Server) router() http.Handler {
 	router.Use(middleware.Recoverer)
 	router.Use(middleware.Compress(5))
 
+	// Route HEAD to the matching GET handler so probes that use HEAD (some load
+	// balancers, GNU wget --spider) hit /health instead of getting a 405.
+	router.Use(middleware.GetHead)
+
 	router.NotFound(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		respondError(w, http.StatusNotFound, "Endpoint not found")
@@ -81,10 +85,10 @@ func (s *Server) router() http.Handler {
 			respondError(w, http.StatusNotFound, "Endpoint not found")
 		})
 
-		r.Get("/health", s.handleHealth)
-
 		r.Group(func(r chi.Router) {
 			r.Use(s.authMiddleware)
+
+			r.Get("/health", s.handleHealthDetails)
 
 			s.setupEntityRoutes(r, "/artists", types.EntityTypeArtist)
 			s.setupEntityRoutes(r, "/tracks", types.EntityTypeTrack)
@@ -136,10 +140,6 @@ func (s *Server) router() http.Handler {
 	})
 
 	return router
-}
-
-func isPublicHealthPath(path string) bool {
-	return path == "/api/health"
 }
 
 // Shutdown gracefully stops the active HTTP server. It is a no-op before Start.

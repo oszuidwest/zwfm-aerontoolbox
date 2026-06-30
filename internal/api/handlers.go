@@ -34,7 +34,17 @@ type ImageStatsResponse struct {
 	WithoutImages int `json:"without_images"`
 }
 
-// HealthResponse is returned by the public health endpoint.
+// PublicHealthResponse is returned by the unauthenticated health endpoint.
+type PublicHealthResponse struct {
+	Status string `json:"status"`
+}
+
+// dbPing is a package-level test seam; tests overriding it must not run in parallel.
+var dbPing = func(ctx context.Context, repo *database.Repository) error {
+	return repo.Ping(ctx)
+}
+
+// HealthResponse is returned by the authenticated detailed health endpoint.
 type HealthResponse struct {
 	Status         string                `json:"status"`
 	Version        string                `json:"version"`
@@ -109,13 +119,24 @@ func (s *Server) validateAndGetEntityID(w http.ResponseWriter, r *http.Request, 
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	dbStatus := "connected"
-	dbConnected := true
-	if err := s.service.Repository().Ping(r.Context()); err != nil {
-		dbStatus = "disconnected"
-		dbConnected = false
-		slog.Warn("Database health check failed", "error", err)
+	_, dbConnected := s.databaseStatus(r.Context())
+
+	statusCode := http.StatusOK
+	success := true
+	errorMsg := ""
+	if !dbConnected {
+		statusCode = http.StatusServiceUnavailable
+		success = false
+		errorMsg = "Service unavailable"
 	}
+
+	respondEnvelope(w, statusCode, success, PublicHealthResponse{
+		Status: overallHealthStatus(dbConnected, false),
+	}, errorMsg)
+}
+
+func (s *Server) handleHealthDetails(w http.ResponseWriter, r *http.Request) {
+	dbStatus, dbConnected := s.databaseStatus(r.Context())
 
 	resp := HealthResponse{
 		Version:        s.version,
@@ -164,6 +185,17 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 	resp.Status = overallHealthStatus(dbConnected, notifyExpiresSoon || fmAlerting > 0 || mediaProblems > 0)
 	respondJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) databaseStatus(ctx context.Context) (string, bool) {
+	dbStatus := "connected"
+	dbConnected := true
+	if err := dbPing(ctx, s.service.Repository()); err != nil {
+		dbStatus = "disconnected"
+		dbConnected = false
+		slog.Warn("Database health check failed", "error", err)
+	}
+	return dbStatus, dbConnected
 }
 
 // overallHealthStatus returns the highest-severity status given the database
