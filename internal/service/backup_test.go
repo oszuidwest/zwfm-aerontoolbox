@@ -21,11 +21,6 @@ func TestCompressionLevel(t *testing.T) {
 		wantErr   string
 	}{
 		{
-			name:      "omitted request uses default",
-			requested: BackupRequest{}.Compression,
-			want:      6,
-		},
-		{
 			name:      "explicit zero uses default",
 			requested: 0,
 			want:      6,
@@ -34,6 +29,11 @@ func TestCompressionLevel(t *testing.T) {
 			name:      "explicit level",
 			requested: 5,
 			want:      5,
+		},
+		{
+			name:      "max valid level",
+			requested: 9,
+			want:      9,
 		},
 		{
 			name:      "negative level",
