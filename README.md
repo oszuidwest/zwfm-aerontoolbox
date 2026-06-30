@@ -9,10 +9,10 @@ Het radioautomatiseringssysteem Aeron mist tooling voor beheer en onderhoud. Aer
 
 - **Afbeeldingen:** upload en optimaliseer albumhoezen en artiestfoto's
 - **Media:** doorzoek artiesten, tracks en playlists met metadata
-- **Onderhoud:** bewaak de gezondheid van de database met automatische meldingen bij problemen
+- **Onderhoud:** bewaak de conditie van de database en ontvang automatisch een melding bij problemen
 - **Backups:** maak, valideer en download databasebackups (optioneel naar S3)
 - **Bestandscontrole:** controleer of bestanden actueel zijn, met meldingen bij verouderde of ontbrekende bestanden
-- **Mediabestanden:** controleer database-gestuurd of de audio uit de playlist daadwerkelijk op schijf staat
+- **Mediabestanden:** controleer op basis van de database of de audio uit de playlist daadwerkelijk op schijf staat
 
 ## Snel starten
 
@@ -23,7 +23,7 @@ Het radioautomatiseringssysteem Aeron mist tooling voor beheer en onderhoud. Aer
 wget https://raw.githubusercontent.com/oszuidwest/zwfm-aerontoolbox/main/config.example.json -O config.json
 wget https://raw.githubusercontent.com/oszuidwest/zwfm-aerontoolbox/main/docker-compose.example.yml -O docker-compose.yml
 
-# Pas config.json aan naar jouw situatie, dan:
+# Stem config.json af op jouw situatie, dan:
 docker compose up -d
 ```
 
@@ -40,7 +40,7 @@ docker run -d -p 8080:8080 \
 ```
 
 > [!NOTE]
-> De `TZ` omgevingsvariabele bepaalt de tijdzone voor geplande taken (backups en health checks).
+> De `TZ`-omgevingsvariabele bepaalt de tijdzone voor geplande taken (backups en health checks).
 
 ### Binary
 
@@ -70,9 +70,11 @@ Kopieer [`config.example.json`](config.example.json) naar `config.json`. De bela
 | `maintenance` | Drempelwaarden en automatische scheduler voor database health checks |
 | `backup` | Pad naar backups, retentie, scheduler en optionele S3-sync |
 | `file_monitor` | Signaleert verouderde of ontbrekende bestanden op schijf |
-| `media_file_check` | Controleert database-gestuurd of playlist-audio op schijf staat (exacte `drive_mounts` + `search_dirs` als fallback) |
+| `media_file_check` | Controleert op basis van de database of playlist-audio op schijf staat (exacte `drive_mounts` + `search_dirs` als fallback) |
 | `notifications` | E-mailmeldingen via Microsoft Graph API |
 | `log` | Logniveau (`debug`, `info`, `warn`, `error`) en formaat (`text`, `json`) |
+
+Gebruik voor `api.keys` per omgeving unieke, willekeurig gegenereerde API-sleutels met minimaal 32 bytes entropie, bijvoorbeeld via `openssl rand -base64 32`.
 
 ### Backupfunctionaliteit
 
@@ -114,7 +116,7 @@ Dit controleert elke zondag om 04:00 de database en stuurt een melding bij probl
 
 ### E-mailnotificaties
 
-Ontvang e-mailmeldingen bij mislukte backups, S3-synchronisatie, database health checks en verouderde of ontbrekende bestanden. Vereist een Azure AD app-registratie met `Mail.Send` permissie.
+Ontvang e-mailmeldingen bij mislukte backups, S3-synchronisatie, database health checks en verouderde of ontbrekende bestanden. Vereist een Azure AD app-registratie met `Mail.Send`-machtiging.
 
 ```json
 "notifications": {

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -28,7 +30,7 @@ type BackupService struct {
 	repo       *database.Repository
 	config     *config.Config
 	backupRoot *os.Root
-	s3         *s3Service // nil if S3 is disabled
+	s3         backupObjectStore // nil if S3 is disabled
 	runner     *async.Runner
 	notify     *notify.NotificationService
 
@@ -91,23 +93,33 @@ func newBackupService(
 		}
 		svc.backupRoot = root
 
-		s3svc, err := newS3Service(&cfg.Backup.S3)
-		if err != nil {
-			return nil, err
+		if cfg.Backup.S3.Enabled {
+			s3svc, err := newS3Service(&cfg.Backup.S3)
+			if err != nil {
+				return nil, err
+			}
+			svc.s3 = s3svc
 		}
-		svc.s3 = s3svc
 	}
 
 	return svc, nil
 }
 
-// Close waits for any running backup or tracked follow-up work.
+// Close waits for any running backup or tracked follow-up work and releases
+// the backup root.
 func (s *BackupService) Close() {
 	s.runner.Close()
+	if s.backupRoot != nil {
+		if err := s.backupRoot.Close(); err != nil {
+			slog.Warn("Failed to close backup root", "error", err)
+		}
+	}
 }
 
 // BackupRequest selects optional backup parameters.
 type BackupRequest struct {
+	// Compression uses 0 as "use configured default"; explicit pg_dump
+	// compression levels are 1-9 because JSON omission also decodes to 0.
 	Compression int `json:"compression"`
 }
 
@@ -168,14 +180,23 @@ func validateBackupFilename(filename string) error {
 	return nil
 }
 
-// ensureBackupFile checks the feature is enabled, validates the filename, and
-// confirms the file is present. A missing file maps to NotFoundError; any other
-// stat error (e.g. permission denied) maps to OperationError.
-func (s *BackupService) ensureBackupFile(filename string) error {
+// checkBackupAccess verifies backup support is enabled and filename names a
+// managed backup file.
+func (s *BackupService) checkBackupAccess(filename string) error {
 	if err := s.checkEnabled(); err != nil {
 		return err
 	}
 	if err := validateBackupFilename(filename); err != nil {
+		return err
+	}
+	return nil
+}
+
+// ensureBackupFile checks the feature is enabled, validates the filename, and
+// confirms the file is present. A missing file maps to NotFoundError; any other
+// stat error (e.g. permission denied) maps to OperationError.
+func (s *BackupService) ensureBackupFile(filename string) error {
+	if err := s.checkBackupAccess(filename); err != nil {
 		return err
 	}
 	if _, err := s.backupRoot.Stat(filename); err != nil {
@@ -201,22 +222,62 @@ func (s *BackupService) buildPgDumpArgs(compression int) []string {
 	}
 }
 
-// compressionLevel applies the default and validates the 0-9 pg_dump range.
+// compressionLevel applies the default and validates the pg_dump range.
 func (s *BackupService) compressionLevel(requested int) (int, error) {
 	level := requested
 	if level == 0 {
 		level = s.config.Backup.GetDefaultCompression()
 	}
 	if level < 0 || level > 9 {
-		return 0, types.NewValidationError("compression", fmt.Sprintf("invalid compression value: %d (use 0-9)", level))
+		return 0, types.NewValidationError("compression",
+			fmt.Sprintf("invalid compression value: %d (use 0 for default, or 1-9)", level))
 	}
 	return level, nil
 }
 
+// OpenFile opens a managed backup file through the backup root. The caller
+// owns the returned file and must close it.
+//
+// It returns ConfigError when backups are disabled, ValidationError for invalid
+// backup names or non-regular files, NotFoundError for missing backups, and
+// OperationError for other open/stat failures.
+func (s *BackupService) OpenFile(filename string) (*os.File, os.FileInfo, error) {
+	if err := s.checkBackupAccess(filename); err != nil {
+		return nil, nil, err
+	}
+
+	file, err := s.backupRoot.Open(filename)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil, types.NewNotFoundError("backup", filename)
+		}
+		return nil, nil, types.NewOperationError("open backup", err)
+	}
+
+	info, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, nil, types.NewOperationError("stat backup", err)
+	}
+	if !info.Mode().IsRegular() {
+		_ = file.Close()
+		return nil, nil, types.NewValidationError("filename", "not a regular backup file")
+	}
+
+	return file, info, nil
+}
+
 // validateBackupFile checks backup integrity with pg_restore --list.
-func (s *BackupService) validateBackupFile(ctx context.Context, filePath string) error {
+func (s *BackupService) validateBackupFile(ctx context.Context, file *os.File) error {
+	// The pg_restore child reads from the same open-file-description offset as
+	// the parent fd assigned to stdin, so validation must start from byte zero.
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return types.NewOperationError("backup validation", fmt.Errorf("seek file: %w", err))
+	}
+
 	//nolint:gosec // G204: pgRestorePath is resolved from config/PATH at startup.
-	cmd := exec.CommandContext(ctx, s.pgRestorePath, "--list", filePath)
+	cmd := exec.CommandContext(ctx, s.pgRestorePath, "--list")
+	cmd.Stdin = file
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		errMsg := strings.TrimSpace(string(output))
@@ -226,6 +287,20 @@ func (s *BackupService) validateBackupFile(ctx context.Context, filePath string)
 		return types.NewOperationError("backup validation", fmt.Errorf("file is corrupt or unreadable: %s", errMsg))
 	}
 	return nil
+}
+
+func (s *BackupService) validateManagedBackupFile(ctx context.Context, filename string) error {
+	file, _, err := s.OpenFile(filename)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			slog.Debug("Failed to close backup validation file", "filename", filename, "error", closeErr)
+		}
+	}()
+
+	return s.validateBackupFile(ctx, file)
 }
 
 // generateBackupFilename returns a managed timestamped .dump filename.
@@ -353,7 +428,7 @@ func (s *BackupService) execute(ctx context.Context, req BackupRequest) error {
 	validateCtx, validateCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer validateCancel()
 
-	if err := s.validateBackupFile(validateCtx, fullPath); err != nil {
+	if err := s.validateManagedBackupFile(validateCtx, filename); err != nil {
 		slog.Error("Backup validation failed", "filename", filename, "error", err)
 		s.setStatusDone(false, filename, err.Error())
 		s.notifyBackup()
@@ -382,7 +457,7 @@ func (s *BackupService) execute(ctx context.Context, req BackupRequest) error {
 			uploadCtx, cancel := context.WithTimeout(context.Background(), s.config.Backup.GetTimeout())
 			defer cancel()
 
-			if err := s.s3.upload(uploadCtx, filename, fullPath); err != nil {
+			if err := s.uploadBackupToS3(uploadCtx, filename); err != nil {
 				slog.Error("S3 synchronization failed", "filename", filename, "error", err)
 				s.setS3SyncStatus(false, err.Error())
 				s.notify.NotifyS3SyncResult(filename, &notify.S3SyncResult{Synced: false, Error: err.Error()})
@@ -393,6 +468,9 @@ func (s *BackupService) execute(ctx context.Context, req BackupRequest) error {
 		})
 	}
 
+	// Must stay synchronous within the primary runner slot: cleanupOldBackups
+	// schedules its S3 deletes via GoChild, which is only safe while that slot
+	// is still held (so Close waits for them instead of dropping them).
 	s.cleanupOldBackups()
 	return nil
 }
@@ -409,6 +487,20 @@ func (s *BackupService) Status() *BackupStatus {
 	status := *s.status
 	status.Running = s.runner.IsRunning()
 	return &status
+}
+
+func (s *BackupService) uploadBackupToS3(ctx context.Context, filename string) error {
+	file, _, err := s.OpenFile(filename)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			slog.Debug("Failed to close backup upload file", "filename", filename, "error", closeErr)
+		}
+	}()
+
+	return s.s3.upload(ctx, filename, file)
 }
 
 func (s *BackupService) setStatusStarted() {
@@ -467,8 +559,7 @@ func (s *BackupService) List() (*BackupListResponse, error) {
 		return nil, err
 	}
 
-	backupPath := s.config.Backup.GetPath()
-	entries, err := os.ReadDir(backupPath)
+	entries, err := fs.ReadDir(s.backupRoot.FS(), ".")
 	if err != nil {
 		if os.IsNotExist(err) {
 			return &BackupListResponse{
@@ -518,8 +609,8 @@ func (s *BackupService) List() (*BackupListResponse, error) {
 	}, nil
 }
 
-// Delete removes a managed backup locally and schedules remote deletion.
-func (s *BackupService) Delete(filename string) error {
+// removeLocalBackup validates and removes the managed backup file locally.
+func (s *BackupService) removeLocalBackup(filename string) error {
 	if err := s.ensureBackupFile(filename); err != nil {
 		return err
 	}
@@ -529,18 +620,18 @@ func (s *BackupService) Delete(filename string) error {
 	}
 
 	slog.Info("Backup deleted", "filename", filename)
+	return nil
+}
 
-	// Delete from S3 asynchronously. TryGoBackground is used because Delete()
-	// is called from an HTTP handler, not from within an active primary run.
+// Delete removes a managed backup from an HTTP-handler path and schedules the
+// remote deletion as independent background work, warning if shutdown drops it.
+func (s *BackupService) Delete(filename string) error {
+	if err := s.removeLocalBackup(filename); err != nil {
+		return err
+	}
+
 	if s.s3 != nil {
-		if !s.runner.TryGoBackground(func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-
-			if err := s.s3.delete(ctx, filename); err != nil {
-				slog.Warn("Failed to delete S3 backup", "filename", filename, "error", err)
-			}
-		}) {
+		if !s.runner.TryGoBackground(func() { s.deleteS3Backup(filename) }) {
 			slog.Warn("S3 deletion skipped: backup service is closed", "filename", filename)
 		}
 	}
@@ -548,13 +639,30 @@ func (s *BackupService) Delete(filename string) error {
 	return nil
 }
 
-// GetFilePath validates filename and returns its absolute local path.
-func (s *BackupService) GetFilePath(filename string) (string, error) {
-	if err := s.ensureBackupFile(filename); err != nil {
-		return "", err
+// deleteDuringRun removes a managed backup from inside the primary backup run,
+// scheduling the remote deletion as a child so Close waits for it.
+func (s *BackupService) deleteDuringRun(filename string) error {
+	if err := s.removeLocalBackup(filename); err != nil {
+		return err
 	}
 
-	return filepath.Join(s.config.Backup.GetPath(), filename), nil
+	if s.s3 != nil {
+		s.runner.GoChild(func() { s.deleteS3Backup(filename) })
+	}
+
+	return nil
+}
+
+// deleteS3Backup removes one backup object from remote storage. A failure leaves
+// an orphaned remote object (the local copy is already gone), so it is logged at
+// Error for parity with the upload path.
+func (s *BackupService) deleteS3Backup(filename string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := s.s3.delete(ctx, filename); err != nil {
+		slog.Error("Failed to delete S3 backup", "filename", filename, "error", err)
+	}
 }
 
 // ValidationResult is the on-demand backup validation result.
@@ -566,10 +674,15 @@ type ValidationResult struct {
 
 // Validate checks a managed backup with pg_restore --list.
 func (s *BackupService) Validate(filename string) (*ValidationResult, error) {
-	fullPath, err := s.GetFilePath(filename)
+	file, _, err := s.OpenFile(filename)
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			slog.Debug("Failed to close backup validation file", "filename", filename, "error", closeErr)
+		}
+	}()
 
 	result := &ValidationResult{
 		Filename: filename,
@@ -578,7 +691,7 @@ func (s *BackupService) Validate(filename string) (*ValidationResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := s.validateBackupFile(ctx, fullPath); err != nil {
+	if err := s.validateBackupFile(ctx, file); err != nil {
 		result.Valid = false
 		result.Error = err.Error()
 	} else {
@@ -604,7 +717,7 @@ func (s *BackupService) cleanupOldBackups() {
 
 	for _, backup := range backups.Backups {
 		if backup.CreatedAt.Before(cutoff) {
-			if err := s.Delete(backup.Filename); err != nil {
+			if err := s.deleteDuringRun(backup.Filename); err != nil {
 				slog.Warn("Failed to delete backup (retention)", "filename", backup.Filename, "error", err)
 			} else {
 				deleted++
@@ -620,7 +733,7 @@ func (s *BackupService) cleanupOldBackups() {
 	}
 	if len(backups.Backups) > maxBackups {
 		for i := maxBackups; i < len(backups.Backups); i++ {
-			if err := s.Delete(backups.Backups[i].Filename); err != nil {
+			if err := s.deleteDuringRun(backups.Backups[i].Filename); err != nil {
 				slog.Warn("Failed to delete backup (max_backups)", "filename", backups.Backups[i].Filename, "error", err)
 			} else {
 				deleted++
