@@ -32,7 +32,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
 # Runtime stage
 FROM alpine:3.24.1
 
-ARG POSTGRESQL_CLIENT_PACKAGE=postgresql16-client
+ARG POSTGRESQL_CLIENT_PACKAGE=postgresql18-client
 
 LABEL org.opencontainers.image.source="https://github.com/oszuidwest/zwfm-aerontoolbox"
 LABEL org.opencontainers.image.description="Headless REST API toolbox for the Aeron radio automation system"

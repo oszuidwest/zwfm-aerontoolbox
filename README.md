@@ -83,7 +83,7 @@ Voor backups heb je `pg_dump` en `pg_restore` nodig op het systeem:
 apt-get install postgresql-client
 
 # Alpine (Docker)
-apk add postgresql16-client
+apk add postgresql18-client
 
 # macOS
 brew install libpq
@@ -93,7 +93,7 @@ De applicatie valideert bij het opstarten of deze tools beschikbaar zijn wanneer
 
 De `pg_dump`/`pg_restore` client-major moet gelijk zijn aan of nieuwer zijn dan de PostgreSQL server-major; PostgreSQL weigert dumps vanaf een nieuwere server met een oudere client.
 
-De standaard Docker image installeert `postgresql16-client`. Gebruik bij een nieuwere database bijvoorbeeld `docker build --build-arg POSTGRESQL_CLIENT_PACKAGE=postgresql17-client ...` zodra Alpine die clientversie aanbiedt, of configureer `backup.pg_dump_path` en `backup.pg_restore_path` naar passende binaries.
+De standaard Docker image installeert `postgresql18-client`, geschikt voor PostgreSQL 16, 17 en 18 servers. Gebruik bij een nieuwere database bijvoorbeeld `docker build --build-arg POSTGRESQL_CLIENT_PACKAGE=postgresql19-client ...` zodra Alpine die clientversie aanbiedt, of configureer `backup.pg_dump_path` en `backup.pg_restore_path` naar passende binaries.
 
 ### Automatische health checks
 
