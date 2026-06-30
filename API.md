@@ -73,6 +73,8 @@ Wanneer authenticatie is ingeschakeld in de configuratie, vereisen alle endpoint
 
 **Header:** `X-API-Key: jouw-api-sleutel`
 
+Gebruik per omgeving unieke, willekeurig gegenereerde API-sleutels van minimaal 32 bytes entropy (bijvoorbeeld `openssl rand -base64 32`). Hergebruik geen wachtwoorden, woordenboekwoorden of korte gedeelde secrets.
+
 **Response bij ontbrekende autorisatie:**
 ```json
 {

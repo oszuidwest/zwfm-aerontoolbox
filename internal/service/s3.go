@@ -15,6 +15,11 @@ import (
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
 )
 
+type backupObjectStore interface {
+	upload(ctx context.Context, filename, localPath string) error
+	delete(ctx context.Context, filename string) error
+}
+
 // s3Service syncs managed backup files to S3-compatible storage.
 type s3Service struct {
 	tm     *transfermanager.Client
@@ -23,12 +28,12 @@ type s3Service struct {
 	prefix string
 }
 
-// newS3Service returns an S3 sync client, or nil when disabled.
-func newS3Service(cfg *config.S3Config) (*s3Service, error) { //nolint:unparam // error result reserved for future client validation
-	if !cfg.Enabled {
-		return nil, nil
-	}
+var _ backupObjectStore = (*s3Service)(nil)
 
+// newS3Service builds an S3 sync client for the configured bucket. Callers gate
+// on S3 being enabled; this always returns a live client so a disabled store can
+// never be boxed into the backupObjectStore interface as a non-nil typed nil.
+func newS3Service(cfg *config.S3Config) (*s3Service, error) { //nolint:unparam // error result reserved for future client validation
 	client := s3.New(s3.Options{
 		Region:       cfg.Region,
 		BaseEndpoint: ptrOrNil(cfg.Endpoint),
