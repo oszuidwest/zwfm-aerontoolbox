@@ -97,6 +97,114 @@ func TestInterval_ZeroFallsBackToDefault(t *testing.T) {
 	}
 }
 
+func TestAPIConfigDefaults(t *testing.T) {
+	cfg := &APIConfig{}
+
+	if got, want := cfg.GetRequestTimeout(), 30*time.Second; got != want {
+		t.Errorf("GetRequestTimeout() = %s, want %s", got, want)
+	}
+	if got, want := cfg.GetUploadReadTimeout(), 180*time.Second; got != want {
+		t.Errorf("GetUploadReadTimeout() = %s, want %s", got, want)
+	}
+	if got, want := cfg.GetReadTimeout(), 30*time.Second; got != want {
+		t.Errorf("GetReadTimeout() = %s, want %s", got, want)
+	}
+	if got, want := cfg.GetWriteTimeout(), 60*time.Second; got != want {
+		t.Errorf("GetWriteTimeout() = %s, want %s", got, want)
+	}
+	if got, want := cfg.GetIdleTimeout(), 120*time.Second; got != want {
+		t.Errorf("GetIdleTimeout() = %s, want %s", got, want)
+	}
+	if got, want := cfg.GetMaxUploadBodyBytes(), int64(70*1024*1024); got != want {
+		t.Errorf("GetMaxUploadBodyBytes() = %d, want %d", got, want)
+	}
+}
+
+func TestAPIConfigRespectsConfiguredValues(t *testing.T) {
+	cfg := &APIConfig{
+		RequestTimeoutSeconds:    11,
+		UploadReadTimeoutSeconds: 12,
+		ReadTimeoutSeconds:       13,
+		WriteTimeoutSeconds:      14,
+		IdleTimeoutSeconds:       15,
+		MaxUploadBodyBytes:       16,
+	}
+
+	if got, want := cfg.GetRequestTimeout(), 11*time.Second; got != want {
+		t.Errorf("GetRequestTimeout() = %s, want %s", got, want)
+	}
+	if got, want := cfg.GetUploadReadTimeout(), 12*time.Second; got != want {
+		t.Errorf("GetUploadReadTimeout() = %s, want %s", got, want)
+	}
+	if got, want := cfg.GetReadTimeout(), 13*time.Second; got != want {
+		t.Errorf("GetReadTimeout() = %s, want %s", got, want)
+	}
+	if got, want := cfg.GetWriteTimeout(), 14*time.Second; got != want {
+		t.Errorf("GetWriteTimeout() = %s, want %s", got, want)
+	}
+	if got, want := cfg.GetIdleTimeout(), 15*time.Second; got != want {
+		t.Errorf("GetIdleTimeout() = %s, want %s", got, want)
+	}
+	if got, want := cfg.GetMaxUploadBodyBytes(), int64(16); got != want {
+		t.Errorf("GetMaxUploadBodyBytes() = %d, want %d", got, want)
+	}
+}
+
+func TestAPIConfigValidationRejectsNegativeValues(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{
+			name: "negative request timeout",
+			mutate: func(cfg *Config) {
+				cfg.API.RequestTimeoutSeconds = -1
+			},
+		},
+		{
+			name: "negative upload read timeout",
+			mutate: func(cfg *Config) {
+				cfg.API.UploadReadTimeoutSeconds = -1
+			},
+		},
+		{
+			name: "negative read timeout",
+			mutate: func(cfg *Config) {
+				cfg.API.ReadTimeoutSeconds = -1
+			},
+		},
+		{
+			name: "negative write timeout",
+			mutate: func(cfg *Config) {
+				cfg.API.WriteTimeoutSeconds = -1
+			},
+		},
+		{
+			name: "negative idle timeout",
+			mutate: func(cfg *Config) {
+				cfg.API.IdleTimeoutSeconds = -1
+			},
+		},
+		{
+			name: "negative max upload body bytes",
+			mutate: func(cfg *Config) {
+				cfg.API.MaxUploadBodyBytes = -1
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := minimalConfig()
+			tt.mutate(cfg)
+
+			if err := validate(cfg); err == nil {
+				t.Fatal("expected validation error for negative API config value, got nil")
+			}
+		})
+	}
+}
+
 func TestImageConfigMaxPixels(t *testing.T) {
 	cfg := &ImageConfig{}
 	if got, want := cfg.GetMaxPixels(), int64(DefaultMaxPixels); got != want {

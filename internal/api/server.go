@@ -33,14 +33,21 @@ func New(svc *service.AeronService, version string) *Server {
 // Start serves the API on port until shutdown or listener failure.
 func (s *Server) Start(port string) error {
 	router := s.router()
-
-	s.server = &http.Server{
-		Addr:              ":" + port,
-		Handler:           router,
-		ReadHeaderTimeout: 10 * time.Second,
-	}
+	s.server = s.newHTTPServer(port, router)
 
 	return s.server.ListenAndServe()
+}
+
+func (s *Server) newHTTPServer(port string, handler http.Handler) *http.Server {
+	apiCfg := s.service.Config().API
+	return &http.Server{
+		Addr:              ":" + port,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       apiCfg.GetReadTimeout(),
+		WriteTimeout:      apiCfg.GetWriteTimeout(),
+		IdleTimeout:       apiCfg.GetIdleTimeout(),
+	}
 }
 
 // router builds the public health route and authenticated API surface.
@@ -72,42 +79,53 @@ func (s *Server) router() http.Handler {
 
 		r.Group(func(r chi.Router) {
 			r.Use(s.authMiddleware)
-			r.Use(middleware.Timeout(s.service.Config().API.GetRequestTimeout()))
 
 			s.setupEntityRoutes(r, "/artists", types.EntityTypeArtist)
 			s.setupEntityRoutes(r, "/tracks", types.EntityTypeTrack)
 
-			r.Get("/playlist", s.handlePlaylist)
+			r.Group(func(r chi.Router) {
+				r.Use(middleware.Timeout(s.service.Config().API.GetRequestTimeout()))
 
-			r.Route("/db", func(r chi.Router) {
-				r.Route("/maintenance", func(r chi.Router) {
-					r.Get("/health", s.handleDatabaseHealth)
+				r.Get("/playlist", s.handlePlaylist)
+
+				r.Route("/db", func(r chi.Router) {
+					r.Route("/maintenance", func(r chi.Router) {
+						r.Get("/health", s.handleDatabaseHealth)
+					})
+
+					r.Group(func(r chi.Router) {
+						r.Use(s.requireEnabled("backup is not enabled", func(c *config.Config) bool { return c.Backup.Enabled }))
+						r.Post("/backup", s.handleCreateBackup)
+						r.Get("/backup/status", s.handleBackupStatus)
+						r.Get("/backups", s.handleListBackups)
+						r.Get("/backups/{filename}/validate", s.handleValidateBackup)
+						r.Delete("/backups/{filename}", s.handleDeleteBackup)
+					})
 				})
 
 				r.Group(func(r chi.Router) {
-					r.Use(s.requireEnabled("backup is not enabled", func(c *config.Config) bool { return c.Backup.Enabled }))
-					r.Post("/backup", s.handleCreateBackup)
-					r.Get("/backup/status", s.handleBackupStatus)
-					r.Get("/backups", s.handleListBackups)
-					r.Get("/backups/{filename}", s.handleDownloadBackupFile)
-					r.Get("/backups/{filename}/validate", s.handleValidateBackup)
-					r.Delete("/backups/{filename}", s.handleDeleteBackup)
+					r.Use(s.requireEnabled("file monitor is not enabled", func(c *config.Config) bool {
+						return c.FileMonitor.Enabled
+					}))
+					r.Get("/file-monitor/status", s.handleFileMonitorStatus)
+					r.Post("/file-monitor/check", s.handleFileMonitorCheck)
 				})
+
+				r.Group(func(r chi.Router) {
+					r.Use(s.requireEnabled("media file check is not enabled", func(c *config.Config) bool {
+						return c.MediaFileCheck.Enabled
+					}))
+					r.Post("/media/files/check", s.handleMediaFileCheck)
+					r.Get("/media/files/check/status", s.handleMediaFileCheckStatus)
+				})
+
+				r.Post("/notifications/test-email", s.handleTestEmail)
 			})
 
 			r.Group(func(r chi.Router) {
-				r.Use(s.requireEnabled("file monitor is not enabled", func(c *config.Config) bool { return c.FileMonitor.Enabled }))
-				r.Get("/file-monitor/status", s.handleFileMonitorStatus)
-				r.Post("/file-monitor/check", s.handleFileMonitorCheck)
+				r.Use(s.requireEnabled("backup is not enabled", func(c *config.Config) bool { return c.Backup.Enabled }))
+				r.Get("/db/backups/{filename}", s.handleDownloadBackupFile)
 			})
-
-			r.Group(func(r chi.Router) {
-				r.Use(s.requireEnabled("media file check is not enabled", func(c *config.Config) bool { return c.MediaFileCheck.Enabled }))
-				r.Post("/media/files/check", s.handleMediaFileCheck)
-				r.Get("/media/files/check/status", s.handleMediaFileCheckStatus)
-			})
-
-			r.Post("/notifications/test-email", s.handleTestEmail)
 		})
 	})
 
@@ -123,16 +141,20 @@ func (s *Server) Shutdown(ctx context.Context) error {
 }
 
 func (s *Server) setupEntityRoutes(r chi.Router, path string, entityType types.EntityType) {
+	apiCfg := s.service.Config().API
+	requestTimeout := middleware.Timeout(apiCfg.GetRequestTimeout())
+	uploadTimeout := middleware.Timeout(apiCfg.GetUploadReadTimeout() + apiCfg.GetRequestTimeout())
+
 	r.Route(path, func(r chi.Router) {
-		r.Get("/", s.handleStats(entityType))
-		r.Delete("/bulk-delete", s.handleBulkDelete(entityType))
+		r.With(requestTimeout).Get("/", s.handleStats(entityType))
+		r.With(requestTimeout).Delete("/bulk-delete", s.handleBulkDelete(entityType))
 
 		r.Route("/{id}", func(r chi.Router) {
-			r.Get("/", s.handleEntityByID(entityType))
+			r.With(requestTimeout).Get("/", s.handleEntityByID(entityType))
 			r.Route("/image", func(r chi.Router) {
-				r.Get("/", s.handleGetImage(entityType))
-				r.Post("/", s.handleImageUpload(entityType))
-				r.Delete("/", s.handleDeleteImage(entityType))
+				r.With(requestTimeout).Get("/", s.handleGetImage(entityType))
+				r.With(uploadTimeout).Post("/", s.handleImageUpload(entityType))
+				r.With(requestTimeout).Delete("/", s.handleDeleteImage(entityType))
 			})
 		})
 	})

@@ -1676,7 +1676,12 @@ Het gedrag van de API kan worden geconfigureerd via `config.json`:
   "api": {
     "enabled": true,
     "keys": ["jouw-veilige-api-sleutel-hier"],
-    "request_timeout_seconds": 30
+    "request_timeout_seconds": 30,
+    "upload_read_timeout_seconds": 180,
+    "read_timeout_seconds": 30,
+    "write_timeout_seconds": 60,
+    "idle_timeout_seconds": 120,
+    "max_upload_body_bytes": 73400320
   },
   "maintenance": {
     "bloat_threshold": 10.0,
@@ -1748,6 +1753,21 @@ Het gedrag van de API kan worden geconfigureerd via `config.json`:
 **Instellingen voor afbeeldingen:**
 - `image.max_image_download_size_bytes`: Maximale downloadgrootte voor externe image-URL's (standaard 52428800, 50 MiB).
 - `image.max_pixels`: Maximale gedecodeerde afbeeldingsgrootte in pixels vóór optimalisatie (standaard 25000000). Grotere afbeeldingen worden na `DecodeConfig` afgewezen voordat de volledige pixelbuffer wordt gedecodeerd.
+
+**Instellingen voor API-server en uploads:**
+- `api.enabled`: Schakel API-key-authenticatie in.
+- `api.keys`: Toegestane API-sleutels wanneer authenticatie is ingeschakeld.
+- `api.request_timeout_seconds`: Maximale duur voor een normale afgehandelde API-request binnen de router
+  (standaard 30).
+- `api.upload_read_timeout_seconds`: Maximale tijd voor het lezen van image upload request bodies
+  (standaard 180). Uploadroutes krijgen daarna nog de normale `request_timeout_seconds` voor verwerking.
+- `api.read_timeout_seconds`: Maximale tijd voor het lezen van request headers en body (standaard 30).
+- `api.write_timeout_seconds`: Maximale tijd voor het schrijven van de response (standaard 60).
+- `api.idle_timeout_seconds`: Maximale idle tijd voor keep-alive verbindingen (standaard 120).
+- `api.max_upload_body_bytes`: Maximale JSON request-body voor image upload endpoints
+  (standaard 73400320, ongeveer 70 MiB).
+
+Voor deze API-instellingen betekent `0` of weglaten: gebruik de applicatiestandaard. Het betekent dus niet "onbeperkt".
 
 **Instellingen voor bestandsbewaking:**
 - `file_monitor.enabled`: Schakel de bestandsbewaking in.

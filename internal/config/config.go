@@ -45,9 +45,14 @@ type ImageConfig struct {
 
 // APIConfig controls API authentication and request timeouts.
 type APIConfig struct {
-	Enabled               bool     `json:"enabled"`
-	Keys                  []string `json:"keys" validate:"required_if=Enabled true,dive,required"`
-	RequestTimeoutSeconds int      `json:"request_timeout_seconds" validate:"gte=0"`
+	Enabled                  bool     `json:"enabled"`
+	Keys                     []string `json:"keys" validate:"required_if=Enabled true,dive,required"`
+	RequestTimeoutSeconds    int      `json:"request_timeout_seconds" validate:"gte=0"`
+	UploadReadTimeoutSeconds int      `json:"upload_read_timeout_seconds" validate:"gte=0"`
+	ReadTimeoutSeconds       int      `json:"read_timeout_seconds" validate:"gte=0"`
+	WriteTimeoutSeconds      int      `json:"write_timeout_seconds" validate:"gte=0"`
+	IdleTimeoutSeconds       int      `json:"idle_timeout_seconds" validate:"gte=0"`
+	MaxUploadBodyBytes       int64    `json:"max_upload_body_bytes" validate:"gte=0"`
 }
 
 // MaintenanceConfig holds thresholds used by database health checks.
@@ -245,6 +250,11 @@ const (
 	DefaultMaxImageDownloadSizeBytes   = 50 * 1024 * 1024
 	DefaultMaxPixels                   = 25_000_000
 	DefaultRequestTimeoutSeconds       = 30
+	DefaultUploadReadTimeoutSeconds    = 180
+	DefaultReadTimeoutSeconds          = 30
+	DefaultWriteTimeoutSeconds         = 60
+	DefaultIdleTimeoutSeconds          = 120
+	DefaultMaxUploadBodyBytes          = 70 * 1024 * 1024
 	DefaultBloatThreshold              = 10.0
 	DefaultDeadTupleThreshold          = 10000
 	DefaultVacuumStalenessDays         = 7
@@ -274,6 +284,31 @@ func (c *ImageConfig) GetMaxPixels() int64 {
 // GetRequestTimeout returns the configured HTTP timeout or its default.
 func (c *APIConfig) GetRequestTimeout() time.Duration {
 	return time.Duration(cmp.Or(c.RequestTimeoutSeconds, DefaultRequestTimeoutSeconds)) * time.Second
+}
+
+// GetUploadReadTimeout returns the image upload body-read timeout or its default.
+func (c *APIConfig) GetUploadReadTimeout() time.Duration {
+	return time.Duration(cmp.Or(c.UploadReadTimeoutSeconds, DefaultUploadReadTimeoutSeconds)) * time.Second
+}
+
+// GetReadTimeout returns the HTTP server read timeout or its default.
+func (c *APIConfig) GetReadTimeout() time.Duration {
+	return time.Duration(cmp.Or(c.ReadTimeoutSeconds, DefaultReadTimeoutSeconds)) * time.Second
+}
+
+// GetWriteTimeout returns the HTTP server write timeout or its default.
+func (c *APIConfig) GetWriteTimeout() time.Duration {
+	return time.Duration(cmp.Or(c.WriteTimeoutSeconds, DefaultWriteTimeoutSeconds)) * time.Second
+}
+
+// GetIdleTimeout returns the HTTP server idle timeout or its default.
+func (c *APIConfig) GetIdleTimeout() time.Duration {
+	return time.Duration(cmp.Or(c.IdleTimeoutSeconds, DefaultIdleTimeoutSeconds)) * time.Second
+}
+
+// GetMaxUploadBodyBytes returns the image upload request-body cap or its default.
+func (c *APIConfig) GetMaxUploadBodyBytes() int64 {
+	return cmp.Or(c.MaxUploadBodyBytes, DefaultMaxUploadBodyBytes)
 }
 
 // GetMaxOpenConns returns the configured open-connection cap or its default.
