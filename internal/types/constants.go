@@ -12,16 +12,6 @@ const (
 	EntityTypeTrack EntityType = "track"
 )
 
-// Table is a validated Aeron table selector.
-type Table string
-
-const (
-	// TableArtist selects the artist table.
-	TableArtist Table = "artist"
-	// TableTrack selects the track table.
-	TableTrack Table = "track"
-)
-
 // LongRunningQuery is a database query exceeding the configured duration threshold.
 type LongRunningQuery struct {
 	PID      int    `db:"pid" json:"pid"`
@@ -36,9 +26,9 @@ const VoicetrackUserID = "021F097E-B504-49BB-9B89-16B64D2E8422"
 // SupportedFormats lists the image formats that can be processed.
 var SupportedFormats = []string{"jpeg", "jpg", "png"}
 
-// IDColumnForTable returns the Aeron primary-key column for table.
-func IDColumnForTable(table Table) string {
-	if table == TableTrack {
+// IDColumn returns the Aeron primary-key column for the entity's table.
+func (e EntityType) IDColumn() string {
+	if e == EntityTypeTrack {
 		return "titleid"
 	}
 	return "artistid"
@@ -58,12 +48,12 @@ func IsValidIdentifier(name string) bool {
 }
 
 // QualifiedTable returns a fully qualified schema.table name after validating both identifiers.
-func QualifiedTable(schema string, table Table) (string, error) {
+func QualifiedTable(schema string, entity EntityType) (string, error) {
 	if !IsValidIdentifier(schema) {
 		return "", fmt.Errorf("invalid schema name: %s", schema)
 	}
-	if !IsValidIdentifier(string(table)) {
-		return "", fmt.Errorf("invalid table name: %s", table)
+	if !IsValidIdentifier(string(entity)) {
+		return "", fmt.Errorf("invalid table name: %s", entity)
 	}
-	return fmt.Sprintf("%s.%s", schema, table), nil
+	return fmt.Sprintf("%s.%s", schema, entity), nil
 }

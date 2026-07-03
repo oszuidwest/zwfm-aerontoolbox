@@ -20,7 +20,7 @@ type FileAlertResult struct {
 
 // SendFileAlerts sends one email listing newly stale, missing, or errored files.
 func (s *NotificationService) SendFileAlerts(alerts []FileAlertResult) {
-	if !IsConfigured(&s.config.Notifications.Email) || len(alerts) == 0 {
+	if !s.configured || len(alerts) == 0 {
 		return
 	}
 
@@ -30,7 +30,7 @@ func (s *NotificationService) SendFileAlerts(alerts []FileAlertResult) {
 
 // SendFileRecoveries sends one email listing files that recovered.
 func (s *NotificationService) SendFileRecoveries(recoveries []FileAlertResult) {
-	if !IsConfigured(&s.config.Notifications.Email) || len(recoveries) == 0 {
+	if !s.configured || len(recoveries) == 0 {
 		return
 	}
 

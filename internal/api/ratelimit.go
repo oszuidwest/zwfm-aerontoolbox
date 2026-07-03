@@ -21,11 +21,12 @@ type rateLimitState struct {
 }
 
 type apiRateLimiter struct {
-	mu      sync.Mutex
-	limit   int
-	window  time.Duration
-	clients map[string]rateLimitState
-	now     func() time.Time
+	mu          sync.Mutex
+	limit       int
+	window      time.Duration
+	clients     map[string]rateLimitState
+	lastCleanup time.Time
+	now         func() time.Time
 }
 
 func newAPIRateLimiter(cfg *config.APIConfig) *apiRateLimiter {
@@ -71,10 +72,13 @@ func (l *apiRateLimiter) allow(key string) (bool, time.Duration, bool) {
 	return true, 0, false
 }
 
+// cleanupLocked sweeps idle entries at most once per window, so a large client
+// map costs one O(n) scan per window instead of one per request.
 func (l *apiRateLimiter) cleanupLocked(now time.Time) {
-	if len(l.clients) < 1024 {
+	if len(l.clients) < 1024 || now.Sub(l.lastCleanup) < l.window {
 		return
 	}
+	l.lastCleanup = now
 	maxIdle := 2 * l.window
 	for key, st := range l.clients {
 		if now.Sub(st.windowStart) > maxIdle {
@@ -110,9 +114,10 @@ func (s *Server) rateLimitMiddleware(limiter *apiRateLimiter) func(http.Handler)
 }
 
 func (s *Server) rateLimitKey(r *http.Request) string {
-	if apiKey := r.Header.Get("X-API-Key"); apiKey != "" && s.isValidAPIKey(apiKey) {
-		sum := sha256.Sum256([]byte(apiKey))
-		return "api-key:" + hex.EncodeToString(sum[:])
+	if apiKey := r.Header.Get("X-API-Key"); apiKey != "" {
+		if sum := sha256.Sum256([]byte(apiKey)); s.isValidAPIKeyHash(sum) {
+			return "api-key:" + hex.EncodeToString(sum[:])
+		}
 	}
 
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
@@ -123,9 +128,5 @@ func (s *Server) rateLimitKey(r *http.Request) string {
 }
 
 func retryAfterSeconds(d time.Duration) string {
-	seconds := int(math.Ceil(d.Seconds()))
-	if seconds < 1 {
-		seconds = 1
-	}
-	return strconv.Itoa(seconds)
+	return strconv.Itoa(max(1, int(math.Ceil(d.Seconds()))))
 }

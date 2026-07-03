@@ -32,7 +32,7 @@ var _ backupObjectStore = (*s3Service)(nil)
 // newS3Service builds an S3 sync client for the configured bucket. Callers gate
 // on S3 being enabled; this always returns a live client so a disabled store can
 // never be boxed into the backupObjectStore interface as a non-nil typed nil.
-func newS3Service(cfg *config.S3Config) (*s3Service, error) { //nolint:unparam // error result reserved for future client validation
+func newS3Service(cfg *config.S3Config) *s3Service {
 	client := s3.New(s3.Options{
 		Region:       cfg.Region,
 		BaseEndpoint: ptrOrNil(cfg.Endpoint),
@@ -55,7 +55,7 @@ func newS3Service(cfg *config.S3Config) (*s3Service, error) { //nolint:unparam /
 		client: client,
 		bucket: cfg.Bucket,
 		prefix: cfg.GetPathPrefix(),
-	}, nil
+	}
 }
 
 // ptrOrNil returns nil for an empty string and an AWS string pointer otherwise.

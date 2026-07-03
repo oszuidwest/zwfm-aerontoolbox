@@ -94,11 +94,7 @@ func newBackupService(
 		svc.backupRoot = root
 
 		if cfg.Backup.S3.Enabled {
-			s3svc, err := newS3Service(&cfg.Backup.S3)
-			if err != nil {
-				return nil, err
-			}
-			svc.s3 = s3svc
+			svc.s3 = newS3Service(&cfg.Backup.S3)
 		}
 	}
 
@@ -169,12 +165,17 @@ func (s *BackupService) checkEnabled() error {
 	return nil
 }
 
+// isManagedBackupName reports whether name has the managed backup file shape.
+func isManagedBackupName(name string) bool {
+	return strings.HasPrefix(name, backupPrefix) && strings.HasSuffix(name, backupSuffix)
+}
+
 // validateBackupFilename accepts only managed .dump backup filenames.
 func validateBackupFilename(filename string) error {
 	if !safeBackupFilenamePattern.MatchString(filename) {
 		return types.NewValidationError("filename", "invalid filename")
 	}
-	if !strings.HasPrefix(filename, backupPrefix) || !strings.HasSuffix(filename, backupSuffix) {
+	if !isManagedBackupName(filename) {
 		return types.NewValidationError("filename", "not a valid backup file")
 	}
 	return nil
@@ -328,9 +329,9 @@ func (s *BackupService) executePgDump(
 
 		var errMsg string
 		switch {
-		case ctx.Err() == context.DeadlineExceeded:
+		case errors.Is(ctx.Err(), context.DeadlineExceeded):
 			errMsg = fmt.Sprintf("backup timeout after %s (configure backup.timeout_minutes)", duration.Round(time.Second))
-		case ctx.Err() == context.Canceled:
+		case errors.Is(ctx.Err(), context.Canceled):
 			errMsg = "backup cancelled"
 		case len(output) > 0:
 			errMsg = strings.TrimSpace(string(output))
@@ -580,7 +581,7 @@ func (s *BackupService) List() (*BackupListResponse, error) {
 		}
 
 		name := entry.Name()
-		if !strings.HasPrefix(name, backupPrefix) || !strings.HasSuffix(name, backupSuffix) {
+		if !isManagedBackupName(name) {
 			continue
 		}
 

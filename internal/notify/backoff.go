@@ -2,7 +2,6 @@ package notify
 
 import (
 	"math/rand/v2"
-	"sync"
 	"time"
 )
 
@@ -13,9 +12,9 @@ const (
 	backoffJitter = 0.5
 )
 
-// Backoff calculates retry delays with capped exponential growth.
+// Backoff calculates retry delays with capped exponential growth. It is used
+// by a single goroutine per retry loop and is not safe for concurrent use.
 type Backoff struct {
-	mu       sync.Mutex
 	current  time.Duration
 	maxDelay time.Duration
 }
@@ -30,9 +29,6 @@ func NewBackoff(initial, maxDelay time.Duration) *Backoff {
 
 // Next returns the current jittered delay and advances the sequence.
 func (b *Backoff) Next() time.Duration {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
 	delay := b.current
 	b.current = min(time.Duration(float64(b.current)*backoffFactor), b.maxDelay)
 

@@ -1,7 +1,6 @@
 package database
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
@@ -29,6 +28,10 @@ const playlistItemJoins = `
 	FROM %s.playlistitem pi
 	LEFT JOIN %s.track t ON pi.titleid = t.titleid
 	LEFT JOIN %s.artist a ON t.artistid = a.artistid`
+
+// playlistItemColumnsSQL is playlistItemColumns with the voicetrack marker
+// rendered; it contains no request-dependent input.
+var playlistItemColumnsSQL = fmt.Sprintf(playlistItemColumns, types.VoicetrackUserID)
 
 // PlaylistBlock is a scheduled programming block.
 type PlaylistBlock struct {
@@ -59,8 +62,6 @@ type PlaylistItem struct {
 // PlaylistOptions controls playlist filtering, sorting, and pagination.
 type PlaylistOptions struct {
 	BlockID     string
-	Date        string
-	ExportTypes []int
 	Limit       int
 	Offset      int
 	SortBy      string
@@ -71,22 +72,12 @@ type PlaylistOptions struct {
 
 // BuildPlaylistQuery builds a parameterized block-item query.
 func BuildPlaylistQuery(schema string, opts *PlaylistOptions) (query string, params []any, err error) {
-	var conditions []string
+	if opts.BlockID == "" {
+		return "", nil, types.NewValidationError("block_id", "is required")
+	}
+
 	pl := &paramList{}
-
-	if opts.BlockID != "" {
-		conditions = append(conditions, fmt.Sprintf("pi.blockid = %s", pl.next(opts.BlockID)))
-	} else {
-		return "", []any{}, nil
-	}
-
-	if len(opts.ExportTypes) > 0 {
-		placeholders := make([]string, len(opts.ExportTypes))
-		for i, t := range opts.ExportTypes {
-			placeholders[i] = pl.next(t)
-		}
-		conditions = append(conditions, fmt.Sprintf("COALESCE(t.exporttype, 1) NOT IN (%s)", strings.Join(placeholders, ",")))
-	}
+	conditions := []string{fmt.Sprintf("pi.blockid = %s", pl.next(opts.BlockID))}
 
 	if opts.TrackImage != nil {
 		if *opts.TrackImage {
@@ -114,6 +105,8 @@ func BuildPlaylistQuery(schema string, opts *PlaylistOptions) (query string, par
 		orderBy = "t.tracktitle"
 	case "start_time":
 		orderBy = "pi.startdatetime"
+	case "duration":
+		orderBy = "COALESCE(t.knownlength, 0)"
 	}
 	if opts.SortDesc {
 		orderBy += " DESC"
@@ -123,9 +116,8 @@ func BuildPlaylistQuery(schema string, opts *PlaylistOptions) (query string, par
 		return "", nil, types.NewValidationError("schema", fmt.Sprintf("invalid schema name: %s", schema))
 	}
 
-	columns := fmt.Sprintf(playlistItemColumns, types.VoicetrackUserID)
 	joins := fmt.Sprintf(playlistItemJoins, schema, schema, schema)
-	query = fmt.Sprintf("SELECT %s %s WHERE %s ORDER BY %s", columns, joins, whereClause, orderBy)
+	query = fmt.Sprintf("SELECT %s %s WHERE %s ORDER BY %s", playlistItemColumnsSQL, joins, whereClause, orderBy)
 
 	if opts.Limit > 0 {
 		query += fmt.Sprintf(" LIMIT %s", pl.next(opts.Limit))
@@ -135,15 +127,4 @@ func BuildPlaylistQuery(schema string, opts *PlaylistOptions) (query string, par
 	}
 
 	return query, pl.values, nil
-}
-
-// ExecutePlaylistQuery runs a playlist query and scans rows into PlaylistItem values.
-func ExecutePlaylistQuery(ctx context.Context, db DB, query string, params []any) ([]PlaylistItem, error) {
-	var items []PlaylistItem
-	err := db.SelectContext(ctx, &items, query, params...)
-	if err != nil {
-		return nil, &types.OperationError{Operation: "fetch playlist", Err: err}
-	}
-
-	return items, nil
 }

@@ -123,8 +123,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		DatabaseStatus: dbStatus,
 	}
 
-	emailCfg := &s.service.Config().Notifications.Email
-	configured := notify.IsConfigured(emailCfg)
+	configured := s.service.Notify.IsConfigured()
 	nh := &NotificationHealth{Configured: configured}
 
 	var notifyExpiresSoon bool
@@ -186,7 +185,7 @@ func (s *Server) handleStats(entityType types.EntityType) http.HandlerFunc {
 		stats, err := s.service.Media.GetStatistics(r.Context(), entityType)
 		if err != nil {
 			slog.Error("Failed to retrieve statistics", "entityType", entityType, "error", err)
-			respondError(w, http.StatusInternalServerError, err.Error())
+			respondServiceError(w, err)
 			return
 		}
 
@@ -210,8 +209,7 @@ func (s *Server) handleEntityByID(entityType types.EntityType) http.HandlerFunc 
 		if entityType == types.EntityTypeArtist {
 			artist, err := s.service.Media.GetArtist(r.Context(), entityID)
 			if err != nil {
-				statusCode := errorCode(err)
-				respondError(w, statusCode, err.Error())
+				respondServiceError(w, err)
 				return
 			}
 			respondJSON(w, http.StatusOK, artist)
@@ -220,15 +218,14 @@ func (s *Server) handleEntityByID(entityType types.EntityType) http.HandlerFunc 
 
 		track, err := s.service.Media.GetTrack(r.Context(), entityID)
 		if err != nil {
-			statusCode := errorCode(err)
-			respondError(w, statusCode, err.Error())
+			respondServiceError(w, err)
 			return
 		}
 		respondJSON(w, http.StatusOK, track)
 	}
 }
 
-func (s *Server) uploadResponse(result *service.ImageUploadResult, entityType types.EntityType) ImageUploadResponse {
+func uploadResponse(result *service.ImageUploadResult, entityType types.EntityType) ImageUploadResponse {
 	response := ImageUploadResponse{
 		Artist:               result.ArtistName,
 		OriginalSize:         result.OriginalSize,
@@ -255,7 +252,7 @@ func (s *Server) handleBulkDelete(entityType types.EntityType) http.HandlerFunc 
 
 		result, err := s.service.Media.DeleteAllImages(r.Context(), entityType)
 		if err != nil {
-			respondError(w, http.StatusInternalServerError, err.Error())
+			respondServiceError(w, err)
 			return
 		}
 
@@ -275,12 +272,10 @@ func (s *Server) handleGetImage(entityType types.EntityType) http.HandlerFunc {
 
 		imageData, err := s.service.Media.GetImage(r.Context(), entityType, entityID)
 		if err != nil {
-			statusCode := errorCode(err)
-			respondError(w, statusCode, err.Error())
+			respondServiceError(w, err)
 			return
 		}
 
-		w.Header().Del("Content-Type")
 		w.Header().Set("Content-Type", http.DetectContentType(imageData))
 		w.Header().Set("Content-Length", strconv.Itoa(len(imageData)))
 
@@ -312,8 +307,7 @@ func (s *Server) handleImageUpload(entityType types.EntityType) http.HandlerFunc
 
 		var req ImageUploadRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			var maxBytesErr *http.MaxBytesError
-			if errors.As(err, &maxBytesErr) {
+			if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 				respondError(w, http.StatusRequestEntityTooLarge, "Request body too large")
 				return
 			}
@@ -354,12 +348,11 @@ func (s *Server) handleImageUpload(entityType types.EntityType) http.HandlerFunc
 
 		result, err := s.service.Media.UploadImage(r.Context(), params)
 		if err != nil {
-			statusCode := errorCode(err)
-			respondError(w, statusCode, err.Error())
+			respondServiceError(w, err)
 			return
 		}
 
-		response := s.uploadResponse(result, entityType)
+		response := uploadResponse(result, entityType)
 		respondJSON(w, http.StatusOK, response)
 	}
 }
@@ -383,7 +376,7 @@ func (s *Server) handleDeleteImage(entityType types.EntityType) http.HandlerFunc
 				"entityType", entityType,
 				"id", entityID,
 				"error", err)
-			respondError(w, errorCode(err), err.Error())
+			respondServiceError(w, err)
 			return
 		}
 
@@ -443,7 +436,7 @@ func (s *Server) handlePlaylist(w http.ResponseWriter, r *http.Request) {
 			slog.Error("Failed to retrieve playlist",
 				"block_id", opts.BlockID,
 				"error", err)
-			respondError(w, http.StatusInternalServerError, err.Error())
+			respondServiceError(w, err)
 			return
 		}
 		respondJSON(w, http.StatusOK, playlist)
@@ -457,7 +450,7 @@ func (s *Server) handlePlaylist(w http.ResponseWriter, r *http.Request) {
 		slog.Error("Failed to retrieve playlist with tracks",
 			"date", date,
 			"error", err)
-		respondError(w, http.StatusInternalServerError, err.Error())
+		respondServiceError(w, err)
 		return
 	}
 

@@ -99,6 +99,7 @@ func buildTestMatcher(t *testing.T, driveDirs map[string]string, searchDirs []st
 		searchDirs:      searchDirs,
 		caseInsensitive: caseInsensitive,
 		statTimeout:     config.DefaultMediaFileCheckStatTimeoutSeconds * time.Second,
+		startStatFlight: new(statFlightGroup).startOrJoin,
 	}
 }
 
@@ -147,9 +148,9 @@ func waitForStatInflightEmpty(t *testing.T, svc *MediaFileCheckService) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
-		svc.statInflightMu.Lock()
-		n := len(svc.statInflight)
-		svc.statInflightMu.Unlock()
+		svc.statFlights.mu.Lock()
+		n := len(svc.statFlights.flights)
+		svc.statFlights.mu.Unlock()
 		if n == 0 {
 			return
 		}
@@ -330,12 +331,10 @@ func TestMatch_StatTimeoutUsesSingleFlight(t *testing.T) {
 		return nil, os.ErrNotExist
 	}
 
-	svc := &MediaFileCheckService{
-		statInflight: make(map[string]*statInFlight),
-	}
+	svc := &MediaFileCheckService{}
 	m := buildTestMatcher(t, map[string]string{"O:": t.TempDir()}, nil, true)
 	m.statTimeout = 10 * time.Millisecond
-	m.startStatFlight = svc.startOrJoinMediaStatFlight
+	m.startStatFlight = svc.statFlights.startOrJoin
 
 	out := m.match(&matchInput{FilePath: `O:\Audio\frozen.wav`})
 	if out.Status != MediaStatusStatError || !strings.Contains(out.Error, "stat timeout") {
@@ -383,13 +382,11 @@ func TestMatch_StatSingleFlightSuccessPath(t *testing.T) {
 		return info, nil
 	}
 
-	svc := &MediaFileCheckService{
-		statInflight: make(map[string]*statInFlight),
-	}
+	svc := &MediaFileCheckService{}
 	m := buildTestMatcher(t, map[string]string{"O:": dir}, nil, true)
 	m.ctx = context.Background()
 	m.statTimeout = time.Second
-	m.startStatFlight = svc.startOrJoinMediaStatFlight
+	m.startStatFlight = svc.statFlights.startOrJoin
 
 	input := &matchInput{FilePath: `O:\Audio\hit.wav`}
 	first := make(chan matchOutcome, 1)
@@ -431,13 +428,11 @@ func TestMatch_StatFlightContextCancel(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	svc := &MediaFileCheckService{
-		statInflight: make(map[string]*statInFlight),
-	}
+	svc := &MediaFileCheckService{}
 	m := buildTestMatcher(t, map[string]string{"O:": t.TempDir()}, nil, true)
 	m.ctx = ctx
 	m.statTimeout = time.Second
-	m.startStatFlight = svc.startOrJoinMediaStatFlight
+	m.startStatFlight = svc.statFlights.startOrJoin
 
 	outCh := make(chan matchOutcome, 1)
 	go func() { outCh <- m.match(&matchInput{FilePath: `O:\Audio\frozen.wav`}) }()
@@ -471,13 +466,11 @@ func TestMatch_CompletedStatFlightIsRemoved(t *testing.T) {
 		return info, nil
 	}
 
-	svc := &MediaFileCheckService{
-		statInflight: make(map[string]*statInFlight),
-	}
+	svc := &MediaFileCheckService{}
 	m := buildTestMatcher(t, map[string]string{"O:": dir}, nil, true)
 	m.ctx = context.Background()
 	m.statTimeout = time.Second
-	m.startStatFlight = svc.startOrJoinMediaStatFlight
+	m.startStatFlight = svc.statFlights.startOrJoin
 
 	for range 2 {
 		out := m.match(&matchInput{FilePath: `O:\Audio\hit.wav`})
