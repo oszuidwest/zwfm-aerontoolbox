@@ -105,6 +105,8 @@ func BuildPlaylistQuery(schema string, opts *PlaylistOptions) (query string, par
 		orderBy = "t.tracktitle"
 	case "start_time":
 		orderBy = "pi.startdatetime"
+	case "duration":
+		orderBy = "COALESCE(t.knownlength, 0)"
 	}
 	if opts.SortDesc {
 		orderBy += " DESC"

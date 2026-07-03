@@ -136,6 +136,19 @@ func TestBuildPlaylistQueryRejectsInvalidSchema(t *testing.T) {
 	}
 }
 
+func TestBuildPlaylistQuerySortByDuration(t *testing.T) {
+	query, _, err := BuildPlaylistQuery("aeron", &PlaylistOptions{
+		BlockID: "block-1",
+		SortBy:  "duration",
+	})
+	if err != nil {
+		t.Fatalf("BuildPlaylistQuery: %v", err)
+	}
+	if !strings.Contains(query, "ORDER BY COALESCE(t.knownlength, 0)") {
+		t.Fatalf("query = %s, want duration sort", query)
+	}
+}
+
 func TestBuildPlaylistQuerySortByIsAllowListed(t *testing.T) {
 	query, _, err := BuildPlaylistQuery("aeron", &PlaylistOptions{
 		BlockID:  "block-1",

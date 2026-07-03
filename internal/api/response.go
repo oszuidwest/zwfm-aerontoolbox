@@ -43,9 +43,20 @@ func respondError(w http.ResponseWriter, statusCode int, errorMsg string) {
 }
 
 // respondServiceError maps a service-layer error onto the API response, using
-// the typed HTTPError status when available and 500 otherwise.
+// the typed HTTPError status when available and 500 otherwise. Internal (5xx)
+// errors are logged in full but sent to the client without the underlying
+// cause, so database and filesystem details never leave the server.
 func respondServiceError(w http.ResponseWriter, err error) {
-	respondError(w, errorCode(err), err.Error())
+	statusCode := errorCode(err)
+	message := err.Error()
+	if statusCode >= http.StatusInternalServerError {
+		slog.Error("Request failed with internal error", "error", err)
+		message = "internal server error"
+		if opErr, ok := errors.AsType[*types.OperationError](err); ok {
+			message = opErr.Operation + " failed"
+		}
+	}
+	respondError(w, statusCode, message)
 }
 
 func errorCode(err error) int {
