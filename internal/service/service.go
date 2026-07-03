@@ -3,7 +3,6 @@ package service
 
 import (
 	"encoding/base64"
-	"io"
 	"strings"
 
 	"github.com/jmoiron/sqlx"
@@ -70,10 +69,16 @@ func (s *AeronService) Close() {
 	s.Notify.Close()
 }
 
-// DecodeBase64 decodes raw base64 or a data URL payload.
+// DecodeBase64 decodes raw base64 or a data URL payload. The output buffer is
+// sized up front so multi-megabyte uploads avoid append-growth copies.
 func DecodeBase64(data string) ([]byte, error) {
 	if _, after, found := strings.Cut(data, ","); found {
 		data = after
 	}
-	return io.ReadAll(base64.NewDecoder(base64.StdEncoding, strings.NewReader(data)))
+	buf := make([]byte, base64.StdEncoding.DecodedLen(len(data)))
+	n, err := base64.StdEncoding.Decode(buf, []byte(data))
+	if err != nil {
+		return nil, err
+	}
+	return buf[:n], nil
 }

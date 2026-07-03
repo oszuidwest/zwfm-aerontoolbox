@@ -26,7 +26,7 @@ func (r *HealthAlertResult) HasIssues() bool {
 // NotifyHealthCheckError opens the health alert state when the check itself fails.
 // The next successful clean check will emit the matching recovery email.
 func (s *NotificationService) NotifyHealthCheckError(err error) {
-	if !IsConfigured(&s.config.Notifications.Email) || err == nil {
+	if !s.configured || err == nil {
 		return
 	}
 

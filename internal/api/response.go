@@ -42,15 +42,18 @@ func respondError(w http.ResponseWriter, statusCode int, errorMsg string) {
 	}
 }
 
+// respondServiceError maps a service-layer error onto the API response, using
+// the typed HTTPError status when available and 500 otherwise.
+func respondServiceError(w http.ResponseWriter, err error) {
+	respondError(w, errorCode(err), err.Error())
+}
+
 func errorCode(err error) int {
 	if err == nil {
 		return http.StatusOK
 	}
-
-	var httpErr types.HTTPError
-	if errors.As(err, &httpErr) {
+	if httpErr, ok := errors.AsType[types.HTTPError](err); ok {
 		return httpErr.StatusCode()
 	}
-
 	return http.StatusInternalServerError
 }

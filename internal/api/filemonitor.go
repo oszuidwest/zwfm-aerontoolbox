@@ -19,7 +19,7 @@ func (s *Server) handleFileMonitorStatus(w http.ResponseWriter, r *http.Request)
 func (s *Server) handleFileMonitorCheck(w http.ResponseWriter, r *http.Request) {
 	runID, err := s.service.FileMonitor.TriggerCheck()
 	if err != nil {
-		respondError(w, errorCode(err), err.Error())
+		respondServiceError(w, err)
 		return
 	}
 	respondJSON(w, http.StatusAccepted, FileMonitorCheckResponse{
