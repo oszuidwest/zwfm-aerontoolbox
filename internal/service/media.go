@@ -9,6 +9,7 @@ import (
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/database"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/image"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
+	"github.com/oszuidwest/zwfm-aerontoolbox/internal/util"
 )
 
 // MediaService coordinates artist, track, image, and playlist workflows.
@@ -37,14 +38,12 @@ func (s *MediaService) GetTrack(ctx context.Context, id string) (*database.Track
 
 // GetImage returns stored artwork for an artist or track.
 func (s *MediaService) GetImage(ctx context.Context, entityType types.EntityType, id string) ([]byte, error) {
-	table := types.Table(entityType)
-	return s.repo.GetImage(ctx, table, id)
+	return s.repo.GetImage(ctx, entityType, id)
 }
 
 // DeleteImage clears stored artwork for an artist or track.
 func (s *MediaService) DeleteImage(ctx context.Context, entityType types.EntityType, id string) error {
-	table := types.Table(entityType)
-	return s.repo.DeleteImage(ctx, table, id)
+	return s.repo.DeleteImage(ctx, entityType, id)
 }
 
 // ImageUploadParams selects the target entity and exactly one image source.
@@ -96,7 +95,7 @@ func (s *MediaService) UploadImage(ctx context.Context, params *ImageUploadParam
 	var imageData []byte
 	var err error
 	if params.ImageURL != "" {
-		imageData, err = image.DownloadImage(params.ImageURL, s.config.Image.GetMaxDownloadBytes())
+		imageData, err = util.ValidateAndDownloadImage(params.ImageURL, s.config.Image.GetMaxDownloadBytes())
 		if err != nil {
 			slog.Error("Image download failed", "url", params.ImageURL, "error", err)
 			return nil, types.NewValidationError("image", fmt.Sprintf("download failed: %v", err))
@@ -110,6 +109,7 @@ func (s *MediaService) UploadImage(ctx context.Context, params *ImageUploadParam
 		TargetHeight:  s.config.Image.TargetHeight,
 		Quality:       s.config.Image.Quality,
 		RejectSmaller: s.config.Image.RejectSmaller,
+		MaxPixels:     s.config.Image.GetMaxPixels(),
 	}
 	slog.Debug("Image processing started",
 		"inputSize", len(imageData),
@@ -125,8 +125,7 @@ func (s *MediaService) UploadImage(ctx context.Context, params *ImageUploadParam
 		"optimizedSize", processingResult.Optimized.Size,
 		"savings", processingResult.Savings)
 
-	table := types.Table(params.EntityType)
-	if err := s.repo.UpdateImage(ctx, table, params.ID, processingResult.Data); err != nil {
+	if err := s.repo.UpdateImage(ctx, params.EntityType, params.ID, processingResult.Data); err != nil {
 		slog.Error("Image save failed", "entityType", params.EntityType, "id", params.ID, "error", err)
 		return nil, err
 	}
@@ -153,7 +152,7 @@ func (s *MediaService) GetStatistics(ctx context.Context, entityType types.Entit
 		return nil, err
 	}
 
-	counts, err := s.repo.CountImages(ctx, types.Table(entityType))
+	counts, err := s.repo.CountImages(ctx, entityType)
 	if err != nil {
 		return nil, err
 	}
@@ -167,40 +166,28 @@ func (s *MediaService) GetStatistics(ctx context.Context, entityType types.Entit
 
 // DeleteResult reports a bulk artwork deletion.
 type DeleteResult struct {
-	CountBefore  int
 	DeletedCount int64
 }
 
-// DeleteAllImages clears all artwork for one entity type.
+// DeleteAllImages clears all artwork for one entity type. The UPDATE itself
+// reports how many rows carried an image, so no pre-count is needed.
 func (s *MediaService) DeleteAllImages(ctx context.Context, entityType types.EntityType) (*DeleteResult, error) {
 	if err := validateEntityType(entityType); err != nil {
 		return nil, err
 	}
 
-	table := types.Table(entityType)
-
-	count, err := s.repo.CountWithImages(ctx, table)
+	deleted, err := s.repo.DeleteAllImages(ctx, entityType)
 	if err != nil {
 		return nil, err
 	}
 
-	if count == 0 {
-		return &DeleteResult{CountBefore: count}, nil
-	}
-
-	deleted, err := s.repo.DeleteAllImages(ctx, table)
-	if err != nil {
-		return nil, err
-	}
-
-	return &DeleteResult{CountBefore: count, DeletedCount: deleted}, nil
+	return &DeleteResult{DeletedCount: deleted}, nil
 }
 
 // DefaultPlaylistOptions returns the API defaults for playlist queries.
 func DefaultPlaylistOptions() database.PlaylistOptions {
 	return database.PlaylistOptions{
-		ExportTypes: []int{},
-		SortBy:      "start_time",
+		SortBy: "start_time",
 	}
 }
 

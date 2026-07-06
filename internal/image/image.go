@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"image"
 	"image/jpeg"
-	"image/png"
+	_ "image/png" // registers the PNG decoder for image.Decode/DecodeConfig
 
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/util"
@@ -19,13 +19,12 @@ type Config struct {
 	TargetHeight  int
 	Quality       int
 	RejectSmaller bool
+	MaxPixels     int64
 }
 
 // ProcessingResult reports original and stored image characteristics.
 type ProcessingResult struct {
 	Data      []byte
-	Format    string
-	Encoder   string
 	Original  Info
 	Optimized Info
 	Savings   float64
@@ -39,92 +38,39 @@ type Info struct {
 	Size   int
 }
 
-// Optimizer applies configured resize and encoding rules.
-type Optimizer struct {
-	Config Config
-}
-
-// NewOptimizer returns an Optimizer for config.
-func NewOptimizer(config Config) *Optimizer {
-	return &Optimizer{Config: config}
-}
-
-// DownloadImage fetches a remote image through the shared SSRF guard.
-func DownloadImage(urlString string, maxSize int64) ([]byte, error) {
-	return util.ValidateAndDownloadImage(urlString, maxSize)
-}
-
-// getImageInfo extracts format, width, and height metadata from image data.
-func getImageInfo(data []byte) (format string, width, height int, err error) {
-	config, format, err := image.DecodeConfig(bytes.NewReader(data))
-	if err != nil {
-		return "", 0, 0, err
-	}
-	return format, config.Width, config.Height, nil
-}
-
-// OptimizeImage resizes and re-encodes supported image data when beneficial.
-// The format parameter is the already-detected image format (e.g. "jpeg", "png").
-func (o *Optimizer) OptimizeImage(data []byte, format string) (optimized []byte, outFormat, encoder string, err error) {
+// optimizeImage resizes and re-encodes supported image data (JPEG or PNG,
+// both re-encoded as JPEG) when the result is smaller; otherwise it returns
+// the original bytes. Unsupported formats pass through unchanged.
+func optimizeImage(data []byte, format string, cfg Config) ([]byte, error) {
 	switch format {
-	case "jpeg", "jpg":
-		return o.optimizeJPEG(data)
-	case "png":
-		return o.convertPNGToJPEG(data)
+	case "jpeg", "jpg", "png":
 	default:
-		return data, format, "original", nil
+		return data, nil
 	}
-}
 
-// optimizeJPEG processes JPEG image data to optimize size and dimensions.
-func (o *Optimizer) optimizeJPEG(data []byte) (optimized []byte, format, encoder string, err error) {
-	var sourceImage image.Image
-	sourceImage, err = jpeg.Decode(bytes.NewReader(data))
+	sourceImage, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
-		return nil, "", "", types.NewValidationError("image", fmt.Sprintf("failed to decode JPEG: %v", err))
+		return nil, types.NewValidationError("image", fmt.Sprintf("failed to decode %s: %v", format, err))
 	}
 
-	return o.processImage(sourceImage, data, "jpeg", "jpeg")
-}
-
-// convertPNGToJPEG converts PNG image data to optimized JPEG format.
-func (o *Optimizer) convertPNGToJPEG(data []byte) (optimized []byte, format, encoder string, err error) {
-	var sourceImage image.Image
-	sourceImage, err = png.Decode(bytes.NewReader(data))
-	if err != nil {
-		return nil, "", "", types.NewValidationError("image", fmt.Sprintf("failed to decode PNG: %v", err))
-	}
-
-	return o.processImage(sourceImage, data, "png", "jpeg")
-}
-
-// processImage resizes and encodes an image, returning optimized data if smaller.
-// If the optimized version is not smaller, it returns the original data with its original format.
-func (o *Optimizer) processImage(
-	sourceImage image.Image, originalData []byte, originalFormat, targetFormat string,
-) (optimized []byte, format, encoder string, err error) {
 	bounds := sourceImage.Bounds()
-	width, height := bounds.Dx(), bounds.Dy()
-
-	if width > o.Config.TargetWidth || height > o.Config.TargetHeight {
-		sourceImage = o.resizeImage(sourceImage, o.Config.TargetWidth, o.Config.TargetHeight)
+	if bounds.Dx() > cfg.TargetWidth || bounds.Dy() > cfg.TargetHeight {
+		sourceImage = resizeImage(sourceImage, cfg.TargetWidth, cfg.TargetHeight)
 	}
 
 	var jpegBuffer bytes.Buffer
-	if err := jpeg.Encode(&jpegBuffer, sourceImage, &jpeg.Options{Quality: o.Config.Quality}); err != nil {
-		return nil, "", "", types.NewValidationError("image", fmt.Sprintf("JPEG encoding failed: %v", err))
-	}
-	optimizedData := jpegBuffer.Bytes()
-
-	if len(optimizedData) < len(originalData) {
-		return optimizedData, targetFormat, "optimized", nil
+	if err := jpeg.Encode(&jpegBuffer, sourceImage, &jpeg.Options{Quality: cfg.Quality}); err != nil {
+		return nil, types.NewValidationError("image", fmt.Sprintf("JPEG encoding failed: %v", err))
 	}
 
-	return originalData, originalFormat, "original", nil
+	if optimized := jpegBuffer.Bytes(); len(optimized) < len(data) {
+		return optimized, nil
+	}
+	return data, nil
 }
 
 // resizeImage scales an image to fit within max dimensions using Catmull-Rom.
-func (o *Optimizer) resizeImage(sourceImage image.Image, maxWidth, maxHeight int) image.Image {
+func resizeImage(sourceImage image.Image, maxWidth, maxHeight int) image.Image {
 	bounds := sourceImage.Bounds()
 	width, height := bounds.Dx(), bounds.Dy()
 
@@ -173,29 +119,42 @@ func validateImage(info *Info, config Config) error {
 
 // extractImageInfo decodes image metadata into an Info struct.
 func extractImageInfo(imageData []byte) (*Info, error) {
-	format, width, height, err := getImageInfo(imageData)
+	config, format, err := image.DecodeConfig(bytes.NewReader(imageData))
 	if err != nil {
 		return nil, types.NewValidationError("image", fmt.Sprintf("failed to get image information: %v", err))
 	}
 
 	return &Info{
 		Format: format,
-		Width:  width,
-		Height: height,
+		Width:  config.Width,
+		Height: config.Height,
 		Size:   len(imageData),
 	}, nil
 }
 
-// validateImageDimensions checks minimum size requirements when RejectSmaller is set.
+// validateImageDimensions checks minimum and maximum size requirements.
 func validateImageDimensions(info *Info, config Config) error {
+	if exceedsMaxPixels(info.Width, info.Height, config.MaxPixels) {
+		return types.NewValidationError("dimensions", fmt.Sprintf(
+			"image is too large: %dx%d (%d pixels exceeds maximum %d)",
+			info.Width, info.Height, int64(info.Width)*int64(info.Height), config.MaxPixels))
+	}
+
 	if config.RejectSmaller && (info.Width < config.TargetWidth || info.Height < config.TargetHeight) {
-		return &types.ValidationError{
-			Field: "dimensions",
-			Message: fmt.Sprintf("image is too small: %dx%d (minimum %dx%d required)",
-				info.Width, info.Height, config.TargetWidth, config.TargetHeight),
-		}
+		return types.NewValidationError("dimensions", fmt.Sprintf(
+			"image is too small: %dx%d (minimum %dx%d required)",
+			info.Width, info.Height, config.TargetWidth, config.TargetHeight))
 	}
 	return nil
+}
+
+// exceedsMaxPixels reports whether width*height exceeds maxPixels, rearranged
+// as division so the product cannot overflow int64 for hostile dimensions.
+func exceedsMaxPixels(width, height int, maxPixels int64) bool {
+	if maxPixels <= 0 || width <= 0 || height <= 0 {
+		return false
+	}
+	return int64(width) > maxPixels/int64(height)
 }
 
 // isAlreadyTargetSize returns true if image matches target dimensions exactly.
@@ -207,8 +166,6 @@ func isAlreadyTargetSize(info *Info, config Config) bool {
 func createSkippedResult(imageData []byte, originalInfo *Info) *ProcessingResult {
 	return &ProcessingResult{
 		Data:      imageData,
-		Format:    originalInfo.Format,
-		Encoder:   "original (no optimization needed)",
 		Original:  *originalInfo,
 		Optimized: *originalInfo,
 		Savings:   0,
@@ -217,8 +174,7 @@ func createSkippedResult(imageData []byte, originalInfo *Info) *ProcessingResult
 
 // optimizeImageData runs the optimization pipeline and returns processing results.
 func optimizeImageData(imageData []byte, originalInfo *Info, config Config) (*ProcessingResult, error) {
-	optimizer := NewOptimizer(config)
-	optimizedData, optFormat, optEncoder, err := optimizer.OptimizeImage(imageData, originalInfo.Format)
+	optimizedData, err := optimizeImage(imageData, originalInfo.Format, config)
 	if err != nil {
 		return nil, types.NewValidationError("image", fmt.Sprintf("optimization failed: %v", err))
 	}
@@ -226,7 +182,7 @@ func optimizeImageData(imageData []byte, originalInfo *Info, config Config) (*Pr
 	optimizedInfo, err := extractImageInfo(optimizedData)
 	if err != nil {
 		optimizedInfo = &Info{
-			Format: optFormat,
+			Format: originalInfo.Format,
 			Width:  originalInfo.Width,
 			Height: originalInfo.Height,
 			Size:   len(optimizedData),
@@ -237,8 +193,6 @@ func optimizeImageData(imageData []byte, originalInfo *Info, config Config) (*Pr
 
 	return &ProcessingResult{
 		Data:      optimizedData,
-		Format:    optFormat,
-		Encoder:   optEncoder,
 		Original:  *originalInfo,
 		Optimized: *optimizedInfo,
 		Savings:   savings,

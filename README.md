@@ -11,8 +11,8 @@ Het radioautomatiseringssysteem Aeron mist tooling voor beheer en onderhoud. Aer
 - **Media:** doorzoek artiesten, tracks en playlists met metadata
 - **Onderhoud:** bewaak de conditie van de database en ontvang automatisch een melding bij problemen
 - **Backups:** maak, valideer en download databasebackups (optioneel naar S3)
-- **Bestandscontrole:** controleer of bestanden actueel zijn, met meldingen bij verouderde of ontbrekende bestanden
-- **Mediabestanden:** controleer op basis van de database of de audio uit de playlist daadwerkelijk op schijf staat
+- **Bestandsbewaking:** houd bestanden zoals nieuws- of weerbulletins in de gaten en ontvang een melding als ze te oud worden of ontbreken
+- **Aanwezigheidscontrole:** controleer of de audio uit de playlist daadwerkelijk op schijf staat, zodat ontbrekende of verplaatste tracks opvallen vóór de uitzending
 
 ## Snel starten
 
@@ -66,7 +66,7 @@ Kopieer [`config.example.json`](config.example.json) naar `config.json`. De bela
 |--------|---------------------|
 | `database` | PostgreSQL-verbinding (host, poort, inloggegevens, schema) |
 | `image` | Doelafmetingen en JPEG-kwaliteit voor geüploade afbeeldingen |
-| `api` | API-sleutels voor authenticatie |
+| `api` | API-sleutels voor authenticatie en optionele rate limiting |
 | `maintenance` | Drempelwaarden en automatische scheduler voor database health checks |
 | `backup` | Pad naar backups, retentie, scheduler en optionele S3-sync |
 | `file_monitor` | Signaleert verouderde of ontbrekende bestanden op schijf |
@@ -75,6 +75,8 @@ Kopieer [`config.example.json`](config.example.json) naar `config.json`. De bela
 | `log` | Logniveau (`debug`, `info`, `warn`, `error`) en formaat (`text`, `json`) |
 
 Gebruik voor `api.keys` per omgeving unieke, willekeurig gegenereerde API-sleutels met minimaal 32 bytes entropie, bijvoorbeeld via `openssl rand -base64 32`.
+
+Voor rate limiting kun je `api.rate_limit_enabled` aanzetten. `rate_limit_requests` requests per `rate_limit_window_seconds` worden dan toegestaan per API-sleutel, of per direct peer-adres (`RemoteAddr`) wanneer geen geldige sleutel is meegestuurd. Achter een reverse proxy die client-IP's verbergt, delen alle unauthenticated requests achter die proxy dus één budget.
 
 ### Backupfunctionaliteit
 
@@ -136,7 +138,7 @@ Test de configuratie via `POST /api/notifications/test-email`.
 
 ```bash
 # Health check
-curl http://localhost:8080/api/health
+curl http://localhost:8080/health
 
 # Artiestafbeelding uploaden (via URL)
 curl -X POST http://localhost:8080/api/artists/{id}/image \

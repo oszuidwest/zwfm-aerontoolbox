@@ -2,9 +2,12 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -31,7 +34,12 @@ type ImageStatsResponse struct {
 	WithoutImages int `json:"without_images"`
 }
 
-// HealthResponse is returned by the public health endpoint.
+// PublicHealthResponse is returned by the unauthenticated health endpoint.
+type PublicHealthResponse struct {
+	Status string `json:"status"`
+}
+
+// HealthResponse is returned by the authenticated detailed health endpoint.
 type HealthResponse struct {
 	Status         string                `json:"status"`
 	Version        string                `json:"version"`
@@ -106,13 +114,17 @@ func (s *Server) validateAndGetEntityID(w http.ResponseWriter, r *http.Request, 
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	dbStatus := "connected"
-	dbConnected := true
-	if err := s.service.Repository().Ping(r.Context()); err != nil {
-		dbStatus = "disconnected"
-		dbConnected = false
-		slog.Warn("Database health check failed", "error", err)
+	_, dbConnected := s.databaseStatus(r.Context())
+	resp := PublicHealthResponse{Status: overallHealthStatus(dbConnected, false)}
+	if !dbConnected {
+		respondEnvelope(w, http.StatusServiceUnavailable, resp, "Service unavailable")
+		return
 	}
+	respondJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleHealthDetails(w http.ResponseWriter, r *http.Request) {
+	dbStatus, dbConnected := s.databaseStatus(r.Context())
 
 	resp := HealthResponse{
 		Version:        s.version,
@@ -120,8 +132,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		DatabaseStatus: dbStatus,
 	}
 
-	emailCfg := &s.service.Config().Notifications.Email
-	configured := notify.IsConfigured(emailCfg)
+	configured := s.service.Notify.IsConfigured()
 	nh := &NotificationHealth{Configured: configured}
 
 	var notifyExpiresSoon bool
@@ -163,6 +174,28 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, resp)
 }
 
+// dbPingTimeout bounds the health-check ping. A healthy database answers in
+// milliseconds; anything slower should fail the probe fast instead of pinning
+// goroutines for the full server write timeout.
+const dbPingTimeout = 2 * time.Second
+
+// databaseStatus reports database connectivity via a bounded ping. Concurrent
+// health requests share one in-flight ping (the public endpoint is
+// unauthenticated and unratelimited, so probes must not amplify into database
+// load). WithoutCancel keeps one canceled request from failing the shared ping.
+func (s *Server) databaseStatus(ctx context.Context) (string, bool) {
+	_, err, _ := s.pingGroup.Do("ping", func() (any, error) {
+		pingCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), dbPingTimeout)
+		defer cancel()
+		return nil, s.dbPing(pingCtx)
+	})
+	if err != nil {
+		slog.Warn("Database health check failed", "error", err)
+		return "disconnected", false
+	}
+	return "connected", true
+}
+
 // overallHealthStatus returns the highest-severity status given the database
 // connectivity and whether any component reported a degraded signal. Callers OR
 // their per-component signals into degraded, so adding a component never changes
@@ -183,7 +216,7 @@ func (s *Server) handleStats(entityType types.EntityType) http.HandlerFunc {
 		stats, err := s.service.Media.GetStatistics(r.Context(), entityType)
 		if err != nil {
 			slog.Error("Failed to retrieve statistics", "entityType", entityType, "error", err)
-			respondError(w, http.StatusInternalServerError, err.Error())
+			respondServiceError(w, err)
 			return
 		}
 
@@ -207,8 +240,7 @@ func (s *Server) handleEntityByID(entityType types.EntityType) http.HandlerFunc 
 		if entityType == types.EntityTypeArtist {
 			artist, err := s.service.Media.GetArtist(r.Context(), entityID)
 			if err != nil {
-				statusCode := errorCode(err)
-				respondError(w, statusCode, err.Error())
+				respondServiceError(w, err)
 				return
 			}
 			respondJSON(w, http.StatusOK, artist)
@@ -217,15 +249,14 @@ func (s *Server) handleEntityByID(entityType types.EntityType) http.HandlerFunc 
 
 		track, err := s.service.Media.GetTrack(r.Context(), entityID)
 		if err != nil {
-			statusCode := errorCode(err)
-			respondError(w, statusCode, err.Error())
+			respondServiceError(w, err)
 			return
 		}
 		respondJSON(w, http.StatusOK, track)
 	}
 }
 
-func (s *Server) uploadResponse(result *service.ImageUploadResult, entityType types.EntityType) ImageUploadResponse {
+func uploadResponse(result *service.ImageUploadResult, entityType types.EntityType) ImageUploadResponse {
 	response := ImageUploadResponse{
 		Artist:               result.ArtistName,
 		OriginalSize:         result.OriginalSize,
@@ -252,7 +283,7 @@ func (s *Server) handleBulkDelete(entityType types.EntityType) http.HandlerFunc 
 
 		result, err := s.service.Media.DeleteAllImages(r.Context(), entityType)
 		if err != nil {
-			respondError(w, http.StatusInternalServerError, err.Error())
+			respondServiceError(w, err)
 			return
 		}
 
@@ -272,12 +303,10 @@ func (s *Server) handleGetImage(entityType types.EntityType) http.HandlerFunc {
 
 		imageData, err := s.service.Media.GetImage(r.Context(), entityType, entityID)
 		if err != nil {
-			statusCode := errorCode(err)
-			respondError(w, statusCode, err.Error())
+			respondServiceError(w, err)
 			return
 		}
 
-		w.Header().Del("Content-Type")
 		w.Header().Set("Content-Type", http.DetectContentType(imageData))
 		w.Header().Set("Content-Length", strconv.Itoa(len(imageData)))
 
@@ -296,8 +325,39 @@ func (s *Server) handleImageUpload(entityType types.EntityType) http.HandlerFunc
 			return
 		}
 
+		uploadReadTimeout := s.service.Config().API.GetUploadReadTimeout()
+		if err := http.NewResponseController(w).SetReadDeadline(time.Now().Add(uploadReadTimeout)); err != nil {
+			slog.Warn("Could not set read deadline for image upload; large upload may time out",
+				"entity_type", entityType,
+				"id", entityID,
+				"timeout", uploadReadTimeout,
+				"error", err)
+		}
+
+		r.Body = http.MaxBytesReader(w, r.Body, s.service.Config().API.GetMaxUploadBodyBytes())
+
 		var req ImageUploadRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
+				respondError(w, http.StatusRequestEntityTooLarge, "Request body too large")
+				return
+			}
+			if isTimeoutError(err) {
+				slog.Warn("Image upload request timed out while reading body",
+					"entity_type", entityType,
+					"id", entityID,
+					"path", r.URL.Path,
+					"remote_addr", r.RemoteAddr,
+					"error", err)
+				respondError(w, http.StatusRequestTimeout, "Request body read timeout")
+				return
+			}
+			slog.Warn("Invalid image upload request content",
+				"entity_type", entityType,
+				"id", entityID,
+				"path", r.URL.Path,
+				"remote_addr", r.RemoteAddr,
+				"error", err)
 			respondError(w, http.StatusBadRequest, "Invalid request content")
 			return
 		}
@@ -319,14 +379,18 @@ func (s *Server) handleImageUpload(entityType types.EntityType) http.HandlerFunc
 
 		result, err := s.service.Media.UploadImage(r.Context(), params)
 		if err != nil {
-			statusCode := errorCode(err)
-			respondError(w, statusCode, err.Error())
+			respondServiceError(w, err)
 			return
 		}
 
-		response := s.uploadResponse(result, entityType)
+		response := uploadResponse(result, entityType)
 		respondJSON(w, http.StatusOK, response)
 	}
+}
+
+func isTimeoutError(err error) bool {
+	var netErr net.Error
+	return (errors.As(err, &netErr) && netErr.Timeout()) || errors.Is(err, context.DeadlineExceeded)
 }
 
 func (s *Server) handleDeleteImage(entityType types.EntityType) http.HandlerFunc {
@@ -343,7 +407,7 @@ func (s *Server) handleDeleteImage(entityType types.EntityType) http.HandlerFunc
 				"entityType", entityType,
 				"id", entityID,
 				"error", err)
-			respondError(w, errorCode(err), err.Error())
+			respondServiceError(w, err)
 			return
 		}
 
@@ -403,7 +467,7 @@ func (s *Server) handlePlaylist(w http.ResponseWriter, r *http.Request) {
 			slog.Error("Failed to retrieve playlist",
 				"block_id", opts.BlockID,
 				"error", err)
-			respondError(w, http.StatusInternalServerError, err.Error())
+			respondServiceError(w, err)
 			return
 		}
 		respondJSON(w, http.StatusOK, playlist)
@@ -417,7 +481,7 @@ func (s *Server) handlePlaylist(w http.ResponseWriter, r *http.Request) {
 		slog.Error("Failed to retrieve playlist with tracks",
 			"date", date,
 			"error", err)
-		respondError(w, http.StatusInternalServerError, err.Error())
+		respondServiceError(w, err)
 		return
 	}
 

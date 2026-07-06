@@ -2,12 +2,17 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/service"
 )
+
+const maxCreateBackupBodyBytes = 1 << 20
 
 // BackupDeleteResponse is returned after a backup file is deleted.
 type BackupDeleteResponse struct {
@@ -16,14 +21,21 @@ type BackupDeleteResponse struct {
 }
 
 func (s *Server) handleCreateBackup(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxCreateBackupBodyBytes)
+
 	var req service.BackupRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err.Error() != "EOF" {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
+			respondError(w, http.StatusRequestEntityTooLarge, "Request body too large")
+			return
+		}
+		slog.Warn("Invalid backup request content", "path", r.URL.Path, "remote_addr", r.RemoteAddr, "error", err)
 		respondError(w, http.StatusBadRequest, "Invalid request content")
 		return
 	}
 
 	if err := s.service.Backup.Start(req); err != nil {
-		respondError(w, errorCode(err), err.Error())
+		respondServiceError(w, err)
 		return
 	}
 
@@ -36,8 +48,7 @@ func (s *Server) handleCreateBackup(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListBackups(w http.ResponseWriter, r *http.Request) {
 	result, err := s.service.Backup.List()
 	if err != nil {
-		statusCode := errorCode(err)
-		respondError(w, statusCode, err.Error())
+		respondServiceError(w, err)
 		return
 	}
 
@@ -53,8 +64,7 @@ func (s *Server) handleDownloadBackupFile(w http.ResponseWriter, r *http.Request
 
 	file, info, err := s.service.Backup.OpenFile(filename)
 	if err != nil {
-		statusCode := errorCode(err)
-		respondError(w, statusCode, err.Error())
+		respondServiceError(w, err)
 		return
 	}
 	defer func() {
@@ -65,6 +75,14 @@ func (s *Server) handleDownloadBackupFile(w http.ResponseWriter, r *http.Request
 
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", "attachment; filename="+filename)
+
+	// Backup downloads can exceed the global WriteTimeout. Clear the socket
+	// write deadline so slow clients do not receive silently truncated dumps.
+	if err := http.NewResponseController(w).SetWriteDeadline(time.Time{}); err != nil {
+		slog.Warn("Could not clear write deadline for backup download; download may be truncated by WriteTimeout",
+			"filename", filename,
+			"error", err)
+	}
 
 	http.ServeContent(w, r, filename, info.ModTime(), file)
 }
@@ -79,8 +97,7 @@ func (s *Server) handleDeleteBackup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.service.Backup.Delete(filename); err != nil {
-		statusCode := errorCode(err)
-		respondError(w, statusCode, err.Error())
+		respondServiceError(w, err)
 		return
 	}
 
@@ -95,7 +112,7 @@ func (s *Server) handleValidateBackup(w http.ResponseWriter, r *http.Request) {
 
 	result, err := s.service.Backup.Validate(filename)
 	if err != nil {
-		respondError(w, errorCode(err), err.Error())
+		respondServiceError(w, err)
 		return
 	}
 

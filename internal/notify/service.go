@@ -42,11 +42,11 @@ type NotificationService struct {
 	config     *config.Config
 	runner     *async.Runner
 	recipients []string // parsed once at construction
+	configured bool     // fixed at construction; config is never reloaded
 
-	// Lazy Graph client (cached by config key)
-	client    *GraphClient
-	clientKey string
-	clientMu  sync.Mutex
+	// Lazily built Graph client, cached for the process lifetime
+	client   *GraphClient
+	clientMu sync.Mutex
 
 	// Recovery state (in-memory, lost on restart)
 	prevBackupFailed      bool
@@ -71,9 +71,10 @@ func New(cfg *config.Config) *NotificationService {
 		config:     cfg,
 		runner:     async.New(),
 		recipients: ParseRecipients(emailCfg.Recipients),
+		configured: IsConfigured(emailCfg),
 	}
 
-	if IsConfigured(emailCfg) {
+	if svc.configured {
 		svc.expiryChecker = NewSecretExpiryChecker(emailCfg)
 		slog.Info("Email notifications configured")
 	} else {
@@ -83,6 +84,12 @@ func New(cfg *config.Config) *NotificationService {
 	return svc
 }
 
+// IsConfigured reports whether email notifications are configured. The answer
+// is computed once at construction because config is never reloaded.
+func (s *NotificationService) IsConfigured() bool {
+	return s.configured
+}
+
 // notifyOnTransition sends first-failure and first-recovery emails for one signal.
 func (s *NotificationService) notifyOnTransition(
 	prevFailed *bool,
@@ -90,7 +97,7 @@ func (s *NotificationService) notifyOnTransition(
 	formatFail func() (string, string),
 	formatRecover func() (string, string),
 ) {
-	if !IsConfigured(&s.config.Notifications.Email) {
+	if !s.configured {
 		return
 	}
 
@@ -193,25 +200,23 @@ func (s *NotificationService) Close() {
 	s.runner.Close()
 }
 
-// getOrCreateClient returns the cached Graph client or builds one for current config.
+// getOrCreateClient returns the cached Graph client, building it on first use.
+// Config is loaded once at startup, so the client never needs rebuilding; a
+// failed build is retried on the next call.
 func (s *NotificationService) getOrCreateClient() (*GraphClient, error) {
 	s.clientMu.Lock()
 	defer s.clientMu.Unlock()
 
-	cfg := &s.config.Notifications.Email
-	key := cfg.TenantID + "|" + cfg.ClientID + "|" + cfg.ClientSecret + "|" + cfg.FromAddress
-
-	if s.client != nil && s.clientKey == key {
+	if s.client != nil {
 		return s.client, nil
 	}
 
-	client, err := NewGraphClient(cfg)
+	client, err := NewGraphClient(&s.config.Notifications.Email)
 	if err != nil {
 		return nil, err
 	}
 
 	s.client = client
-	s.clientKey = key
 	return client, nil
 }
 

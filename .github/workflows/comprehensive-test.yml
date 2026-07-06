@@ -174,7 +174,7 @@ jobs:
           echo $! > api.pid
           STARTED=false
           for i in {1..30}; do
-            if curl -sf http://localhost:${{ env.API_PORT }}/api/health > /dev/null 2>&1; then
+            if curl -sf http://localhost:${{ env.API_PORT }}/health > /dev/null 2>&1; then
               STARTED=true
               break
             fi
@@ -243,8 +243,8 @@ jobs:
       - name: "API: Health endpoint"
         if: matrix.suite == 'api-basic'
         run: |
-          echo "GET /api/health"
-          RESPONSE=$(curl -s http://localhost:${{ env.API_PORT }}/api/health)
+          echo "GET /health"
+          RESPONSE=$(curl -s http://localhost:${{ env.API_PORT }}/health)
           echo "Response: $RESPONSE"
           SUCCESS=$(echo "$RESPONSE" | jq -r '.success')
           if [ "$SUCCESS" = "true" ]; then
@@ -398,7 +398,7 @@ jobs:
           EOF
           ./zwfm-aerontoolbox -config=test_no_auth.json -port=${{ env.API_PORT }} &
           echo $! > api.pid
-          for i in {1..30}; do curl -sf http://localhost:${{ env.API_PORT }}/api/health > /dev/null 2>&1 && break; sleep 1; done
+          for i in {1..30}; do curl -sf http://localhost:${{ env.API_PORT }}/health > /dev/null 2>&1 && break; sleep 1; done
           echo "GET /api/artists (zonder API key, auth uitgeschakeld)"
           RESPONSE=$(curl -s http://localhost:${{ env.API_PORT }}/api/artists)
           SUCCESS=$(echo "$RESPONSE" | jq -r '.success')
@@ -768,7 +768,7 @@ jobs:
           ./zwfm-aerontoolbox -config=test_lrq.json -port=${{ env.API_PORT }} > /tmp/lrq_output.log 2>&1 &
           echo $! > api.pid
           for i in {1..30}; do
-            curl -sf http://localhost:${{ env.API_PORT }}/api/health > /dev/null 2>&1 && break
+            curl -sf http://localhost:${{ env.API_PORT }}/health > /dev/null 2>&1 && break
             sleep 1
           done
 
@@ -809,7 +809,7 @@ jobs:
           ./zwfm-aerontoolbox -config=test_config.json -port=${{ env.API_PORT }} > /tmp/api_output.log 2>&1 &
           echo $! > api.pid
           for i in {1..30}; do
-            curl -sf http://localhost:${{ env.API_PORT }}/api/health > /dev/null 2>&1 && break
+            curl -sf http://localhost:${{ env.API_PORT }}/health > /dev/null 2>&1 && break
             sleep 1
           done
 
@@ -862,12 +862,12 @@ jobs:
 
           # Wait for startup
           for i in {1..30}; do
-            curl -sf http://localhost:${{ env.API_PORT }}/api/health > /dev/null 2>&1 && break
+            curl -sf http://localhost:${{ env.API_PORT }}/health > /dev/null 2>&1 && break
             sleep 1
           done
 
           # Verify health endpoint works
-          RESPONSE=$(curl -s http://localhost:${{ env.API_PORT }}/api/health)
+          RESPONSE=$(curl -s http://localhost:${{ env.API_PORT }}/health)
           SUCCESS=$(echo "$RESPONSE" | jq -r '.success')
 
           # Check logs for scheduler started message
@@ -1214,7 +1214,7 @@ jobs:
           sudo mv "${PG_DUMP_PATH}.bak" "$PG_DUMP_PATH"
 
           # Check of applicatie draait
-          if curl -sf http://localhost:8892/api/health > /dev/null 2>&1; then
+          if curl -sf http://localhost:8892/health > /dev/null 2>&1; then
             echo "Correct: applicatie start zonder pg_dump als backup uitgeschakeld is"
             kill $PID 2>/dev/null || true
           else
@@ -1289,7 +1289,7 @@ jobs:
           PID=$!
           sleep 3
 
-          if curl -sf http://localhost:8895/api/health > /dev/null 2>&1; then
+          if curl -sf http://localhost:8895/health > /dev/null 2>&1; then
             echo "Correct: applicatie start met geldige custom paden"
             kill $PID 2>/dev/null || true
           else
@@ -1393,7 +1393,7 @@ jobs:
           ./zwfm-aerontoolbox -config=test_s3_config.json -port=${{ env.API_PORT }} &
           echo $! > api.pid
           for i in {1..30}; do
-            curl -sf http://localhost:${{ env.API_PORT }}/api/health > /dev/null 2>&1 && break
+            curl -sf http://localhost:${{ env.API_PORT }}/health > /dev/null 2>&1 && break
             sleep 1
           done
           echo "API server gestart met S3 sync ingeschakeld"

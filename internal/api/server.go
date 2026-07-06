@@ -13,6 +13,7 @@ import (
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/config"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/service"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
+	"golang.org/x/sync/singleflight"
 )
 
 // Server owns the HTTP routing, middleware, and listener lifecycle.
@@ -20,32 +21,58 @@ type Server struct {
 	service *service.AeronService
 	version string
 	server  *http.Server
+
+	// SHA-256 hashes of the configured API keys, computed once at construction
+	// (config is loaded once at startup and never reloaded). Hashing both sides
+	// to a fixed length keeps the comparison constant-time regardless of key
+	// length differences.
+	apiKeyHashes [][sha256.Size]byte
+
+	// dbPing backs the health checks; defaults to Repository.Ping and is
+	// overridden per instance in tests.
+	dbPing    func(ctx context.Context) error
+	pingGroup singleflight.Group
 }
 
 // New returns a Server bound to the service layer and build version.
 func New(svc *service.AeronService, version string) *Server {
+	keys := svc.Config().API.Keys
+	keyHashes := make([][sha256.Size]byte, len(keys))
+	for i, key := range keys {
+		keyHashes[i] = sha256.Sum256([]byte(key))
+	}
 	return &Server{
-		service: svc,
-		version: version,
+		service:      svc,
+		version:      version,
+		apiKeyHashes: keyHashes,
+		dbPing:       svc.Repository().Ping,
 	}
 }
 
 // Start serves the API on port until shutdown or listener failure.
 func (s *Server) Start(port string) error {
 	router := s.router()
-
-	s.server = &http.Server{
-		Addr:              ":" + port,
-		Handler:           router,
-		ReadHeaderTimeout: 10 * time.Second,
-	}
+	s.server = s.newHTTPServer(port, router)
 
 	return s.server.ListenAndServe()
+}
+
+func (s *Server) newHTTPServer(port string, handler http.Handler) *http.Server {
+	apiCfg := s.service.Config().API
+	return &http.Server{
+		Addr:              ":" + port,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       apiCfg.GetReadTimeout(),
+		WriteTimeout:      apiCfg.GetWriteTimeout(),
+		IdleTimeout:       apiCfg.GetIdleTimeout(),
+	}
 }
 
 // router builds the public health route and authenticated API surface.
 func (s *Server) router() http.Handler {
 	router := chi.NewRouter()
+	backupEnabled := s.requireEnabled("backup is not enabled", func(c *config.Config) bool { return c.Backup.Enabled })
 
 	cop := http.NewCrossOriginProtection()
 	router.Use(func(next http.Handler) http.Handler {
@@ -56,58 +83,79 @@ func (s *Server) router() http.Handler {
 	router.Use(middleware.Recoverer)
 	router.Use(middleware.Compress(5))
 
+	// Router-wide policy: route HEAD to the matching GET handler, so probes
+	// that use HEAD (some load balancers, GNU wget --spider) get the GET
+	// response headers instead of a 405.
+	router.Use(middleware.GetHead)
+
 	router.NotFound(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		respondError(w, http.StatusNotFound, "Endpoint not found")
 	})
 
+	router.Get("/health", s.handleHealth)
+
 	router.Route("/api", func(r chi.Router) {
-		r.Use(middleware.SetHeader("Content-Type", "application/json; charset=utf-8"))
+		if limiter := newAPIRateLimiter(&s.service.Config().API); limiter != nil {
+			r.Use(s.rateLimitMiddleware(limiter))
+		}
 
 		r.NotFound(func(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusNotFound, "Endpoint not found")
 		})
 
-		r.Get("/health", s.handleHealth)
-
 		r.Group(func(r chi.Router) {
 			r.Use(s.authMiddleware)
-			r.Use(middleware.Timeout(s.service.Config().API.GetRequestTimeout()))
+
+			r.Get("/health", s.handleHealthDetails)
 
 			s.setupEntityRoutes(r, "/artists", types.EntityTypeArtist)
 			s.setupEntityRoutes(r, "/tracks", types.EntityTypeTrack)
 
-			r.Get("/playlist", s.handlePlaylist)
+			r.Group(func(r chi.Router) {
+				r.Use(middleware.Timeout(s.service.Config().API.GetRequestTimeout()))
 
-			r.Route("/db", func(r chi.Router) {
-				r.Route("/maintenance", func(r chi.Router) {
-					r.Get("/health", s.handleDatabaseHealth)
+				r.Get("/playlist", s.handlePlaylist)
+
+				r.Route("/db", func(r chi.Router) {
+					r.Route("/maintenance", func(r chi.Router) {
+						r.Get("/health", s.handleDatabaseHealth)
+					})
+
+					r.Group(func(r chi.Router) {
+						r.Use(backupEnabled)
+						r.Post("/backup", s.handleCreateBackup)
+						r.Get("/backup/status", s.handleBackupStatus)
+						r.Get("/backups", s.handleListBackups)
+						r.Get("/backups/{filename}/validate", s.handleValidateBackup)
+						r.Delete("/backups/{filename}", s.handleDeleteBackup)
+					})
 				})
 
 				r.Group(func(r chi.Router) {
-					r.Use(s.requireEnabled("backup is not enabled", func(c *config.Config) bool { return c.Backup.Enabled }))
-					r.Post("/backup", s.handleCreateBackup)
-					r.Get("/backup/status", s.handleBackupStatus)
-					r.Get("/backups", s.handleListBackups)
-					r.Get("/backups/{filename}", s.handleDownloadBackupFile)
-					r.Get("/backups/{filename}/validate", s.handleValidateBackup)
-					r.Delete("/backups/{filename}", s.handleDeleteBackup)
+					r.Use(s.requireEnabled("file monitor is not enabled", func(c *config.Config) bool {
+						return c.FileMonitor.Enabled
+					}))
+					r.Get("/file-monitor/status", s.handleFileMonitorStatus)
+					r.Post("/file-monitor/check", s.handleFileMonitorCheck)
 				})
+
+				r.Group(func(r chi.Router) {
+					r.Use(s.requireEnabled("media file check is not enabled", func(c *config.Config) bool {
+						return c.MediaFileCheck.Enabled
+					}))
+					r.Post("/media/files/check", s.handleMediaFileCheck)
+					r.Get("/media/files/check/status", s.handleMediaFileCheckStatus)
+				})
+
+				r.Post("/notifications/test-email", s.handleTestEmail)
 			})
 
+			// The download route escapes the group-level request timeout:
+			// large backup downloads may legitimately exceed it.
 			r.Group(func(r chi.Router) {
-				r.Use(s.requireEnabled("file monitor is not enabled", func(c *config.Config) bool { return c.FileMonitor.Enabled }))
-				r.Get("/file-monitor/status", s.handleFileMonitorStatus)
-				r.Post("/file-monitor/check", s.handleFileMonitorCheck)
+				r.Use(backupEnabled)
+				r.Get("/db/backups/{filename}", s.handleDownloadBackupFile)
 			})
-
-			r.Group(func(r chi.Router) {
-				r.Use(s.requireEnabled("media file check is not enabled", func(c *config.Config) bool { return c.MediaFileCheck.Enabled }))
-				r.Post("/media/files/check", s.handleMediaFileCheck)
-				r.Get("/media/files/check/status", s.handleMediaFileCheckStatus)
-			})
-
-			r.Post("/notifications/test-email", s.handleTestEmail)
 		})
 	})
 
@@ -123,16 +171,20 @@ func (s *Server) Shutdown(ctx context.Context) error {
 }
 
 func (s *Server) setupEntityRoutes(r chi.Router, path string, entityType types.EntityType) {
+	apiCfg := s.service.Config().API
+	requestTimeout := middleware.Timeout(apiCfg.GetRequestTimeout())
+	uploadTimeout := middleware.Timeout(apiCfg.GetUploadReadTimeout() + apiCfg.GetRequestTimeout())
+
 	r.Route(path, func(r chi.Router) {
-		r.Get("/", s.handleStats(entityType))
-		r.Delete("/bulk-delete", s.handleBulkDelete(entityType))
+		r.With(requestTimeout).Get("/", s.handleStats(entityType))
+		r.With(requestTimeout).Delete("/bulk-delete", s.handleBulkDelete(entityType))
 
 		r.Route("/{id}", func(r chi.Router) {
-			r.Get("/", s.handleEntityByID(entityType))
+			r.With(requestTimeout).Get("/", s.handleEntityByID(entityType))
 			r.Route("/image", func(r chi.Router) {
-				r.Get("/", s.handleGetImage(entityType))
-				r.Post("/", s.handleImageUpload(entityType))
-				r.Delete("/", s.handleDeleteImage(entityType))
+				r.With(requestTimeout).Get("/", s.handleGetImage(entityType))
+				r.With(uploadTimeout).Post("/", s.handleImageUpload(entityType))
+				r.With(requestTimeout).Delete("/", s.handleDeleteImage(entityType))
 			})
 		})
 	})
@@ -164,9 +216,8 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// requireEnabled builds middleware that 404s when a feature is disabled. The
-// enabled predicate is evaluated per request against the live config, so a
-// runtime config change is reflected without rebuilding the router.
+// requireEnabled builds middleware that 404s when a feature is disabled in the
+// configuration, so a whole route group can be gated in one place.
 func (s *Server) requireEnabled(message string, enabled func(*config.Config) bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -183,14 +234,15 @@ func (s *Server) isValidAPIKey(key string) bool {
 	if key == "" {
 		return false
 	}
+	return s.isValidAPIKeyHash(sha256.Sum256([]byte(key)))
+}
 
-	// Hash both sides to a fixed length so ConstantTimeCompare never returns
-	// early on a length mismatch, which would leak the configured key length.
-	keyHash := sha256.Sum256([]byte(key))
+// isValidAPIKeyHash compares a presented key's hash against every configured
+// key hash in constant time.
+func (s *Server) isValidAPIKeyHash(keyHash [sha256.Size]byte) bool {
 	valid := 0
-	for _, configuredKey := range s.service.Config().API.Keys {
-		configuredHash := sha256.Sum256([]byte(configuredKey))
-		valid |= subtle.ConstantTimeCompare(keyHash[:], configuredHash[:])
+	for i := range s.apiKeyHashes {
+		valid |= subtle.ConstantTimeCompare(keyHash[:], s.apiKeyHashes[i][:])
 	}
 	return valid == 1
 }

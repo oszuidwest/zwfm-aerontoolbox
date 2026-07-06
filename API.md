@@ -14,7 +14,7 @@
   - [Playlist-endpoints](#playlist-endpoints)
   - [Database onderhoud](#database-onderhoud)
   - [Backup-endpoints](#backup-endpoints)
-  - [Bestandscontrole](#bestandscontrole)
+  - [Bestandsbewaking](#bestandsbewaking)
   - [Aanwezigheidscontrole](#aanwezigheidscontrole)
   - [Notificaties](#notificaties)
 - [Codevoorbeelden](#codevoorbeelden)
@@ -26,12 +26,15 @@ De Aeron Toolbox API biedt RESTful-endpoints voor het Aeron-radioautomatiserings
 
 **Basis-URL:** `http://localhost:8080/api`
 
+**Publieke readinessprobe:** `http://localhost:8080/health`
+
 ## Snel overzicht van de endpoints
 
 | Endpoint | Methode | Beschrijving | Auth |
 |----------|---------|--------------|------|
 | **Algemeen** |
-| `/api/health` | GET | API-status controleren | Nee |
+| `/health` | GET | Readiness-status controleren | Nee |
+| `/api/health` | GET | Gedetailleerde health en operationele signalen | Ja |
 | **Artiesten** |
 | `/api/artists` | GET | Statistieken over artiesten | Ja |
 | `/api/artists/{id}` | GET | Specifieke artiest ophalen | Ja |
@@ -51,9 +54,9 @@ De Aeron Toolbox API biedt RESTful-endpoints voor het Aeron-radioautomatiserings
 | `/api/playlist?block_id={id}` | GET | Tracks in playlistblok | Ja |
 | **Database onderhoud** |
 | `/api/db/maintenance/health` | GET | Database health en statistieken | Ja |
-| **Bestandscontrole** |
-| `/api/file-monitor/status` | GET | Status bestandscontrole | Ja |
-| `/api/file-monitor/check` | POST | Handmatige bestandscontrole starten | Ja |
+| **Bestandsbewaking** |
+| `/api/file-monitor/status` | GET | Status bestandsbewaking | Ja |
+| `/api/file-monitor/check` | POST | Handmatige controle starten | Ja |
 | **Aanwezigheidscontrole** |
 | `/api/media/files/check` | POST | Controle op ontbrekende audiobestanden starten | Ja |
 | `/api/media/files/check/status` | GET | Resultaat van de aanwezigheidscontrole | Ja |
@@ -69,11 +72,13 @@ De Aeron Toolbox API biedt RESTful-endpoints voor het Aeron-radioautomatiserings
 
 ## Authenticatie
 
-Wanneer authenticatie is ingeschakeld in de configuratie, vereisen alle endpoints (behalve `GET /api/health`) een API-sleutel.
+Wanneer authenticatie is ingeschakeld in de configuratie, vereisen alle API-endpoints een API-sleutel. De platformprobe `GET /health` valt buiten `/api` en vereist geen API-sleutel.
 
 **Header:** `X-API-Key: jouw-api-sleutel`
 
 Gebruik per omgeving unieke, willekeurig gegenereerde API-sleutels van minimaal 32 bytes entropie (bijvoorbeeld `openssl rand -base64 32`). Hergebruik geen wachtwoorden, woordenboekwoorden of korte gedeelde secrets.
+
+Optionele rate limiting kan worden ingeschakeld met `api.rate_limit_enabled`. De limiter telt per API-sleutel, of per direct peer-adres (`RemoteAddr`) wanneer geen geldige sleutel is meegestuurd. Achter een reverse proxy die client-IP's verbergt, delen alle unauthenticated requests achter die proxy dus één budget.
 
 **Response bij ontbrekende autorisatie:**
 ```json
@@ -127,6 +132,7 @@ Alle fouten volgen dit formaat:
 - `404` Not Found - Bron niet gevonden
 - `409` Conflict - Operatie al bezig (backup)
 - `500` Internal Server Error - Serverfout
+- `503` Service Unavailable - Readiness faalt doordat de database niet bereikbaar is
 
 ---
 
@@ -134,10 +140,40 @@ Alle fouten volgen dit formaat:
 
 ### Statuscontrole
 
-Controleer de status van de API.
+Controleer de publieke readiness-status van de API. Deze endpoint is bewust minimaal zodat load balancers en container health checks geen operationele details nodig hebben. Gebruik deze endpoint niet als liveness-restarttrigger: een database-uitval levert `503` op, en een procesrestart herstelt de database niet.
+
+**Endpoint:** `GET /health`
+**Authenticatie:** Niet vereist
+
+**Response:** `200 OK`
+```json
+{
+  "success": true,
+  "data": {
+    "status": "healthy"
+  }
+}
+```
+
+**Response:** `503 Service Unavailable` wanneer de database niet bereikbaar is
+```json
+{
+  "success": false,
+  "data": {
+    "status": "unhealthy"
+  },
+  "error": "Service unavailable"
+}
+```
+
+`GET /health` is de enige JSON-response die bij een non-2xx status nog een `data`-object kan bevatten. Zo kunnen probes de HTTP-statuscode gebruiken, terwijl operators en monitoring nog de readiness-verdict kunnen lezen. Gedetailleerde oorzaken staan achter authenticatie op `GET /api/health`.
+
+### Gedetailleerde statuscontrole
+
+Controleer de gedetailleerde operationele status.
 
 **Endpoint:** `GET /api/health`
-**Authenticatie:** Niet vereist
+**Authenticatie:** Vereist
 
 **Response:** `200 OK`
 ```json
@@ -175,8 +211,8 @@ Het `notifications`-veld is altijd aanwezig en toont:
   - `days_left`: Aantal resterende dagen
   - `error`: Foutmelding bij ophalen (bijv. onvoldoende rechten)
 
-Het `file_monitor`-veld is alleen aanwezig wanneer de bestandscontrole is ingeschakeld en toont:
-- `enabled`: Of de bestandscontrole is geconfigureerd
+Het `file_monitor`-veld is alleen aanwezig wanneer de bestandsbewaking is ingeschakeld en toont:
+- `enabled`: Of de bestandsbewaking is geconfigureerd
 - `checks_total`: Totaal aantal geconfigureerde checks
 - `checks_stale`: Ruwe telling van bestanden die te oud zijn of niet bereikbaar zijn (inclusief buiten `active_window`)
 - `checks_alerting`: Window-aware telling; bestanden buiten hun `active_window` tellen hier niet mee
@@ -190,7 +226,9 @@ De `status`-waarden hebben een vaste prioriteitsvolgorde: `"unhealthy"` > `"degr
 | `checks_alerting` groter dan `0` | `"degraded"` |
 | Geen van bovenstaande | `"healthy"` |
 
-Een database-uitval overschrijft altijd een eventueel `"degraded"`-signaal van notificaties of de bestandscontrole.
+Een database-uitval overschrijft altijd een eventueel `"degraded"`-signaal van notificaties of de bestandsbewaking.
+
+`GET /api/health` blijft `200 OK` zolang de API de gedetailleerde status kan leveren. Lees `status` en `database_status` voor het operationele verdict.
 
 ---
 
@@ -1077,18 +1115,18 @@ Validatie gebeurt via `pg_restore --list` die de TOC en interne checksums contro
 
 ---
 
-## Bestandscontrole
+## Bestandsbewaking
 
-De bestandscontrole bewaakt bestanden op schijf en signaleert wanneer ze ouder zijn dan een geconfigureerde maximale leeftijd. Dit is handig om mislukte downloads of updates vanuit externe processen te detecteren, zoals nieuwsbulletins of weerberichten.
+De bestandsbewaking houdt bestanden op schijf in de gaten en signaleert wanneer ze ouder zijn dan een geconfigureerde maximale leeftijd. Dit is handig om mislukte downloads of updates vanuit externe processen te detecteren, zoals nieuwsbulletins of weerberichten.
 
 Controles draaien automatisch met een vast interval. Standaard is dat 60 seconden; dit is aan te passen via `file_monitor.interval_seconds`. Na een herstart geldt de eerste controle als een "grace run": de resultaten worden wel gemeten, maar er worden nog geen notificaties verstuurd. Zo voorkom je valse alarmen.
 
 > [!IMPORTANT]
 > **Breaking change:** het veld `interval_minutes` in de statusresponse is vervangen door `interval_seconds`. Externe afnemers moeten de nieuwe veldnaam gebruiken.
 
-### Status van de bestandscontrole
+### Status van de bestandsbewaking
 
-Toont de resultaten van de meest recente bestandscontrole, plus de huidige runstatus.
+Toont de resultaten van de meest recente controle, plus de huidige runstatus.
 
 **Endpoint:** `GET /api/file-monitor/status`
 **Authenticatie:** Vereist
@@ -1214,9 +1252,9 @@ De volgende voorbeelden tonen losse items uit de `checks`-array voor specifieke 
 > [!NOTE]
 > Het veld `file_exists` is nullable: `true` = bestand bestaat, `false` = bestand niet gevonden, `null` = onbekend (bijvoorbeeld bij een permissiefout). Gebruik het veld `error` voor details als `file_exists` `null` is.
 
-### Handmatig een bestandscontrole starten
+### Handmatig een controle starten
 
-Start een bestandscontrole op de achtergrond. Handig tijdens configuratie of storingsonderzoek, zodat operators niet hoeven te wachten op de volgende geplande controle.
+Start een controle op de achtergrond. Handig tijdens configuratie of storingsonderzoek, zodat operators niet hoeven te wachten op de volgende geplande controle.
 
 **Endpoint:** `POST /api/file-monitor/check`
 **Authenticatie:** Vereist
@@ -1254,9 +1292,9 @@ De handmatige trigger en de cronjob gebruiken dezelfde single-flight gate. Daard
 
 Strikte gelijkheid (`completed_run_id == myRunID`) bevestigt dat de zichtbare `checks` exact door jouw run zijn geproduceerd. Een hogere waarde betekent dat een latere run, bijvoorbeeld via cron, jouw run heeft ingehaald. Dat is prima voor de vraag "is het systeem nu gezond?", maar verliest de exacte correlatie. Gebruik voor nauwkeurige troubleshooting daarom de strikte vergelijking en houd rekening met een mogelijke race.
 
-### Integratie met het health-endpoint (bestandscontrole)
+### Integratie met de gedetailleerde health-endpoint (bestandsbewaking)
 
-Als de bestandscontrole is ingeschakeld, geeft het health-endpoint (`GET /api/health`) een extra `file_monitor`-blok terug:
+Als de bestandsbewaking is ingeschakeld, geeft de gedetailleerde health-endpoint (`GET /api/health`) een extra `file_monitor`-blok terug. De publieke `GET /health` blijft bewust minimaal en bevat dit blok niet:
 
 ```json
 {
@@ -1274,13 +1312,13 @@ Als de bestandscontrole is ingeschakeld, geeft het health-endpoint (`GET /api/he
 ```
 
 - `checks_stale`: ruwe telling van bestanden die te oud zijn of niet bereikbaar zijn, inclusief bestanden buiten hun `active_window`.
-- `checks_alerting`: window-aware telling; bestanden buiten hun `active_window` tellen hier niet mee. Wanneer de database verbonden is en `checks_alerting > 0`, wordt de algemene status `"degraded"` (`"unhealthy"` heeft altijd prioriteit). Een bestand dat 's nachts verouderd raakt maar alleen overdag wordt ververst, telt hier dus niet mee.
+- `checks_alerting`: window-aware telling; bestanden buiten hun `active_window` tellen hier niet mee. Wanneer de database verbonden is en `checks_alerting > 0`, wordt de algemene status van `GET /api/health` `"degraded"` (`"unhealthy"` heeft altijd prioriteit). Een bestand dat 's nachts verouderd raakt maar alleen overdag wordt ververst, telt hier dus niet mee.
 
 ---
 
 ## Aanwezigheidscontrole
 
-Waar de [bestandscontrole](#bestandscontrole) een vaste lijst configuratiebestanden bewaakt, werkt de aanwezigheidscontrole **op basis van de database**: hij leest de playlist uit de Aeron-database en controleert of de bijbehorende audiobestanden daadwerkelijk op schijf staan. Zo signaleer je ontbrekende of verplaatste tracks voordat ze worden uitgezonden.
+Waar de [bestandsbewaking](#bestandsbewaking) een vaste lijst configuratiebestanden in de gaten houdt, werkt de aanwezigheidscontrole **op basis van de database**: hij leest de playlist uit de Aeron-database en controleert of de bijbehorende audiobestanden daadwerkelijk op schijf staan. Zo signaleer je ontbrekende of verplaatste tracks voordat ze worden uitgezonden.
 
 De controle draait asynchroon: een `POST` start een run op de achtergrond en geeft direct een `run_id` terug; het resultaat lees je op met `GET .../status`.
 
@@ -1426,9 +1464,9 @@ Toont de runstatus plus het resultaat van de meest recente run.
 
 Met `media_file_check.scheduler` draait de controle automatisch op een cron-schema. De geplande run controleert standaard **vandaag**; met `media_file_check.lookahead_days` kun je vooruitkijken — bij `lookahead_days: 2` controleert de run vandaag t/m overmorgen (inclusief), zodat ontbrekende bestanden opvallen vóórdat ze worden uitgezonden. `0` (standaard) is alleen vandaag. Handmatige API-runs gebruiken hun eigen `from`/`to`-bereik en negeren deze instelling. Als e-mailnotificaties zijn geconfigureerd, stuurt een geplande run een alert wanneer er problemen (`missing`, `ambiguous` of `stat_error`) worden gevonden, en een herstelmelding zodra een volgende run weer schoon is. Handmatige API-runs versturen geen e-mail, zodat ad-hoc scopes de alert-status niet verstoren.
 
-### Integratie met het health-endpoint (aanwezigheidscontrole)
+### Integratie met de gedetailleerde health-endpoint (aanwezigheidscontrole)
 
-Als de aanwezigheidscontrole is ingeschakeld, geeft `GET /api/health` een extra `media_file_check`-blok terug:
+Als de aanwezigheidscontrole is ingeschakeld, geeft `GET /api/health` een extra `media_file_check`-blok terug. De publieke `GET /health` blijft bewust minimaal en bevat dit blok niet:
 
 ```json
 {
@@ -1672,12 +1710,21 @@ Het gedrag van de API kan worden geconfigureerd via `config.json`:
     "target_height": 640,
     "quality": 85,
     "reject_smaller": false,
-    "max_image_download_size_bytes": 52428800
+    "max_image_download_size_bytes": 52428800,
+    "max_pixels": 25000000
   },
   "api": {
     "enabled": true,
     "keys": ["jouw-veilige-api-sleutel-hier"],
-    "request_timeout_seconds": 30
+    "request_timeout_seconds": 30,
+    "upload_read_timeout_seconds": 180,
+    "read_timeout_seconds": 30,
+    "write_timeout_seconds": 60,
+    "idle_timeout_seconds": 120,
+    "max_upload_body_bytes": 73400320,
+    "rate_limit_enabled": false,
+    "rate_limit_requests": 120,
+    "rate_limit_window_seconds": 60
   },
   "maintenance": {
     "bloat_threshold": 10.0,
@@ -1746,15 +1793,37 @@ Het gedrag van de API kan worden geconfigureerd via `config.json`:
 }
 ```
 
-**Instellingen voor bestandscontrole:**
-- `file_monitor.enabled`: Schakel de bestandscontrole in.
+**Instellingen voor afbeeldingen:**
+- `image.max_image_download_size_bytes`: Maximale downloadgrootte voor externe image-URL's (standaard 52428800, 50 MiB).
+- `image.max_pixels`: Maximale gedecodeerde afbeeldingsgrootte in pixels vóór optimalisatie (standaard 25000000). Grotere afbeeldingen worden na `DecodeConfig` afgewezen voordat de volledige pixelbuffer wordt gedecodeerd.
+
+**Instellingen voor API-server en uploads:**
+- `api.enabled`: Schakel API-key-authenticatie in.
+- `api.keys`: Toegestane API-sleutels wanneer authenticatie is ingeschakeld.
+- `api.request_timeout_seconds`: Maximale duur voor een normale afgehandelde API-request binnen de router
+  (standaard 30).
+- `api.upload_read_timeout_seconds`: Maximale tijd voor het lezen van image upload request bodies
+  (standaard 180). Uploadroutes krijgen daarna nog de normale `request_timeout_seconds` voor verwerking.
+- `api.read_timeout_seconds`: Maximale tijd voor het lezen van request headers en body (standaard 30).
+- `api.write_timeout_seconds`: Maximale tijd voor het schrijven van de response (standaard 60).
+- `api.idle_timeout_seconds`: Maximale idle tijd voor keep-alive verbindingen (standaard 120).
+- `api.max_upload_body_bytes`: Maximale JSON request-body voor image upload endpoints
+  (standaard 73400320, ongeveer 70 MiB).
+- `api.rate_limit_enabled`: Schakel fixed-window rate limiting in voor API-endpoints behalve de publieke health-route.
+- `api.rate_limit_requests`: Aantal toegestane requests per bucket per window (standaard 120).
+- `api.rate_limit_window_seconds`: Lengte van het rate-limitwindow in seconden (standaard 60).
+
+Voor deze API-instellingen betekent `0` of weglaten: gebruik de applicatiestandaard. Het betekent dus niet "onbeperkt".
+
+**Instellingen voor bestandsbewaking:**
+- `file_monitor.enabled`: Schakel de bestandsbewaking in.
 - `file_monitor.interval_seconds`: Pollinginterval in seconden (standaard 60; `0` of weglaten = standaard).
 - `file_monitor.checks`: Array met te bewaken bestanden (minimaal 1 item vereist wanneer ingeschakeld).
   - `name`: Optionele weergavenaam voor notificaties.
   - `path`: Absoluut pad naar het bestand.
   - `max_age_minutes`: Maximaal toegestane leeftijd in minuten (minimaal 1).
   - `stat_timeout_seconds`: Maximale tijd in seconden voor `os.Stat` (standaard 5; `0` of weglaten = standaard). Beschermt tegen vastgelopen NFS- of SMB-mounts.
-  - `active_window`: Optioneel tijdvenster `"HH:MM-HH:MM"` waarin alerts en `GET /api/health`-degradatie actief zijn. Buiten dit venster blijft `is_stale` zichtbaar in `GET /api/file-monitor/status`, maar wordt er geen alert- of herstelmail verstuurd en blijft `GET /api/health` gezond. Een eindtijd vóór de starttijd betekent dat het venster over middernacht heen loopt, bijvoorbeeld `"22:00-06:00"`. Gelijke start- en eindtijd zijn ongeldig; laat het veld weg voor altijd actief.
+  - `active_window`: Optioneel tijdvenster `"HH:MM-HH:MM"` waarin alerts en de degradatie in `GET /api/health` actief zijn. Buiten dit venster blijft `is_stale` zichtbaar in `GET /api/file-monitor/status`, maar wordt er geen alert- of herstelmail verstuurd en telt dit bestand niet mee als degraded-signaal voor `GET /api/health`. Een eindtijd vóór de starttijd betekent dat het venster over middernacht heen loopt, bijvoorbeeld `"22:00-06:00"`. Gelijke start- en eindtijd zijn ongeldig; laat het veld weg voor altijd actief.
 
 Het controle-interval staat los van `max_age_minutes` en wordt geconfigureerd via `interval_seconds` (standaard 60 s).
 
