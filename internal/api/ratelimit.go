@@ -90,11 +90,6 @@ func (l *apiRateLimiter) cleanupLocked(now time.Time) {
 func (s *Server) rateLimitMiddleware(limiter *apiRateLimiter) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if isPublicHealthPath(r.URL.Path) {
-				next.ServeHTTP(w, r)
-				return
-			}
-
 			key := s.rateLimitKey(r)
 			ok, retryAfter, logDenied := limiter.allow(key)
 			if !ok {

@@ -2,7 +2,9 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -430,4 +432,200 @@ func TestIsValidAPIKey(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPublicHealthOmitsInternalDetails(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{}
+	cfg.API.Enabled = true
+	cfg.API.Keys = []string{"test-key"}
+	cfg.Database.Name = "secret_db_name"
+	enableHealthDetailSignals(t, cfg)
+
+	handler := newHealthTestServer(t, cfg, nil).router()
+	req := httptest.NewRequest(http.MethodGet, "/health", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/json; charset=utf-8" {
+		t.Fatalf("Content-Type = %q, want application/json; charset=utf-8", got)
+	}
+
+	data := decodeResponseData(t, rec)
+	for _, forbidden := range []string{"version", "database", "database_status", "notifications", "file_monitor", "media_file_check"} {
+		if _, ok := data[forbidden]; ok {
+			t.Fatalf("public health contains %q: %#v", forbidden, data)
+		}
+	}
+	if got := data["status"]; got != "healthy" {
+		t.Fatalf("status = %#v, want healthy", got)
+	}
+}
+
+func TestPublicHealthReturnsUnavailableWhenDatabaseDisconnected(t *testing.T) {
+	t.Parallel()
+
+	handler := newHealthTestServer(t, &config.Config{}, errors.New("db down")).router()
+	req := httptest.NewRequest(http.MethodGet, "/health", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status code = %d, want %d; body: %s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+	}
+
+	resp := decodeResponse(t, rec)
+	if resp.Success {
+		t.Fatal("success = true, want false")
+	}
+	if resp.Error != "Service unavailable" {
+		t.Fatalf("error = %q, want %q", resp.Error, "Service unavailable")
+	}
+
+	data := responseData(t, resp)
+	if got := data["status"]; got != "unhealthy" {
+		t.Fatalf("status = %#v, want unhealthy", got)
+	}
+	for _, forbidden := range []string{"version", "database_status"} {
+		if _, ok := data[forbidden]; ok {
+			t.Fatalf("public health contains %q: %#v", forbidden, data)
+		}
+	}
+}
+
+func TestPublicHealthRespondsToHeadProbe(t *testing.T) {
+	t.Parallel()
+
+	handler := newHealthTestServer(t, &config.Config{}, nil).router()
+	req := httptest.NewRequest(http.MethodHead, "/health", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d; HEAD probes must not get 405", rec.Code, http.StatusOK)
+	}
+}
+
+func TestDetailedHealthRequiresAuthAndIncludesOperatorDetails(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{}
+	cfg.API.Enabled = true
+	cfg.API.Keys = []string{"test-key"}
+	cfg.Database.Name = "operator_db_name"
+	enableHealthDetailSignals(t, cfg)
+
+	handler := newHealthTestServer(t, cfg, nil).router()
+
+	unauthorized := httptest.NewRecorder()
+	handler.ServeHTTP(
+		unauthorized,
+		httptest.NewRequest(http.MethodGet, "/api/health", http.NoBody),
+	)
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status = %d, want %d; body: %s",
+			unauthorized.Code, http.StatusUnauthorized, unauthorized.Body.String())
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/health", http.NoBody)
+	req.Header.Set("X-API-Key", "test-key")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	data := decodeResponseData(t, rec)
+	if got := data["database"]; got != "operator_db_name" {
+		t.Fatalf("database = %#v, want operator_db_name", got)
+	}
+	if got := data["version"]; got != "test" {
+		t.Fatalf("version = %#v, want test", got)
+	}
+	if got := data["database_status"]; got != "connected" {
+		t.Fatalf("database_status = %#v, want connected", got)
+	}
+	if _, ok := data["notifications"]; !ok {
+		t.Fatalf("detailed health missing notifications: %#v", data)
+	}
+	fm, ok := data["file_monitor"].(map[string]any)
+	if !ok {
+		t.Fatalf("detailed health missing file_monitor: %#v", data)
+	}
+	if got := fm["checks_total"]; got != float64(1) {
+		t.Fatalf("file_monitor.checks_total = %#v, want 1", got)
+	}
+	if _, ok := data["media_file_check"]; !ok {
+		t.Fatalf("detailed health missing media_file_check: %#v", data)
+	}
+}
+
+func decodeResponseData(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
+	t.Helper()
+
+	resp := decodeResponse(t, rec)
+	if !resp.Success {
+		t.Fatalf("success = false, error = %q", resp.Error)
+	}
+	return responseData(t, resp)
+}
+
+func decodeResponse(t *testing.T, rec *httptest.ResponseRecorder) Response {
+	t.Helper()
+
+	var resp Response
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	return resp
+}
+
+func responseData(t *testing.T, resp Response) map[string]any {
+	t.Helper()
+
+	data, ok := resp.Data.(map[string]any)
+	if !ok {
+		t.Fatalf("data = %T, want map[string]any", resp.Data)
+	}
+	return data
+}
+
+func enableHealthDetailSignals(t *testing.T, cfg *config.Config) {
+	t.Helper()
+
+	dir := t.TempDir()
+	watchedFile := filepath.Join(dir, "watched.txt")
+	if err := os.WriteFile(watchedFile, []byte("ok"), 0o600); err != nil {
+		t.Fatalf("write watched file: %v", err)
+	}
+
+	cfg.FileMonitor.Enabled = true
+	cfg.FileMonitor.Checks = []config.FileMonitorCheckConfig{{
+		Path:          watchedFile,
+		MaxAgeMinutes: 5,
+	}}
+	cfg.MediaFileCheck.Enabled = true
+	cfg.MediaFileCheck.SearchDirs = []string{dir}
+}
+
+func newHealthTestServer(t *testing.T, cfg *config.Config, pingErr error) *Server {
+	t.Helper()
+
+	svc, err := service.New(nil, cfg)
+	if err != nil {
+		t.Fatalf("service.New: %v", err)
+	}
+	t.Cleanup(svc.Close)
+
+	server := New(svc, "test")
+	server.dbPing = func(context.Context) error { return pingErr }
+	return server
 }

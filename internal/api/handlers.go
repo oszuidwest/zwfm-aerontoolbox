@@ -34,7 +34,12 @@ type ImageStatsResponse struct {
 	WithoutImages int `json:"without_images"`
 }
 
-// HealthResponse is returned by the public health endpoint.
+// PublicHealthResponse is returned by the unauthenticated health endpoint.
+type PublicHealthResponse struct {
+	Status string `json:"status"`
+}
+
+// HealthResponse is returned by the authenticated detailed health endpoint.
 type HealthResponse struct {
 	Status         string                `json:"status"`
 	Version        string                `json:"version"`
@@ -109,13 +114,17 @@ func (s *Server) validateAndGetEntityID(w http.ResponseWriter, r *http.Request, 
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	dbStatus := "connected"
-	dbConnected := true
-	if err := s.service.Repository().Ping(r.Context()); err != nil {
-		dbStatus = "disconnected"
-		dbConnected = false
-		slog.Warn("Database health check failed", "error", err)
+	_, dbConnected := s.databaseStatus(r.Context())
+	resp := PublicHealthResponse{Status: overallHealthStatus(dbConnected, false)}
+	if !dbConnected {
+		respondEnvelope(w, http.StatusServiceUnavailable, resp, "Service unavailable")
+		return
 	}
+	respondJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleHealthDetails(w http.ResponseWriter, r *http.Request) {
+	dbStatus, dbConnected := s.databaseStatus(r.Context())
 
 	resp := HealthResponse{
 		Version:        s.version,
@@ -163,6 +172,28 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 	resp.Status = overallHealthStatus(dbConnected, notifyExpiresSoon || fmAlerting > 0 || mediaProblems > 0)
 	respondJSON(w, http.StatusOK, resp)
+}
+
+// dbPingTimeout bounds the health-check ping. A healthy database answers in
+// milliseconds; anything slower should fail the probe fast instead of pinning
+// goroutines for the full server write timeout.
+const dbPingTimeout = 2 * time.Second
+
+// databaseStatus reports database connectivity via a bounded ping. Concurrent
+// health requests share one in-flight ping (the public endpoint is
+// unauthenticated and unratelimited, so probes must not amplify into database
+// load). WithoutCancel keeps one canceled request from failing the shared ping.
+func (s *Server) databaseStatus(ctx context.Context) (string, bool) {
+	_, err, _ := s.pingGroup.Do("ping", func() (any, error) {
+		pingCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), dbPingTimeout)
+		defer cancel()
+		return nil, s.dbPing(pingCtx)
+	})
+	if err != nil {
+		slog.Warn("Database health check failed", "error", err)
+		return "disconnected", false
+	}
+	return "connected", true
 }
 
 // overallHealthStatus returns the highest-severity status given the database
