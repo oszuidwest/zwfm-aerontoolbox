@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -81,7 +82,7 @@ func winPathComponents(winPath string) []string {
 	}
 	rest = strings.ReplaceAll(rest, `\`, "/")
 	var out []string
-	for _, part := range strings.Split(rest, "/") {
+	for part := range strings.SplitSeq(rest, "/") {
 		switch part {
 		case "", ".":
 			continue
@@ -96,12 +97,7 @@ func winPathComponents(winPath string) []string {
 
 // baseName returns the final path component of a Windows or Unix path.
 func baseName(p string) string {
-	p = strings.ReplaceAll(p, `\`, "/")
-	p = strings.TrimRight(p, "/")
-	if i := strings.LastIndex(p, "/"); i >= 0 {
-		return p[i+1:]
-	}
-	return p
+	return path.Base(strings.ReplaceAll(p, `\`, "/"))
 }
 
 // stem returns a filename with its extension removed. Names without an
@@ -143,12 +139,7 @@ func buildFileIndexWithWalkDir(
 	}
 	add := func(m map[string][]string, key, full string) {
 		key = foldKey(key, caseInsensitive)
-		for _, existing := range m[key] {
-			if existing == full {
-				return
-			}
-		}
-		m[key] = append(m[key], full)
+		m[key] = appendUnique(m[key], full)
 	}
 
 	for _, dir := range dirs {
@@ -230,10 +221,9 @@ type mediaMatcher struct {
 	indexTimeout    time.Duration
 	startStatFlight statFlightStarter
 
-	ctx        context.Context
-	indexMu    sync.Mutex
-	indexReady bool
-	index      *fileIndex
+	ctx       context.Context
+	indexOnce sync.Once
+	index     *fileIndex
 }
 
 // matchInput is the database-free item data classified by mediaMatcher.
@@ -400,30 +390,23 @@ func (m *mediaMatcher) statDriveMapped(ref string) (candidate string, exists boo
 // are configured. The index is built at most once per matcher; concurrent callers
 // that fall through to the index strategy wait for that bounded build attempt.
 func (m *mediaMatcher) getIndex() *fileIndex {
-	m.indexMu.Lock()
-	defer m.indexMu.Unlock()
-
-	if m.indexReady {
-		return m.index
-	}
-	m.indexReady = true
-	if len(m.searchDirs) == 0 {
-		return nil
-	}
-
-	start := time.Now()
-	m.index = m.buildIndex()
-	if err := m.index.err(); err != nil {
-		slog.Warn("Media file check: index built with errors",
+	m.indexOnce.Do(func() {
+		if len(m.searchDirs) == 0 {
+			return
+		}
+		start := time.Now()
+		m.index = m.buildIndex()
+		if err := m.index.err(); err != nil {
+			slog.Warn("Media file check: index built with errors",
+				"files", m.index.count, "search_dirs", len(m.searchDirs),
+				"duration", time.Since(start).Round(time.Millisecond).String(),
+				"error", err)
+			return
+		}
+		slog.Info("Media file check: index built",
 			"files", m.index.count, "search_dirs", len(m.searchDirs),
-			"duration", time.Since(start).Round(time.Millisecond).String(),
-			"error", err)
-		return m.index
-	}
-	slog.Info("Media file check: index built",
-		"files", m.index.count, "search_dirs", len(m.searchDirs),
-		"duration", time.Since(start).Round(time.Millisecond).String())
-
+			"duration", time.Since(start).Round(time.Millisecond).String())
+	})
 	return m.index
 }
 
@@ -484,16 +467,22 @@ func (idx *fileIndex) lookup(table map[string][]string, keys []string, caseInsen
 	return matches
 }
 
+// statRootWithTimeout stats name within root via the single-flight group,
+// bounding the call with the stat timeout so a frozen mount cannot stall the
+// worker. A timeout is reported as an error (the file's existence is unknown),
+// a genuine absence as (false, nil): a stale mount that appears as an empty
+// directory is indistinguishable from a genuine absence at this layer.
 func (m *mediaMatcher) statRootWithTimeout(key string, root *os.Root, name string) (bool, error) {
-	if m.startStatFlight == nil {
-		return statRootWithTimeout(root, name, m.statTimeout)
-	}
-
 	statFn := mediaRootStat
 	flight, isNew := m.startStatFlight(key, time.Now(), func() (os.FileInfo, error) {
 		return statFn(root, name)
 	})
-	info, err := m.waitStatFlight(flight, isNew)
+
+	timeout := m.statTimeout
+	if timeout <= 0 {
+		timeout = config.DefaultMediaFileCheckStatTimeoutSeconds * time.Second
+	}
+	info, err := waitStatFlight(flight, isNew, timeout, m.ctx)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return false, nil
@@ -501,71 +490,6 @@ func (m *mediaMatcher) statRootWithTimeout(key string, root *os.Root, name strin
 		return false, err
 	}
 	return info != nil, nil
-}
-
-func (m *mediaMatcher) waitStatFlight(flight *statInFlight, isNew bool) (os.FileInfo, error) {
-	timeout := m.statTimeout
-	if timeout <= 0 {
-		timeout = config.DefaultMediaFileCheckStatTimeoutSeconds * time.Second
-	}
-
-	remaining := timeout
-	if !isNew {
-		remaining = timeout - time.Since(time.Unix(0, flight.startedNano.Load()))
-		if remaining <= 0 {
-			return nil, fmt.Errorf("stat timeout after %s", timeout)
-		}
-	}
-
-	timer := time.NewTimer(remaining)
-	defer timer.Stop()
-
-	var ctxDone <-chan struct{}
-	if m.ctx != nil {
-		ctxDone = m.ctx.Done()
-	}
-
-	select {
-	case <-flight.done:
-		return flight.result.info, flight.result.err
-	case <-timer.C:
-		return nil, fmt.Errorf("stat timeout after %s", timeout)
-	case <-ctxDone:
-		return nil, m.ctx.Err()
-	}
-}
-
-// statRootWithTimeout stats name within root, bounding the call with timeout so
-// a frozen mount cannot stall the worker. A timeout is reported as an error
-// (the file's existence is unknown), a genuine absence as (false, nil).
-func statRootWithTimeout(root *os.Root, name string, timeout time.Duration) (bool, error) {
-	type result struct{ err error }
-	ch := make(chan result, 1)
-	statFn := mediaRootStat
-	go func() {
-		// A frozen mount can leave this goroutine stuck in Stat after the caller
-		// times out; the buffered channel prevents an additional blocked send.
-		_, err := statFn(root, name)
-		ch <- result{err: err}
-	}()
-
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-
-	select {
-	case r := <-ch:
-		if r.err == nil {
-			return true, nil
-		}
-		if errors.Is(r.err, fs.ErrNotExist) {
-			// A stale mount that appears as an empty directory is indistinguishable
-			// from a genuine absence at this layer.
-			return false, nil
-		}
-		return false, r.err
-	case <-timer.C:
-		return false, fmt.Errorf("stat timeout after %s", timeout)
-	}
 }
 
 func emptyFileIndex() *fileIndex {

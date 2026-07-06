@@ -161,14 +161,15 @@ func serveUntilShutdown(server *api.Server, port string, scheduler *service.Sche
 
 // gracefulShutdown drains scheduled jobs before stopping the HTTP server.
 func gracefulShutdown(server *api.Server, scheduler *service.Scheduler) error {
-	ctx := scheduler.Stop()
-	select {
-	case <-ctx.Done():
-		if scheduler.HasJobs() {
+	// Without jobs Stop() returns context.Background(), whose Done() never
+	// fires - waiting on it would always burn the full timeout.
+	if scheduler.HasJobs() {
+		select {
+		case <-scheduler.Stop().Done():
 			slog.Info("Scheduler stopped successfully")
+		case <-time.After(35 * time.Second):
+			slog.Warn("Scheduler stop timeout, forcing shutdown")
 		}
-	case <-time.After(35 * time.Second):
-		slog.Warn("Scheduler stop timeout, forcing shutdown")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

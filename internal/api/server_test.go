@@ -385,7 +385,6 @@ func TestIsValidAPIKey(t *testing.T) {
 	}
 	t.Cleanup(svc.Close)
 
-	server := New(svc, "test")
 	tests := []struct {
 		name string
 		keys []string
@@ -425,7 +424,10 @@ func TestIsValidAPIKey(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Key hashes are precomputed at construction, so build the server
+			// after setting the configured keys.
 			cfg.API.Keys = tt.keys
+			server := New(svc, "test")
 			if got := server.isValidAPIKey(tt.key); got != tt.want {
 				t.Fatalf("isValidAPIKey(%q) = %v, want %v", tt.key, got, tt.want)
 			}

@@ -20,13 +20,25 @@ type Server struct {
 	service *service.AeronService
 	version string
 	server  *http.Server
+
+	// SHA-256 hashes of the configured API keys, computed once at construction
+	// (config is loaded once at startup and never reloaded). Hashing both sides
+	// to a fixed length keeps the comparison constant-time regardless of key
+	// length differences.
+	apiKeyHashes [][sha256.Size]byte
 }
 
 // New returns a Server bound to the service layer and build version.
 func New(svc *service.AeronService, version string) *Server {
+	keys := svc.Config().API.Keys
+	keyHashes := make([][sha256.Size]byte, len(keys))
+	for i, key := range keys {
+		keyHashes[i] = sha256.Sum256([]byte(key))
+	}
 	return &Server{
-		service: svc,
-		version: version,
+		service:      svc,
+		version:      version,
+		apiKeyHashes: keyHashes,
 	}
 }
 
@@ -53,6 +65,7 @@ func (s *Server) newHTTPServer(port string, handler http.Handler) *http.Server {
 // router builds the public health route and authenticated API surface.
 func (s *Server) router() http.Handler {
 	router := chi.NewRouter()
+	backupEnabled := s.requireEnabled("backup is not enabled", func(c *config.Config) bool { return c.Backup.Enabled })
 
 	cop := http.NewCrossOriginProtection()
 	router.Use(func(next http.Handler) http.Handler {
@@ -104,7 +117,7 @@ func (s *Server) router() http.Handler {
 					})
 
 					r.Group(func(r chi.Router) {
-						r.Use(s.requireEnabled("backup is not enabled", func(c *config.Config) bool { return c.Backup.Enabled }))
+						r.Use(backupEnabled)
 						r.Post("/backup", s.handleCreateBackup)
 						r.Get("/backup/status", s.handleBackupStatus)
 						r.Get("/backups", s.handleListBackups)
@@ -132,8 +145,10 @@ func (s *Server) router() http.Handler {
 				r.Post("/notifications/test-email", s.handleTestEmail)
 			})
 
+			// The download route escapes the group-level request timeout:
+			// large backup downloads may legitimately exceed it.
 			r.Group(func(r chi.Router) {
-				r.Use(s.requireEnabled("backup is not enabled", func(c *config.Config) bool { return c.Backup.Enabled }))
+				r.Use(backupEnabled)
 				r.Get("/db/backups/{filename}", s.handleDownloadBackupFile)
 			})
 		})
@@ -196,9 +211,8 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// requireEnabled builds middleware that 404s when a feature is disabled. The
-// enabled predicate is evaluated per request against the live config, so a
-// runtime config change is reflected without rebuilding the router.
+// requireEnabled builds middleware that 404s when a feature is disabled in the
+// configuration, so a whole route group can be gated in one place.
 func (s *Server) requireEnabled(message string, enabled func(*config.Config) bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -215,14 +229,15 @@ func (s *Server) isValidAPIKey(key string) bool {
 	if key == "" {
 		return false
 	}
+	return s.isValidAPIKeyHash(sha256.Sum256([]byte(key)))
+}
 
-	// Hash both sides to a fixed length so ConstantTimeCompare never returns
-	// early on a length mismatch, which would leak the configured key length.
-	keyHash := sha256.Sum256([]byte(key))
+// isValidAPIKeyHash compares a presented key's hash against every configured
+// key hash in constant time.
+func (s *Server) isValidAPIKeyHash(keyHash [sha256.Size]byte) bool {
 	valid := 0
-	for _, configuredKey := range s.service.Config().API.Keys {
-		configuredHash := sha256.Sum256([]byte(configuredKey))
-		valid |= subtle.ConstantTimeCompare(keyHash[:], configuredHash[:])
+	for i := range s.apiKeyHashes {
+		valid |= subtle.ConstantTimeCompare(keyHash[:], s.apiKeyHashes[i][:])
 	}
 	return valid == 1
 }

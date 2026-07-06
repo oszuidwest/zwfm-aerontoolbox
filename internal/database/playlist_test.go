@@ -7,15 +7,9 @@ import (
 )
 
 func TestBuildPlaylistQueryRequiresBlockID(t *testing.T) {
-	query, params, err := BuildPlaylistQuery("aeron", &PlaylistOptions{})
-	if err != nil {
-		t.Fatalf("BuildPlaylistQuery: %v", err)
-	}
-	if query != "" {
-		t.Fatalf("query = %q, want empty query without block id", query)
-	}
-	if len(params) != 0 {
-		t.Fatalf("params = %v, want none", params)
+	_, _, err := BuildPlaylistQuery("aeron", &PlaylistOptions{})
+	if err == nil {
+		t.Fatal("expected validation error without block id")
 	}
 }
 
@@ -67,7 +61,6 @@ func TestBuildPlaylistQueryFiltersSortAndPagination(t *testing.T) {
 	commonWants := []string{
 		"FROM aeron.playlistitem pi",
 		"WHERE pi.blockid = $1",
-		"AND COALESCE(t.exporttype, 1) NOT IN ($2,$3)",
 		"ORDER BY t.artist DESC",
 	}
 
@@ -77,7 +70,6 @@ func TestBuildPlaylistQueryFiltersSortAndPagination(t *testing.T) {
 			artistImage := tt.artistImage
 			opts := &PlaylistOptions{
 				BlockID:     "block-1",
-				ExportTypes: []int{1, 2},
 				TrackImage:  &trackImage,
 				ArtistImage: &artistImage,
 				SortBy:      "artist",
@@ -108,7 +100,7 @@ func TestBuildPlaylistQueryFiltersSortAndPagination(t *testing.T) {
 					t.Fatalf("query missing %q:\n%s", want, query)
 				}
 			}
-			for _, want := range []string{wantTrackPredicate, wantArtistPredicate, "LIMIT $4"} {
+			for _, want := range []string{wantTrackPredicate, wantArtistPredicate, "LIMIT $2"} {
 				if !strings.Contains(query, want) {
 					t.Fatalf("query missing %q:\n%s", want, query)
 				}
@@ -119,14 +111,14 @@ func TestBuildPlaylistQueryFiltersSortAndPagination(t *testing.T) {
 				}
 			}
 			if tt.offset > 0 {
-				if !strings.Contains(query, "LIMIT $4 OFFSET $5") {
+				if !strings.Contains(query, "LIMIT $2 OFFSET $3") {
 					t.Fatalf("query missing LIMIT/OFFSET clause:\n%s", query)
 				}
 			} else if strings.Contains(query, " OFFSET ") {
 				t.Fatalf("query contains unexpected OFFSET:\n%s", query)
 			}
 
-			wantParams := []any{"block-1", 1, 2, tt.limit}
+			wantParams := []any{"block-1", tt.limit}
 			if tt.offset > 0 {
 				wantParams = append(wantParams, tt.offset)
 			}
@@ -141,6 +133,19 @@ func TestBuildPlaylistQueryRejectsInvalidSchema(t *testing.T) {
 	_, _, err := BuildPlaylistQuery("bad schema", &PlaylistOptions{BlockID: "block-1"})
 	if err == nil {
 		t.Fatal("expected invalid schema error")
+	}
+}
+
+func TestBuildPlaylistQuerySortByDuration(t *testing.T) {
+	query, _, err := BuildPlaylistQuery("aeron", &PlaylistOptions{
+		BlockID: "block-1",
+		SortBy:  "duration",
+	})
+	if err != nil {
+		t.Fatalf("BuildPlaylistQuery: %v", err)
+	}
+	if !strings.Contains(query, "ORDER BY COALESCE(t.knownlength, 0)") {
+		t.Fatalf("query = %s, want duration sort", query)
 	}
 }
 

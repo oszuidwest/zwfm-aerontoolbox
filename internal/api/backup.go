@@ -25,8 +25,7 @@ func (s *Server) handleCreateBackup(w http.ResponseWriter, r *http.Request) {
 
 	var req service.BackupRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
-		var maxBytesErr *http.MaxBytesError
-		if errors.As(err, &maxBytesErr) {
+		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 			respondError(w, http.StatusRequestEntityTooLarge, "Request body too large")
 			return
 		}
@@ -36,7 +35,7 @@ func (s *Server) handleCreateBackup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.service.Backup.Start(req); err != nil {
-		respondError(w, errorCode(err), err.Error())
+		respondServiceError(w, err)
 		return
 	}
 
@@ -49,8 +48,7 @@ func (s *Server) handleCreateBackup(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListBackups(w http.ResponseWriter, r *http.Request) {
 	result, err := s.service.Backup.List()
 	if err != nil {
-		statusCode := errorCode(err)
-		respondError(w, statusCode, err.Error())
+		respondServiceError(w, err)
 		return
 	}
 
@@ -66,8 +64,7 @@ func (s *Server) handleDownloadBackupFile(w http.ResponseWriter, r *http.Request
 
 	file, info, err := s.service.Backup.OpenFile(filename)
 	if err != nil {
-		statusCode := errorCode(err)
-		respondError(w, statusCode, err.Error())
+		respondServiceError(w, err)
 		return
 	}
 	defer func() {
@@ -100,8 +97,7 @@ func (s *Server) handleDeleteBackup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.service.Backup.Delete(filename); err != nil {
-		statusCode := errorCode(err)
-		respondError(w, statusCode, err.Error())
+		respondServiceError(w, err)
 		return
 	}
 
@@ -116,7 +112,7 @@ func (s *Server) handleValidateBackup(w http.ResponseWriter, r *http.Request) {
 
 	result, err := s.service.Backup.Validate(filename)
 	if err != nil {
-		respondError(w, errorCode(err), err.Error())
+		respondServiceError(w, err)
 		return
 	}
 

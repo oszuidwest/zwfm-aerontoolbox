@@ -110,8 +110,8 @@ func TestProcessSkipsAlreadyTargetSize(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Process: %v", err)
 	}
-	if result.Encoder != "original (no optimization needed)" {
-		t.Fatalf("encoder = %q, want skip encoder", result.Encoder)
+	if result.Savings != 0 {
+		t.Fatalf("savings = %v, want 0 for skipped optimization", result.Savings)
 	}
 	if result.Original.Width != 12 || result.Original.Height != 8 {
 		t.Fatalf("original dimensions = %dx%d, want 12x8", result.Original.Width, result.Original.Height)

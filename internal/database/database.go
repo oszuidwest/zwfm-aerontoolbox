@@ -5,25 +5,11 @@ import (
 	"database/sql"
 	"errors"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
 
 	_ "github.com/lib/pq"
 )
-
-// DB is the sqlx surface used by repository query helpers.
-type DB interface {
-	GetContext(ctx context.Context, dest any, query string, args ...any) error
-	SelectContext(ctx context.Context, dest any, query string, args ...any) error
-	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
-	PingContext(ctx context.Context) error
-}
-
-// Artist is the compact artist projection used by list-style queries.
-type Artist struct {
-	ID         string `db:"artistid"`
-	ArtistName string `db:"artist"`
-	HasImage   bool   `db:"has_image"`
-}
 
 // ArtistDetails is the full artist projection returned by detail endpoints.
 type ArtistDetails struct {
@@ -35,14 +21,6 @@ type ArtistDetails struct {
 	Instagram   string `db:"instagram" json:"instagram"`
 	HasImage    bool   `db:"has_image" json:"has_image"`
 	RepeatValue int    `db:"repeat_value" json:"repeat_value"`
-}
-
-// Track is the compact track projection used by list-style queries.
-type Track struct {
-	ID         string `db:"titleid"`
-	TrackTitle string `db:"tracktitle"`
-	Artist     string `db:"artist"`
-	HasImage   bool   `db:"has_image"`
 }
 
 // TrackDetails is the full track projection returned by detail endpoints.
@@ -107,14 +85,14 @@ const trackDetailsQuery = `
 	FROM %s.track
 	WHERE titleid = $1`
 
-func getEntityByID[T any](ctx context.Context, db DB, query, id, label, operation string) (*T, error) {
+func getEntityByID[T any](ctx context.Context, db *sqlx.DB, query, id, label string) (*T, error) {
 	var entity T
 	err := db.GetContext(ctx, &entity, query, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, types.NewNotFoundError(label, id)
 	}
 	if err != nil {
-		return nil, &types.OperationError{Operation: operation, Err: err}
+		return nil, types.NewOperationError("fetch "+label, err)
 	}
 	return &entity, nil
 }

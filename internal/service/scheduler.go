@@ -120,16 +120,7 @@ func (s *Scheduler) runBackup(ctx context.Context) {
 // scheduled run through TriggerCheck so a manual API trigger and a cron tick
 // cannot overlap (which would otherwise duplicate alert/recovery emails).
 func (s *Scheduler) runFileMonitor(_ context.Context) {
-	if _, err := s.service.FileMonitor.TriggerCheck(); err != nil {
-		var conflict *types.ConflictError
-		if errors.As(err, &conflict) {
-			slog.Info("Scheduled file monitor skipped (already running)")
-			return
-		}
-		slog.Error("Scheduled file monitor failed to start", "error", err)
-		return
-	}
-	slog.Info("Scheduled file monitor check started")
+	s.runTriggered("file monitor check", s.service.FileMonitor.TriggerCheck)
 }
 
 // runMediaFileCheck verifies that today's playlist audio files exist on disk.
@@ -137,16 +128,21 @@ func (s *Scheduler) runFileMonitor(_ context.Context) {
 // cannot overlap, and so the scheduled run (which emails alerts) keeps a stable
 // today-scope for the failure/recovery transition.
 func (s *Scheduler) runMediaFileCheck(_ context.Context) {
-	if _, err := s.service.MediaFileCheck.TriggerScheduled(); err != nil {
-		var conflict *types.ConflictError
-		if errors.As(err, &conflict) {
-			slog.Info("Scheduled media file check skipped (already running)")
+	s.runTriggered("media file check", s.service.MediaFileCheck.TriggerScheduled)
+}
+
+// runTriggered starts a single-flight check from a cron tick, logging a skip
+// when a run is already in progress instead of treating it as a failure.
+func (s *Scheduler) runTriggered(name string, trigger func() (uint64, error)) {
+	if _, err := trigger(); err != nil {
+		if _, ok := errors.AsType[*types.ConflictError](err); ok {
+			slog.Info("Scheduled " + name + " skipped (already running)")
 			return
 		}
-		slog.Error("Scheduled media file check failed to start", "error", err)
+		slog.Error("Scheduled "+name+" failed to start", "error", err)
 		return
 	}
-	slog.Info("Scheduled media file check started")
+	slog.Info("Scheduled " + name + " started")
 }
 
 // healthCheckTimeout is the maximum time allowed for a scheduled health check.

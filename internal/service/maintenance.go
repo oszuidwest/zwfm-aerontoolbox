@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strconv"
 	"time"
 
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/config"
@@ -31,10 +30,6 @@ func newMaintenanceService(
 		notify: notifySvc,
 	}
 }
-
-// noIssuesDetected is a placeholder recommendation inserted for the API response when no problems
-// are found. It is stripped before passing results to the notification system.
-const noIssuesDetected = "No issues detected"
 
 // DatabaseHealth is the API health report for the configured database.
 type DatabaseHealth struct {
@@ -78,24 +73,6 @@ type TableHealth struct {
 	NeedsAnalyze    bool       `json:"needs_analyze"`
 }
 
-// tableHealthRow is the raw PostgreSQL statistics row for one table.
-type tableHealthRow struct {
-	TableName       string     `db:"table_name"`
-	LiveTuples      int64      `db:"live_tuples"`
-	DeadTuples      int64      `db:"dead_tuples"`
-	ModSinceAnalyze int64      `db:"mod_since_analyze"`
-	LastVacuum      *time.Time `db:"last_vacuum"`
-	LastAutovacuum  *time.Time `db:"last_autovacuum"`
-	LastAnalyze     *time.Time `db:"last_analyze"`
-	LastAutoanalyze *time.Time `db:"last_autoanalyze"`
-	SeqScan         int64      `db:"seq_scan"`
-	IdxScan         int64      `db:"idx_scan"`
-	TotalSize       int64      `db:"total_size"`
-	TableSize       int64      `db:"table_size"`
-	IndexSize       int64      `db:"index_size"`
-	ToastSize       int64      `db:"toast_size"`
-}
-
 // GetHealth collects database, table, connection, and query health.
 func (s *MaintenanceService) GetHealth(ctx context.Context) (*DatabaseHealth, error) {
 	schema := s.repo.Schema()
@@ -105,45 +82,43 @@ func (s *MaintenanceService) GetHealth(ctx context.Context) (*DatabaseHealth, er
 		CheckedAt:    time.Now(),
 	}
 
-	var version string
-	if err := s.repo.DB().GetContext(ctx, &version, "SELECT version()"); err != nil {
-		slog.Warn("Maintenance: could not retrieve database version", "error", err)
-		health.DatabaseVersion = "unavailable"
-	} else {
-		health.DatabaseVersion = version
-	}
-
-	dbSize, dbSizeRaw, err := s.getDatabaseSize(ctx)
+	version, err := s.repo.GetDatabaseVersion(ctx)
 	if err != nil {
-		return nil, types.NewOperationError("get database size", err)
+		slog.Warn("Maintenance: could not retrieve database version", "error", err)
+		version = "unavailable"
 	}
-	health.DatabaseSize = dbSize
+	health.DatabaseVersion = version
+
+	dbSizeRaw, err := s.repo.GetDatabaseSize(ctx)
+	if err != nil {
+		return nil, err
+	}
+	health.DatabaseSize = util.FormatBytes(dbSizeRaw)
 	health.DatabaseSizeRaw = dbSizeRaw
 
 	tables, err := s.getTableHealth(ctx)
 	if err != nil {
-		return nil, types.NewOperationError("get table statistics", err)
+		return nil, err
 	}
 	health.Tables = tables
 
-	active, maxConns, pct, err := s.getConnectionUsage(ctx)
+	active, maxConns, err := s.repo.GetConnectionStats(ctx)
 	if err != nil {
-		return nil, types.NewOperationError("get connection usage", err)
+		return nil, err
 	}
 	health.ActiveConnections = active
 	health.MaxConnections = maxConns
-	health.ConnectionUsagePct = pct
+	if maxConns > 0 {
+		health.ConnectionUsagePct = float64(active) / float64(maxConns) * 100
+	}
 
-	queries, err := s.getLongRunningQueries(ctx)
+	queries, err := s.repo.GetLongRunningQueries(ctx, s.config.Maintenance.GetLongQueryThresholdSeconds())
 	if err != nil {
-		return nil, types.NewOperationError("get long-running queries", err)
+		return nil, err
 	}
 	health.LongRunningQueries = queries
 
 	health.Recommendations = s.generateRecommendations(health)
-	if len(health.Recommendations) == 0 {
-		health.Recommendations = []string{noIssuesDetected}
-	}
 
 	for i := range tables {
 		if tables[i].NeedsVacuum || tables[i].NeedsAnalyze {
@@ -165,14 +140,8 @@ func (s *MaintenanceService) CheckHealthAndAlert(ctx context.Context) {
 		return
 	}
 
-	// Strip the API placeholder so the notifier sees an empty slice for "no issues".
-	recs := health.Recommendations
-	if len(recs) == 1 && recs[0] == noIssuesDetected {
-		recs = nil
-	}
-
 	result := &notify.HealthAlertResult{
-		Recommendations:    recs,
+		Recommendations:    health.Recommendations,
 		ActiveConnections:  health.ActiveConnections,
 		MaxConnections:     health.MaxConnections,
 		ConnectionUsagePct: health.ConnectionUsagePct,
@@ -183,96 +152,11 @@ func (s *MaintenanceService) CheckHealthAndAlert(ctx context.Context) {
 	s.notify.NotifyHealthAlert(result)
 }
 
-// getDatabaseSize returns the current database size in raw and display forms.
-func (s *MaintenanceService) getDatabaseSize(ctx context.Context) (size string, sizeRaw int64, err error) {
-	err = s.repo.DB().GetContext(ctx, &sizeRaw, "SELECT pg_database_size(current_database())")
-	if err != nil {
-		return "", 0, err
-	}
-	return util.FormatBytes(sizeRaw), sizeRaw, nil
-}
-
-// getConnectionUsage returns active connections, max_connections, and usage percent.
-func (s *MaintenanceService) getConnectionUsage(ctx context.Context) (active, maxConns int, pct float64, err error) {
-	if err := s.repo.DB().GetContext(ctx, &active,
-		"SELECT count(*) FROM pg_stat_activity WHERE datname = current_database()"); err != nil {
-		return 0, 0, 0, err
-	}
-
-	var maxStr string
-	if err := s.repo.DB().GetContext(ctx, &maxStr,
-		"SELECT current_setting('max_connections')"); err != nil {
-		return 0, 0, 0, err
-	}
-
-	maxConns, err = strconv.Atoi(maxStr)
-	if err != nil {
-		return 0, 0, 0, fmt.Errorf("parse max_connections: %w", err)
-	}
-
-	if maxConns > 0 {
-		pct = float64(active) / float64(maxConns) * 100
-	}
-
-	return active, maxConns, pct, nil
-}
-
-// getLongRunningQueries returns queries running longer than the configured threshold.
-func (s *MaintenanceService) getLongRunningQueries(ctx context.Context) ([]types.LongRunningQuery, error) {
-	threshold := s.config.Maintenance.GetLongQueryThresholdSeconds()
-
-	query := `
-		SELECT
-			pid,
-			(now() - query_start)::text AS duration,
-			LEFT(query, 200) AS query,
-			state
-		FROM pg_stat_activity
-		WHERE state != 'idle'
-			AND query_start IS NOT NULL
-			AND now() - query_start > make_interval(secs => $1)
-			AND datname = current_database()
-			AND pid != pg_backend_pid()
-		ORDER BY query_start ASC
-	`
-
-	var queries []types.LongRunningQuery
-	if err := s.repo.DB().SelectContext(ctx, &queries, query, threshold); err != nil {
-		return nil, err
-	}
-
-	return queries, nil
-}
-
 // getTableHealth retrieves maintenance statistics for all user tables in schema.
 func (s *MaintenanceService) getTableHealth(ctx context.Context) ([]TableHealth, error) {
-	schema := s.repo.Schema()
-	query := `
-		SELECT
-			s.relname as table_name,
-			COALESCE(s.n_live_tup, 0) as live_tuples,
-			COALESCE(s.n_dead_tup, 0) as dead_tuples,
-			COALESCE(s.n_mod_since_analyze, 0) as mod_since_analyze,
-			s.last_vacuum,
-			s.last_autovacuum,
-			s.last_analyze,
-			s.last_autoanalyze,
-			COALESCE(s.seq_scan, 0) as seq_scan,
-			COALESCE(s.idx_scan, 0) as idx_scan,
-			COALESCE(pg_total_relation_size(c.oid), 0) as total_size,
-			COALESCE(pg_table_size(c.oid), 0) as table_size,
-			COALESCE(pg_indexes_size(c.oid), 0) as index_size,
-			COALESCE(pg_total_relation_size(c.reltoastrelid), 0) as toast_size
-		FROM pg_stat_user_tables s
-		JOIN pg_class c ON c.relname = s.relname
-		JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = s.schemaname
-		WHERE s.schemaname = $1 AND c.relkind = 'r'
-		ORDER BY s.n_live_tup DESC
-	`
-
-	var rows []tableHealthRow
-	if err := s.repo.DB().SelectContext(ctx, &rows, query, schema); err != nil {
-		return nil, types.NewOperationError("get table statistics", err)
+	rows, err := s.repo.GetTableStats(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	cfg := s.config.Maintenance
@@ -285,7 +169,7 @@ func (s *MaintenanceService) getTableHealth(ctx context.Context) ([]TableHealth,
 }
 
 // convertTableRow maps raw PostgreSQL stats and derives maintenance flags.
-func convertTableRow(row *tableHealthRow, cfg *config.MaintenanceConfig) TableHealth {
+func convertTableRow(row *database.TableStatsRow, cfg *config.MaintenanceConfig) TableHealth {
 	table := TableHealth{
 		Name:            row.TableName,
 		RowCount:        row.LiveTuples,
@@ -311,15 +195,27 @@ func convertTableRow(row *tableHealthRow, cfg *config.MaintenanceConfig) TableHe
 		table.DeadTuplePct = float64(row.DeadTuples) / float64(total) * 100
 	}
 
-	table.NeedsVacuum = table.DeadTuplePct > cfg.GetBloatThreshold() ||
-		table.DeadTuples > cfg.GetDeadTupleThreshold()
-
 	neverAnalyzed := table.LastAnalyze == nil && table.LastAutoanalyze == nil && table.RowCount > 0
-	staleStats := table.RowCount > 0 &&
-		table.ModSinceAnalyze > (table.RowCount*int64(cfg.GetStaleStatsThreshold())/100)
-	table.NeedsAnalyze = neverAnalyzed || staleStats
+	table.NeedsVacuum = exceedsBloat(&table, cfg) || exceedsDeadTuples(&table, cfg)
+	table.NeedsAnalyze = neverAnalyzed || hasStaleStats(&table, cfg)
 
 	return table
+}
+
+// exceedsBloat reports whether the dead-tuple percentage crosses the bloat threshold.
+func exceedsBloat(t *TableHealth, cfg *config.MaintenanceConfig) bool {
+	return t.DeadTuplePct > cfg.GetBloatThreshold()
+}
+
+// exceedsDeadTuples reports whether the absolute dead-tuple count crosses its threshold.
+func exceedsDeadTuples(t *TableHealth, cfg *config.MaintenanceConfig) bool {
+	return t.DeadTuples > cfg.GetDeadTupleThreshold()
+}
+
+// hasStaleStats reports whether modifications since the last ANALYZE exceed the
+// configured percentage of the row count.
+func hasStaleStats(t *TableHealth, cfg *config.MaintenanceConfig) bool {
+	return t.RowCount > 0 && t.ModSinceAnalyze > t.RowCount*int64(cfg.GetStaleStatsThreshold())/100
 }
 
 // generateRecommendations returns operator actions for the health report.
@@ -348,11 +244,11 @@ func (s *MaintenanceService) checkTableHealth(t *TableHealth, recs []string) []s
 	cfg := s.config.Maintenance
 	minRows := cfg.GetMinRowsForRecommendation()
 
-	if t.DeadTuplePct > cfg.GetBloatThreshold() {
+	if exceedsBloat(t, &cfg) {
 		recs = append(recs, fmt.Sprintf("Table '%s' has %.1f%% dead tuples - VACUUM recommended", t.Name, t.DeadTuplePct))
 	}
 
-	if t.DeadTuples > cfg.GetDeadTupleThreshold() {
+	if exceedsDeadTuples(t, &cfg) {
 		recs = append(recs, fmt.Sprintf("Table '%s' has %d dead tuples - VACUUM recommended", t.Name, t.DeadTuples))
 	}
 
@@ -370,13 +266,10 @@ func (s *MaintenanceService) checkTableHealth(t *TableHealth, recs []string) []s
 		recs = append(recs, fmt.Sprintf("Table '%s' has never been analyzed - ANALYZE recommended", t.Name))
 	}
 
-	if t.RowCount > 0 && t.ModSinceAnalyze > 0 {
-		threshold := t.RowCount * int64(cfg.GetStaleStatsThreshold()) / 100
-		if t.ModSinceAnalyze > threshold {
-			recs = append(recs, fmt.Sprintf(
-				"Table '%s' has %d modifications since last ANALYZE - statistics stale",
-				t.Name, t.ModSinceAnalyze))
-		}
+	if hasStaleStats(t, &cfg) {
+		recs = append(recs, fmt.Sprintf(
+			"Table '%s' has %d modifications since last ANALYZE - statistics stale",
+			t.Name, t.ModSinceAnalyze))
 	}
 
 	if t.SeqScans > 1000 && t.IdxScans > 0 &&

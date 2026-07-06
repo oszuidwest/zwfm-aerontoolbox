@@ -7,7 +7,6 @@ import (
 	"math"
 	"os"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -49,30 +48,6 @@ type fileMonitorNotifier interface {
 	SendFileRecoveries([]notify.FileAlertResult)
 }
 
-// statResult holds the outcome of a single os.Stat invocation.
-type statResult struct {
-	info os.FileInfo
-	err  error
-}
-
-// statInFlight tracks a single in-progress stat for a path. The single-flight
-// design ensures a frozen mount leaks at most one goroutine per unique path
-// (until the OS returns), instead of one per Run() iteration. Joiners share the
-// original timeout budget measured from when statFn actually started (not from
-// when executeRun was called), so a permanently hanging flight only burns one
-// full StatTimeout - subsequent runs return immediately.
-//
-// startedNano is an atomic int64 (Unix nanoseconds). It is initialised to the
-// executeRun call time as a safe fallback for joiners that race the goroutine
-// start, and overwritten with time.Now() just before statFn is called. Using
-// an atomic avoids a mutex while still providing a happens-before guarantee
-// between the goroutine write and the joiner read.
-type statInFlight struct {
-	startedNano atomic.Int64  // Unix ns; set at goroutine start, read by joiners
-	done        chan struct{} // closed once result is populated
-	result      statResult
-}
-
 // FileMonitorService checks configured files for staleness and alert transitions.
 type FileMonitorService struct {
 	config *config.Config
@@ -91,8 +66,7 @@ type FileMonitorService struct {
 	stateMu      sync.Mutex
 
 	// In-flight stat tracking for single-flight per path.
-	inflightMu sync.Mutex
-	inflight   map[string]*statInFlight
+	statFlights statFlightGroup
 
 	// Published state: lastCheck + run IDs live under one lock so a Status()
 	// snapshot is internally consistent. Writing lastCheck without also bumping
@@ -168,7 +142,6 @@ func newFileMonitorService(cfg *config.Config, notifySvc *notify.NotificationSer
 		notify:     notifySvc,
 		windows:    windows,
 		alertState: make(map[string]bool),
-		inflight:   make(map[string]*statInFlight),
 		runner:     async.New(),
 	}, nil
 }
@@ -358,7 +331,7 @@ func (s *FileMonitorService) countChecksLocked(pred func(FileCheckResult) bool) 
 }
 
 // Close waits for any running TriggerCheck() invocation to finish.
-// os.Stat goroutines started by startOrJoinFlight are not joined here: they
+// os.Stat goroutines started by statFlights are not joined here: they
 // cannot be cancelled (os.Stat has no context parameter), and blocking on them
 // would cause process shutdown to hang permanently on a frozen mount. The
 // goroutines hold a closure reference to s, so the GC will not collect the
@@ -407,81 +380,22 @@ func (s *FileMonitorService) publishCompleted(status *FileMonitorStatus, runID u
 }
 
 // checkFileWithTimeout performs a single-flight os.Stat with a per-flight
-// timeout budget. At most one goroutine per path is in flight at a time.
-//
-// Budget origin:
-//   - New flight (isNew=true): the goroutine has been spawned but may not have
-//     started executing yet, so startedNano is not reliable. The caller gets
-//     the full configured timeout from this point forward.
-//   - Joiner (isNew=false): shares the budget from startedNano. Once the
-//     goroutine has started, startedNano holds the actual OS-call start time;
-//     before that it holds the executeRun fallback. Either way the total wait
-//     is bounded by one StatTimeout. If the budget is exhausted the joiner
-//     returns immediately so a hung mount cannot stall the errgroup slot.
+// timeout budget (see waitStatFlight for the budget semantics). At most one
+// goroutine per path is in flight at a time.
 func (s *FileMonitorService) checkFileWithTimeout(check config.FileMonitorCheckConfig, now time.Time) FileCheckResult {
-	flight, isNew := s.startOrJoinFlight(check.Path, now)
-	timeout := check.StatTimeout()
-
-	var remaining time.Duration
-	if isNew {
-		// Goroutine just spawned; startedNano reflects the executeRun clock,
-		// not the actual OS-call start. Use the full configured budget.
-		remaining = timeout
-	} else {
-		// Joining an in-flight stat: use the shared budget from the goroutine's
-		// actual start time so the total wait across all joiners is bounded by
-		// one StatTimeout, not one per caller.
-		remaining = timeout - time.Since(time.Unix(0, flight.startedNano.Load()))
-		if remaining <= 0 {
-			return s.timeoutResult(check, flight, timeout)
-		}
-	}
-
-	timer := time.NewTimer(remaining)
-	defer timer.Stop()
-
-	select {
-	case <-flight.done:
-		return s.buildResult(check, flight.result.info, flight.result.err, now)
-	case <-timer.C:
-		return s.timeoutResult(check, flight, timeout)
-	}
-}
-
-// startOrJoinFlight returns the in-flight stat for path, or starts a new one.
-// A new flight kicks off a goroutine that runs osStat and (on completion)
-// removes itself from the inflight map. The map entry is keyed by the
-// statInFlight pointer so a still-hanging flight is not deleted when a newer
-// flight for the same path has already replaced it.
-func (s *FileMonitorService) startOrJoinFlight(path string, now time.Time) (*statInFlight, bool) {
-	s.inflightMu.Lock()
-	defer s.inflightMu.Unlock()
-
-	if existing, ok := s.inflight[path]; ok {
-		return existing, false
-	}
-
-	flight := &statInFlight{done: make(chan struct{})}
-	flight.startedNano.Store(now.UnixNano()) // fallback for joiners that arrive before goroutine starts
-	s.inflight[path] = flight
 	// Snapshot the probe before spawning so tests can restore osStat in
 	// t.Cleanup without racing a goroutine that has not started executing yet.
 	statFn := osStat
+	flight, isNew := s.statFlights.startOrJoin(check.Path, now, func() (os.FileInfo, error) {
+		return statFn(check.Path)
+	})
 
-	go func() {
-		flight.startedNano.Store(time.Now().UnixNano()) // actual OS-call start time
-		info, err := statFn(path)
-		flight.result = statResult{info: info, err: err}
-		close(flight.done) // happens-before vs. <-flight.done in readers
-
-		s.inflightMu.Lock()
-		if s.inflight[path] == flight {
-			delete(s.inflight, path)
-		}
-		s.inflightMu.Unlock()
-	}()
-
-	return flight, true
+	timeout := check.StatTimeout()
+	info, err := waitStatFlight(flight, isNew, timeout, nil)
+	if errors.Is(err, errStatTimeout) {
+		return s.timeoutResult(check, flight, timeout)
+	}
+	return s.buildResult(check, info, err, now)
 }
 
 // timeoutResult builds a stale result for a stat that exceeded its budget.

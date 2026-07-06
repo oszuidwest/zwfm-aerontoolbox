@@ -26,13 +26,13 @@ const dateParam = "2006-01-02"
 func (s *Server) handleMediaFileCheck(w http.ResponseWriter, r *http.Request) {
 	opts, err := parseMediaCheckOptions(r.URL.Query(), s.service.Config().MediaFileCheck.GetMaxRangeDays())
 	if err != nil {
-		respondError(w, errorCode(err), err.Error())
+		respondServiceError(w, err)
 		return
 	}
 
 	runID, err := s.service.MediaFileCheck.TriggerCheck(opts)
 	if err != nil {
-		respondError(w, errorCode(err), err.Error())
+		respondServiceError(w, err)
 		return
 	}
 
@@ -61,16 +61,18 @@ func parseMediaCheckOptions(query url.Values, maxRangeDays int) (*database.Media
 		return nil, types.NewValidationError("block_id", "must be a valid UUID")
 	}
 
-	for field, value := range map[string]string{"date": opts.Date, "from": opts.From, "to": opts.To} {
-		if value == "" {
-			continue
-		}
-		if _, err := time.Parse(dateParam, value); err != nil {
-			return nil, types.NewValidationError(field, "must be a valid date (YYYY-MM-DD)")
-		}
+	if _, err := parseDateParam("date", opts.Date); err != nil {
+		return nil, err
 	}
-
-	if err := validateDateRange(opts.From, opts.To, maxRangeDays); err != nil {
+	fromDate, err := parseDateParam("from", opts.From)
+	if err != nil {
+		return nil, err
+	}
+	toDate, err := parseDateParam("to", opts.To)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateDateRange(fromDate, toDate, maxRangeDays); err != nil {
 		return nil, err
 	}
 
@@ -89,26 +91,30 @@ func parseMediaCheckOptions(query url.Values, maxRangeDays int) (*database.Media
 	return opts, nil
 }
 
+// parseDateParam parses an optional YYYY-MM-DD query value; empty stays zero.
+func parseDateParam(field, value string) (time.Time, error) {
+	if value == "" {
+		return time.Time{}, nil
+	}
+	t, err := time.Parse(dateParam, value)
+	if err != nil {
+		return time.Time{}, types.NewValidationError(field, "must be a valid date (YYYY-MM-DD)")
+	}
+	return t, nil
+}
+
 // validateDateRange enforces from <= to and a maximum span, when both bounds are
 // given. A single bound is left to the database (open-ended on one side).
-func validateDateRange(from, to string, maxRangeDays int) error {
-	if from == "" || to == "" {
+func validateDateRange(from, to time.Time, maxRangeDays int) error {
+	if from.IsZero() || to.IsZero() {
 		return nil
 	}
-	fromDate, err := time.Parse(dateParam, from)
-	if err != nil {
-		return types.NewValidationError("from", "must be a valid date (YYYY-MM-DD)")
-	}
-	toDate, err := time.Parse(dateParam, to)
-	if err != nil {
-		return types.NewValidationError("to", "must be a valid date (YYYY-MM-DD)")
-	}
-	if toDate.Before(fromDate) {
+	if to.Before(from) {
 		return types.NewValidationError("to", "must not be before 'from'")
 	}
 	if maxRangeDays > 0 {
 		// Inclusive day span: a single day is span 1.
-		days := int(toDate.Sub(fromDate).Hours()/24) + 1
+		days := int(to.Sub(from).Hours()/24) + 1
 		if days > maxRangeDays {
 			return types.NewValidationError("range",
 				"date range exceeds the maximum of "+strconv.Itoa(maxRangeDays)+" days")

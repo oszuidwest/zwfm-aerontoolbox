@@ -17,16 +17,23 @@ import (
 type Repository struct {
 	db     *sqlx.DB
 	schema string
+
+	// Schema-dependent SQL rendered once here; the schema never changes for
+	// the lifetime of the process.
+	artistDetailsSQL string
+	trackDetailsSQL  string
+	playlistJoinsSQL string
 }
 
 // NewRepository returns a Repository scoped to schema.
 func NewRepository(db *sqlx.DB, schema string) *Repository {
-	return &Repository{db: db, schema: schema}
-}
-
-// DB exposes the underlying pool for specialized queries.
-func (r *Repository) DB() *sqlx.DB {
-	return r.db
+	return &Repository{
+		db:               db,
+		schema:           schema,
+		artistDetailsSQL: fmt.Sprintf(artistDetailsQuery, schema),
+		trackDetailsSQL:  fmt.Sprintf(trackDetailsQuery, schema),
+		playlistJoinsSQL: fmt.Sprintf(playlistItemJoins, schema, schema, schema),
+	}
 }
 
 // Schema returns the PostgreSQL schema name.
@@ -39,32 +46,30 @@ func (r *Repository) Ping(ctx context.Context) error {
 	return r.db.PingContext(ctx)
 }
 
-// resolveTable returns the qualified table name, label, and ID column for the given table.
-func (r *Repository) resolveTable(table types.Table) (qualifiedName, label, idCol string, err error) {
-	qualifiedName, err = types.QualifiedTable(r.schema, table)
+// resolveTable returns the qualified table name, label, and ID column for the given entity.
+func (r *Repository) resolveTable(entity types.EntityType) (qualifiedName, label, idCol string, err error) {
+	qualifiedName, err = types.QualifiedTable(r.schema, entity)
 	if err != nil {
 		return "", "", "", types.NewValidationError("table", fmt.Sprintf("invalid table configuration: %v", err))
 	}
-	return qualifiedName, string(table), types.IDColumnForTable(table), nil
+	return qualifiedName, string(entity), entity.IDColumn(), nil
 }
 
 // GetArtist retrieves complete artist details by UUID.
 func (r *Repository) GetArtist(ctx context.Context, id string) (*ArtistDetails, error) {
 	slog.Debug("Entity lookup", "type", "artist", "id", id)
-	query := fmt.Sprintf(artistDetailsQuery, r.schema)
-	return getEntityByID[ArtistDetails](ctx, r.db, query, id, "artist", "fetch artist")
+	return getEntityByID[ArtistDetails](ctx, r.db, r.artistDetailsSQL, id, "artist")
 }
 
 // GetTrack retrieves complete track details by UUID.
 func (r *Repository) GetTrack(ctx context.Context, id string) (*TrackDetails, error) {
 	slog.Debug("Entity lookup", "type", "track", "id", id)
-	query := fmt.Sprintf(trackDetailsQuery, r.schema)
-	return getEntityByID[TrackDetails](ctx, r.db, query, id, "track", "fetch track")
+	return getEntityByID[TrackDetails](ctx, r.db, r.trackDetailsSQL, id, "track")
 }
 
 // GetImage retrieves the stored image for an artist or track.
-func (r *Repository) GetImage(ctx context.Context, table types.Table, id string) ([]byte, error) {
-	qualifiedTableName, label, idCol, err := r.resolveTable(table)
+func (r *Repository) GetImage(ctx context.Context, entity types.EntityType, id string) ([]byte, error) {
+	qualifiedTableName, label, idCol, err := r.resolveTable(entity)
 	if err != nil {
 		return nil, err
 	}
@@ -88,8 +93,8 @@ func (r *Repository) GetImage(ctx context.Context, table types.Table, id string)
 }
 
 // UpdateImage stores image bytes for an artist or track.
-func (r *Repository) UpdateImage(ctx context.Context, table types.Table, id string, imageData []byte) error {
-	qualifiedTableName, label, idCol, err := r.resolveTable(table)
+func (r *Repository) UpdateImage(ctx context.Context, entity types.EntityType, id string, imageData []byte) error {
+	qualifiedTableName, label, idCol, err := r.resolveTable(entity)
 	if err != nil {
 		return err
 	}
@@ -104,8 +109,8 @@ func (r *Repository) UpdateImage(ctx context.Context, table types.Table, id stri
 }
 
 // DeleteImage clears the stored image for an artist or track.
-func (r *Repository) DeleteImage(ctx context.Context, table types.Table, id string) error {
-	qualifiedTableName, label, idCol, err := r.resolveTable(table)
+func (r *Repository) DeleteImage(ctx context.Context, entity types.EntityType, id string) error {
+	qualifiedTableName, label, idCol, err := r.resolveTable(entity)
 	if err != nil {
 		return err
 	}
@@ -136,8 +141,8 @@ type ImageCounts struct {
 }
 
 // CountImages returns total rows and rows with images in one query.
-func (r *Repository) CountImages(ctx context.Context, table types.Table) (*ImageCounts, error) {
-	qualifiedTableName, label, _, err := r.resolveTable(table)
+func (r *Repository) CountImages(ctx context.Context, entity types.EntityType) (*ImageCounts, error) {
+	qualifiedTableName, label, _, err := r.resolveTable(entity)
 	if err != nil {
 		return nil, err
 	}
@@ -150,35 +155,9 @@ func (r *Repository) CountImages(ctx context.Context, table types.Table) (*Image
 	return &counts, nil
 }
 
-// CountWithImages counts rows whose picture column is set.
-func (r *Repository) CountWithImages(ctx context.Context, table types.Table) (int, error) {
-	return r.countItems(ctx, table, true)
-}
-
-func (r *Repository) countItems(ctx context.Context, table types.Table, hasImage bool) (int, error) {
-	condition := "IS NULL"
-	if hasImage {
-		condition = "IS NOT NULL"
-	}
-
-	qualifiedTableName, label, _, err := r.resolveTable(table)
-	if err != nil {
-		return 0, err
-	}
-	query := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE picture %s", qualifiedTableName, condition)
-
-	var count int
-	err = r.db.GetContext(ctx, &count, query)
-	if err != nil {
-		return 0, types.NewOperationError(fmt.Sprintf("count %s", label), err)
-	}
-
-	return count, nil
-}
-
 // DeleteAllImages clears every stored image in table.
-func (r *Repository) DeleteAllImages(ctx context.Context, table types.Table) (int64, error) {
-	qualifiedTableName, label, _, err := r.resolveTable(table)
+func (r *Repository) DeleteAllImages(ctx context.Context, entity types.EntityType) (int64, error) {
+	qualifiedTableName, label, _, err := r.resolveTable(entity)
 	if err != nil {
 		return 0, err
 	}
@@ -199,7 +178,11 @@ func (r *Repository) GetPlaylist(ctx context.Context, opts *PlaylistOptions) ([]
 	if err != nil {
 		return nil, err
 	}
-	return ExecutePlaylistQuery(ctx, r.db, query, params)
+	var items []PlaylistItem
+	if err := r.db.SelectContext(ctx, &items, query, params...); err != nil {
+		return nil, types.NewOperationError("fetch playlist", err)
+	}
+	return items, nil
 }
 
 // GetPlaylistBlocks retrieves all playlist blocks for date or today when empty.
@@ -274,12 +257,10 @@ func (r *Repository) GetPlaylistWithTracks(
 		TempBlockID string `db:"blockid"`
 	}
 
-	columns := fmt.Sprintf(playlistItemColumns, types.VoicetrackUserID)
-	joins := fmt.Sprintf(playlistItemJoins, r.schema, r.schema, r.schema)
 	query := fmt.Sprintf(
 		"SELECT %s, COALESCE(pi.blockid::text, '') as blockid %s WHERE %s AND pi.blockid IN (%s)"+
 			" ORDER BY pi.blockid, pi.startdatetime",
-		columns, joins, dateFilter, strings.Join(placeholders, ","))
+		playlistItemColumnsSQL, r.playlistJoinsSQL, dateFilter, strings.Join(placeholders, ","))
 
 	var tempItems []playlistItemWithBlockID
 	err = r.db.SelectContext(ctx, &tempItems, query, pl.values...)

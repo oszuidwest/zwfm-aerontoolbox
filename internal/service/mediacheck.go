@@ -100,8 +100,7 @@ type MediaFileCheckService struct {
 
 	runner *async.Runner
 
-	statInflightMu sync.Mutex
-	statInflight   map[string]*statInFlight
+	statFlights statFlightGroup
 
 	publishedMu    sync.RWMutex
 	lastResult     *MediaCheckResult
@@ -116,11 +115,10 @@ func newMediaFileCheckService(
 	repo *database.Repository, cfg *config.Config, notifySvc *notify.NotificationService,
 ) *MediaFileCheckService {
 	return &MediaFileCheckService{
-		repo:         repo,
-		config:       cfg,
-		notify:       notifySvc,
-		runner:       async.New(),
-		statInflight: make(map[string]*statInFlight),
+		repo:   repo,
+		config: cfg,
+		notify: notifySvc,
+		runner: async.New(),
 	}
 }
 
@@ -204,15 +202,8 @@ func (s *MediaFileCheckService) executeRun(ctx context.Context, opts *database.M
 	// (timeout/cancel), an index-build error, or both when the timeout caused the
 	// index build to be incomplete.
 	_ = g.Wait()
-	ctxErr := ctx.Err()
-	indexErr := matcher.indexErr()
-	switch {
-	case indexErr != nil && ctxErr != nil:
-		result.Error = errors.Join(indexErr, ctxErr).Error()
-	case indexErr != nil:
-		result.Error = indexErr.Error()
-	case ctxErr != nil:
-		result.Error = ctxErr.Error()
+	if err := errors.Join(matcher.indexErr(), ctx.Err()); err != nil {
+		result.Error = err.Error()
 	}
 
 	result.Items = results
@@ -258,7 +249,7 @@ func (s *MediaFileCheckService) buildMatcher(ctx context.Context) (matcher *medi
 		statTimeout:     mfc.StatTimeout(),
 		indexTimeout:    mediaCheckRunTimeout,
 		ctx:             ctx,
-		startStatFlight: s.startOrJoinMediaStatFlight,
+		startStatFlight: s.statFlights.startOrJoin,
 	}
 
 	cleanup = func() {
@@ -273,41 +264,6 @@ func (s *MediaFileCheckService) buildMatcher(ctx context.Context) (matcher *medi
 		}
 	}
 	return matcher, cleanup
-}
-
-func (s *MediaFileCheckService) startOrJoinMediaStatFlight(
-	key string,
-	now time.Time,
-	statFn func() (os.FileInfo, error),
-) (*statInFlight, bool) {
-	s.statInflightMu.Lock()
-	defer s.statInflightMu.Unlock()
-
-	if s.statInflight == nil {
-		s.statInflight = make(map[string]*statInFlight)
-	}
-	if existing, ok := s.statInflight[key]; ok {
-		return existing, false
-	}
-
-	flight := &statInFlight{done: make(chan struct{})}
-	flight.startedNano.Store(now.UnixNano())
-	s.statInflight[key] = flight
-
-	go func() {
-		flight.startedNano.Store(time.Now().UnixNano())
-		info, err := statFn()
-		flight.result = statResult{info: info, err: err}
-		close(flight.done)
-
-		s.statInflightMu.Lock()
-		if s.statInflight[key] == flight {
-			delete(s.statInflight, key)
-		}
-		s.statInflightMu.Unlock()
-	}()
-
-	return flight, true
 }
 
 // Status returns a consistent snapshot of run-state plus the most recent result.
