@@ -23,18 +23,18 @@ type AsyncStartResponse struct {
 }
 
 func respondJSON(w http.ResponseWriter, statusCode int, data any) {
-	respondEnvelope(w, statusCode, statusCode < http.StatusBadRequest, data, "")
+	respondEnvelope(w, statusCode, data, "")
 }
 
 func respondError(w http.ResponseWriter, statusCode int, errorMsg string) {
-	respondEnvelope(w, statusCode, false, nil, errorMsg)
+	respondEnvelope(w, statusCode, nil, errorMsg)
 }
 
-func respondEnvelope(w http.ResponseWriter, statusCode int, success bool, data any, errorMsg string) {
+func respondEnvelope(w http.ResponseWriter, statusCode int, data any, errorMsg string) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(statusCode)
 	if err := json.NewEncoder(w).Encode(Response{
-		Success: success,
+		Success: statusCode < http.StatusBadRequest,
 		Data:    data,
 		Error:   errorMsg,
 	}); err != nil {

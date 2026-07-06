@@ -13,6 +13,7 @@ import (
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/config"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/service"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
+	"golang.org/x/sync/singleflight"
 )
 
 // Server owns the HTTP routing, middleware, and listener lifecycle.
@@ -26,6 +27,11 @@ type Server struct {
 	// to a fixed length keeps the comparison constant-time regardless of key
 	// length differences.
 	apiKeyHashes [][sha256.Size]byte
+
+	// dbPing backs the health checks; defaults to Repository.Ping and is
+	// overridden per instance in tests.
+	dbPing    func(ctx context.Context) error
+	pingGroup singleflight.Group
 }
 
 // New returns a Server bound to the service layer and build version.
@@ -39,6 +45,7 @@ func New(svc *service.AeronService, version string) *Server {
 		service:      svc,
 		version:      version,
 		apiKeyHashes: keyHashes,
+		dbPing:       svc.Repository().Ping,
 	}
 }
 
@@ -76,20 +83,18 @@ func (s *Server) router() http.Handler {
 	router.Use(middleware.Recoverer)
 	router.Use(middleware.Compress(5))
 
-	// Route HEAD to the matching GET handler so probes that use HEAD (some load
-	// balancers, GNU wget --spider) hit /health instead of getting a 405.
+	// Router-wide policy: route HEAD to the matching GET handler, so probes
+	// that use HEAD (some load balancers, GNU wget --spider) get the GET
+	// response headers instead of a 405.
 	router.Use(middleware.GetHead)
 
 	router.NotFound(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		respondError(w, http.StatusNotFound, "Endpoint not found")
 	})
 
-	jsonHeader := middleware.SetHeader("Content-Type", "application/json; charset=utf-8")
-	router.With(jsonHeader).Get("/health", s.handleHealth)
+	router.Get("/health", s.handleHealth)
 
 	router.Route("/api", func(r chi.Router) {
-		r.Use(jsonHeader)
 		if limiter := newAPIRateLimiter(&s.service.Config().API); limiter != nil {
 			r.Use(s.rateLimitMiddleware(limiter))
 		}

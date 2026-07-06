@@ -39,11 +39,6 @@ type PublicHealthResponse struct {
 	Status string `json:"status"`
 }
 
-// dbPing is a package-level test seam; tests overriding it must not run in parallel.
-var dbPing = func(ctx context.Context, repo *database.Repository) error {
-	return repo.Ping(ctx)
-}
-
 // HealthResponse is returned by the authenticated detailed health endpoint.
 type HealthResponse struct {
 	Status         string                `json:"status"`
@@ -120,19 +115,12 @@ func (s *Server) validateAndGetEntityID(w http.ResponseWriter, r *http.Request, 
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	_, dbConnected := s.databaseStatus(r.Context())
-
-	statusCode := http.StatusOK
-	success := true
-	errorMsg := ""
+	resp := PublicHealthResponse{Status: overallHealthStatus(dbConnected, false)}
 	if !dbConnected {
-		statusCode = http.StatusServiceUnavailable
-		success = false
-		errorMsg = "Service unavailable"
+		respondEnvelope(w, http.StatusServiceUnavailable, resp, "Service unavailable")
+		return
 	}
-
-	respondEnvelope(w, statusCode, success, PublicHealthResponse{
-		Status: overallHealthStatus(dbConnected, false),
-	}, errorMsg)
+	respondJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) handleHealthDetails(w http.ResponseWriter, r *http.Request) {
@@ -186,15 +174,26 @@ func (s *Server) handleHealthDetails(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, resp)
 }
 
+// dbPingTimeout bounds the health-check ping. A healthy database answers in
+// milliseconds; anything slower should fail the probe fast instead of pinning
+// goroutines for the full server write timeout.
+const dbPingTimeout = 2 * time.Second
+
+// databaseStatus reports database connectivity via a bounded ping. Concurrent
+// health requests share one in-flight ping (the public endpoint is
+// unauthenticated and unratelimited, so probes must not amplify into database
+// load). WithoutCancel keeps one canceled request from failing the shared ping.
 func (s *Server) databaseStatus(ctx context.Context) (string, bool) {
-	dbStatus := "connected"
-	dbConnected := true
-	if err := dbPing(ctx, s.service.Repository()); err != nil {
-		dbStatus = "disconnected"
-		dbConnected = false
+	_, err, _ := s.pingGroup.Do("ping", func() (any, error) {
+		pingCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), dbPingTimeout)
+		defer cancel()
+		return nil, s.dbPing(pingCtx)
+	})
+	if err != nil {
 		slog.Warn("Database health check failed", "error", err)
+		return "disconnected", false
 	}
-	return dbStatus, dbConnected
+	return "connected", true
 }
 
 // overallHealthStatus returns the highest-severity status given the database

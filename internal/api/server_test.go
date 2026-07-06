@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/config"
-	"github.com/oszuidwest/zwfm-aerontoolbox/internal/database"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/service"
 )
 
@@ -436,15 +435,15 @@ func TestIsValidAPIKey(t *testing.T) {
 }
 
 func TestPublicHealthOmitsInternalDetails(t *testing.T) {
-	stubDBPing(t, nil)
+	t.Parallel()
 
-	cfg := healthTestConfig()
+	cfg := &config.Config{}
 	cfg.API.Enabled = true
 	cfg.API.Keys = []string{"test-key"}
 	cfg.Database.Name = "secret_db_name"
 	enableHealthDetailSignals(t, cfg)
 
-	handler := newHealthTestServer(t, cfg).router()
+	handler := newHealthTestServer(t, cfg, nil).router()
 	req := httptest.NewRequest(http.MethodGet, "/health", http.NoBody)
 	rec := httptest.NewRecorder()
 
@@ -469,10 +468,9 @@ func TestPublicHealthOmitsInternalDetails(t *testing.T) {
 }
 
 func TestPublicHealthReturnsUnavailableWhenDatabaseDisconnected(t *testing.T) {
-	stubDBPing(t, errors.New("db down"))
+	t.Parallel()
 
-	cfg := healthTestConfig()
-	handler := newHealthTestServer(t, cfg).router()
+	handler := newHealthTestServer(t, &config.Config{}, errors.New("db down")).router()
 	req := httptest.NewRequest(http.MethodGet, "/health", http.NoBody)
 	rec := httptest.NewRecorder()
 
@@ -502,10 +500,9 @@ func TestPublicHealthReturnsUnavailableWhenDatabaseDisconnected(t *testing.T) {
 }
 
 func TestPublicHealthRespondsToHeadProbe(t *testing.T) {
-	stubDBPing(t, nil)
+	t.Parallel()
 
-	cfg := healthTestConfig()
-	handler := newHealthTestServer(t, cfg).router()
+	handler := newHealthTestServer(t, &config.Config{}, nil).router()
 	req := httptest.NewRequest(http.MethodHead, "/health", http.NoBody)
 	rec := httptest.NewRecorder()
 
@@ -517,15 +514,15 @@ func TestPublicHealthRespondsToHeadProbe(t *testing.T) {
 }
 
 func TestDetailedHealthRequiresAuthAndIncludesOperatorDetails(t *testing.T) {
-	stubDBPing(t, nil)
+	t.Parallel()
 
-	cfg := healthTestConfig()
+	cfg := &config.Config{}
 	cfg.API.Enabled = true
 	cfg.API.Keys = []string{"test-key"}
 	cfg.Database.Name = "operator_db_name"
 	enableHealthDetailSignals(t, cfg)
 
-	handler := newHealthTestServer(t, cfg).router()
+	handler := newHealthTestServer(t, cfg, nil).router()
 
 	unauthorized := httptest.NewRecorder()
 	handler.ServeHTTP(
@@ -601,16 +598,6 @@ func responseData(t *testing.T, resp Response) map[string]any {
 	return data
 }
 
-func healthTestConfig() *config.Config {
-	return &config.Config{
-		Database: config.DatabaseConfig{
-			Host: "localhost", Port: "5432", Name: "aeron", User: "u",
-			Password: "p", Schema: "testschema", SSLMode: "disable",
-		},
-		Image: config.ImageConfig{TargetWidth: 1, TargetHeight: 1, Quality: 85},
-	}
-}
-
 func enableHealthDetailSignals(t *testing.T, cfg *config.Config) {
 	t.Helper()
 
@@ -629,7 +616,7 @@ func enableHealthDetailSignals(t *testing.T, cfg *config.Config) {
 	cfg.MediaFileCheck.SearchDirs = []string{dir}
 }
 
-func newHealthTestServer(t *testing.T, cfg *config.Config) *Server {
+func newHealthTestServer(t *testing.T, cfg *config.Config, pingErr error) *Server {
 	t.Helper()
 
 	svc, err := service.New(nil, cfg)
@@ -638,17 +625,7 @@ func newHealthTestServer(t *testing.T, cfg *config.Config) *Server {
 	}
 	t.Cleanup(svc.Close)
 
-	return New(svc, "test")
-}
-
-func stubDBPing(t *testing.T, err error) {
-	t.Helper()
-
-	previous := dbPing
-	dbPing = func(context.Context, *database.Repository) error {
-		return err
-	}
-	t.Cleanup(func() {
-		dbPing = previous
-	})
+	server := New(svc, "test")
+	server.dbPing = func(context.Context) error { return pingErr }
+	return server
 }
