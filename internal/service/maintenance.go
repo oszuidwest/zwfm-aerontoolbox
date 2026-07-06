@@ -116,6 +116,11 @@ func (s *MaintenanceService) GetHealth(ctx context.Context) (*DatabaseHealth, er
 	if err != nil {
 		return nil, err
 	}
+	if !s.config.Maintenance.ExposeLongRunningQueryText {
+		for i := range queries {
+			queries[i].Query = ""
+		}
+	}
 	health.LongRunningQueries = queries
 
 	health.Recommendations = s.generateRecommendations(health)

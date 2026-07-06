@@ -100,7 +100,7 @@ func (s *Server) rateLimitMiddleware(limiter *apiRateLimiter) func(http.Handler)
 						"method", r.Method)
 				}
 				w.Header().Set("Retry-After", retryAfterSeconds(retryAfter))
-				respondError(w, http.StatusTooManyRequests, "Rate limit exceeded")
+				respondClientError(w, http.StatusTooManyRequests, "Rate limit exceeded")
 				return
 			}
 			next.ServeHTTP(w, r)

@@ -89,7 +89,7 @@ func (s *Server) router() http.Handler {
 	router.Use(middleware.GetHead)
 
 	router.NotFound(func(w http.ResponseWriter, r *http.Request) {
-		respondError(w, http.StatusNotFound, "Endpoint not found")
+		respondClientError(w, http.StatusNotFound, "Endpoint not found")
 	})
 
 	router.Get("/health", s.handleHealth)
@@ -100,7 +100,7 @@ func (s *Server) router() http.Handler {
 		}
 
 		r.NotFound(func(w http.ResponseWriter, r *http.Request) {
-			respondError(w, http.StatusNotFound, "Endpoint not found")
+			respondClientError(w, http.StatusNotFound, "Endpoint not found")
 		})
 
 		r.Group(func(r chi.Router) {
@@ -208,7 +208,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 				"method", r.Method,
 				"remote_addr", r.RemoteAddr)
 
-			respondError(w, http.StatusUnauthorized, "Unauthorized: invalid or missing API key")
+			respondClientError(w, http.StatusUnauthorized, "Unauthorized: invalid or missing API key")
 			return
 		}
 
@@ -222,7 +222,7 @@ func (s *Server) requireEnabled(message string, enabled func(*config.Config) boo
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if !enabled(s.service.Config()) {
-				respondError(w, http.StatusNotFound, message)
+				respondClientError(w, http.StatusNotFound, message)
 				return
 			}
 			next.ServeHTTP(w, r)

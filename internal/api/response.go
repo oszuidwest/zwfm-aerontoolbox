@@ -26,8 +26,24 @@ func respondJSON(w http.ResponseWriter, statusCode int, data any) {
 	respondEnvelope(w, statusCode, data, "")
 }
 
-func respondError(w http.ResponseWriter, statusCode int, errorMsg string) {
+// respondClientError writes a caller-supplied, client-safe error message.
+func respondClientError(w http.ResponseWriter, statusCode int, errorMsg string) {
 	respondEnvelope(w, statusCode, nil, errorMsg)
+}
+
+// respondInternalError logs the technical error and sends only safe text.
+func respondInternalError(w http.ResponseWriter, statusCode int, err error) {
+	slog.Error("Request failed with internal error", "status", statusCode, "error", err)
+
+	message := http.StatusText(statusCode)
+	if message == "" {
+		message = http.StatusText(http.StatusInternalServerError)
+	}
+	if opErr, ok := errors.AsType[*types.OperationError](err); ok {
+		message = opErr.Operation + " failed"
+	}
+
+	respondEnvelope(w, statusCode, nil, message)
 }
 
 func respondEnvelope(w http.ResponseWriter, statusCode int, data any, errorMsg string) {
@@ -48,15 +64,12 @@ func respondEnvelope(w http.ResponseWriter, statusCode int, data any, errorMsg s
 // cause, so database and filesystem details never leave the server.
 func respondServiceError(w http.ResponseWriter, err error) {
 	statusCode := errorCode(err)
-	message := err.Error()
 	if statusCode >= http.StatusInternalServerError {
-		slog.Error("Request failed with internal error", "error", err)
-		message = "internal server error"
-		if opErr, ok := errors.AsType[*types.OperationError](err); ok {
-			message = opErr.Operation + " failed"
-		}
+		respondInternalError(w, statusCode, err)
+		return
 	}
-	respondError(w, statusCode, message)
+
+	respondClientError(w, statusCode, err.Error())
 }
 
 func errorCode(err error) int {

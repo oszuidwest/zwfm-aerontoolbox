@@ -26,11 +26,11 @@ func (s *Server) handleCreateBackup(w http.ResponseWriter, r *http.Request) {
 	var req service.BackupRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
-			respondError(w, http.StatusRequestEntityTooLarge, "Request body too large")
+			respondClientError(w, http.StatusRequestEntityTooLarge, "Request body too large")
 			return
 		}
 		slog.Warn("Invalid backup request content", "path", r.URL.Path, "remote_addr", r.RemoteAddr, "error", err)
-		respondError(w, http.StatusBadRequest, "Invalid request content")
+		respondClientError(w, http.StatusBadRequest, "Invalid request content")
 		return
 	}
 
@@ -92,7 +92,7 @@ func (s *Server) handleDeleteBackup(w http.ResponseWriter, r *http.Request) {
 
 	const confirmHeader = "X-Confirm-Delete"
 	if r.Header.Get(confirmHeader) != filename {
-		respondError(w, http.StatusBadRequest, "Confirmation header missing: "+confirmHeader+" must contain the filename")
+		respondClientError(w, http.StatusBadRequest, "Confirmation header missing: "+confirmHeader+" must contain the filename")
 		return
 	}
 

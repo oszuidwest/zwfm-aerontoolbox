@@ -69,6 +69,7 @@ type MaintenanceConfig struct {
 	SeqScanRatioThreshold       float64         `json:"seq_scan_ratio_threshold" validate:"gte=0"`
 	ConnectionUsageThresholdPct int             `json:"connection_usage_threshold_pct" validate:"gte=0,lte=100"`
 	LongQueryThresholdSeconds   int             `json:"long_query_threshold_seconds" validate:"gte=0"`
+	ExposeLongRunningQueryText  bool            `json:"expose_long_running_query_text"`
 	Scheduler                   SchedulerConfig `json:"scheduler"`
 }
 

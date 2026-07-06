@@ -3,12 +3,64 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
 )
+
+func TestRespondClientErrorPreservesSafeMessage(t *testing.T) {
+	rec := httptest.NewRecorder()
+
+	respondClientError(rec, http.StatusBadGateway, "Authentication with mail provider failed")
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadGateway)
+	}
+
+	var resp Response
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Success {
+		t.Fatal("success = true, want false")
+	}
+	if resp.Error != "Authentication with mail provider failed" {
+		t.Fatalf("error = %q, want safe client message", resp.Error)
+	}
+}
+
+func TestRespondInternalErrorSanitizesTechnicalDetails(t *testing.T) {
+	rec := httptest.NewRecorder()
+
+	respondInternalError(
+		rec,
+		http.StatusInternalServerError,
+		errors.New("get table statistics failed: pq: relation aeron.artist does not exist at 10.0.0.5"),
+	)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+	if strings.Contains(rec.Body.String(), "pq:") ||
+		strings.Contains(rec.Body.String(), "aeron.artist") ||
+		strings.Contains(rec.Body.String(), "10.0.0.5") {
+		t.Fatalf("response leaked internal error: %s", rec.Body.String())
+	}
+
+	var resp Response
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Success {
+		t.Fatal("success = true, want false")
+	}
+	if resp.Error != http.StatusText(http.StatusInternalServerError) {
+		t.Fatalf("error = %q, want %q", resp.Error, http.StatusText(http.StatusInternalServerError))
+	}
+}
 
 func TestRespondServiceError(t *testing.T) {
 	tests := []struct {
@@ -45,7 +97,7 @@ func TestRespondServiceError(t *testing.T) {
 			name:        "untyped error returns generic message",
 			err:         errors.New("dial tcp 10.0.0.5:5432: i/o timeout"),
 			wantStatus:  500,
-			wantMessage: "internal server error",
+			wantMessage: http.StatusText(http.StatusInternalServerError),
 		},
 	}
 
