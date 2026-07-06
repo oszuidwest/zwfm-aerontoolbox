@@ -112,13 +112,14 @@ func (s *MaintenanceService) GetHealth(ctx context.Context) (*DatabaseHealth, er
 		health.ConnectionUsagePct = float64(active) / float64(maxConns) * 100
 	}
 
-	queries, err := s.repo.GetLongRunningQueries(
-		ctx,
-		s.config.Maintenance.GetLongQueryThresholdSeconds(),
-		s.config.Maintenance.ExposeLongRunningQueryText,
-	)
+	queries, err := s.repo.GetLongRunningQueries(ctx, s.config.Maintenance.GetLongQueryThresholdSeconds())
 	if err != nil {
 		return nil, err
+	}
+	if !s.config.Maintenance.ExposeLongRunningQueryText {
+		for i := range queries {
+			queries[i].Query = ""
+		}
 	}
 	health.LongRunningQueries = queries
 

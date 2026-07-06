@@ -107,7 +107,7 @@ type ImageDeleteResponse struct {
 func (s *Server) validateAndGetEntityID(w http.ResponseWriter, r *http.Request, entityType types.EntityType) string {
 	entityID := chi.URLParam(r, "id")
 	if err := util.ValidateEntityID(entityID, string(entityType)); err != nil {
-		respondError(w, http.StatusBadRequest, err.Error())
+		respondClientError(w, http.StatusBadRequest, err.Error())
 		return ""
 	}
 	return entityID
@@ -277,7 +277,7 @@ func (s *Server) handleBulkDelete(entityType types.EntityType) http.HandlerFunc 
 		const confirmValue = "DELETE ALL"
 
 		if r.Header.Get(confirmHeader) != confirmValue {
-			respondError(w, http.StatusBadRequest, "Missing confirmation header: "+confirmHeader)
+			respondClientError(w, http.StatusBadRequest, "Missing confirmation header: "+confirmHeader)
 			return
 		}
 
@@ -339,7 +339,7 @@ func (s *Server) handleImageUpload(entityType types.EntityType) http.HandlerFunc
 		var req ImageUploadRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
-				respondError(w, http.StatusRequestEntityTooLarge, "Request body too large")
+				respondClientError(w, http.StatusRequestEntityTooLarge, "Request body too large")
 				return
 			}
 			if isTimeoutError(err) {
@@ -349,7 +349,7 @@ func (s *Server) handleImageUpload(entityType types.EntityType) http.HandlerFunc
 					"path", r.URL.Path,
 					"remote_addr", r.RemoteAddr,
 					"error", err)
-				respondError(w, http.StatusRequestTimeout, "Request body read timeout")
+				respondClientError(w, http.StatusRequestTimeout, "Request body read timeout")
 				return
 			}
 			slog.Warn("Invalid image upload request content",
@@ -358,7 +358,7 @@ func (s *Server) handleImageUpload(entityType types.EntityType) http.HandlerFunc
 				"path", r.URL.Path,
 				"remote_addr", r.RemoteAddr,
 				"error", err)
-			respondError(w, http.StatusBadRequest, "Invalid request content")
+			respondClientError(w, http.StatusBadRequest, "Invalid request content")
 			return
 		}
 
@@ -371,7 +371,7 @@ func (s *Server) handleImageUpload(entityType types.EntityType) http.HandlerFunc
 		if req.Image != "" {
 			imageData, err := service.DecodeBase64(req.Image)
 			if err != nil {
-				respondError(w, http.StatusBadRequest, "Invalid base64 image")
+				respondClientError(w, http.StatusBadRequest, "Invalid base64 image")
 				return
 			}
 			params.ImageData = imageData
@@ -491,17 +491,19 @@ func (s *Server) handlePlaylist(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleTestEmail(w http.ResponseWriter, r *http.Request) {
 	emailCfg := &s.service.Config().Notifications.Email
 	if err := notify.ValidateConfig(emailCfg); err != nil {
-		respondError(w, http.StatusBadRequest, fmt.Sprintf("Notification configuration invalid: %v", err))
+		respondClientError(w, http.StatusBadRequest, fmt.Sprintf("Notification configuration invalid: %v", err))
 		return
 	}
 
 	if err := s.service.Notify.ValidateAuth(); err != nil {
-		respondError(w, http.StatusBadGateway, fmt.Sprintf("Authentication failed: %v", err))
+		slog.Error("Test email authentication failed", "error", err)
+		respondClientError(w, http.StatusBadGateway, "Authentication with mail provider failed")
 		return
 	}
 
 	if err := s.service.Notify.SendTestEmail(r.Context()); err != nil {
-		respondError(w, http.StatusBadGateway, fmt.Sprintf("Failed to send test email: %v", err))
+		slog.Error("Test email delivery failed", "error", err)
+		respondClientError(w, http.StatusBadGateway, "Failed to send test email")
 		return
 	}
 

@@ -11,19 +11,42 @@ import (
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
 )
 
-func TestRespondErrorSanitizesServerErrors(t *testing.T) {
+func TestRespondClientErrorPreservesSafeMessage(t *testing.T) {
 	rec := httptest.NewRecorder()
 
-	respondError(
+	respondClientError(rec, http.StatusBadGateway, "Authentication with mail provider failed")
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadGateway)
+	}
+
+	var resp Response
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Success {
+		t.Fatal("success = true, want false")
+	}
+	if resp.Error != "Authentication with mail provider failed" {
+		t.Fatalf("error = %q, want safe client message", resp.Error)
+	}
+}
+
+func TestRespondInternalErrorSanitizesTechnicalDetails(t *testing.T) {
+	rec := httptest.NewRecorder()
+
+	respondInternalError(
 		rec,
 		http.StatusInternalServerError,
-		"get table statistics failed: pq: relation aeron.artist does not exist",
+		errors.New("get table statistics failed: pq: relation aeron.artist does not exist at 10.0.0.5"),
 	)
 
 	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("status code = %d, want %d", rec.Code, http.StatusInternalServerError)
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
-	if strings.Contains(rec.Body.String(), "pq:") || strings.Contains(rec.Body.String(), "aeron.artist") {
+	if strings.Contains(rec.Body.String(), "pq:") ||
+		strings.Contains(rec.Body.String(), "aeron.artist") ||
+		strings.Contains(rec.Body.String(), "10.0.0.5") {
 		t.Fatalf("response leaked internal error: %s", rec.Body.String())
 	}
 
@@ -31,22 +54,11 @@ func TestRespondErrorSanitizesServerErrors(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
+	if resp.Success {
+		t.Fatal("success = true, want false")
+	}
 	if resp.Error != http.StatusText(http.StatusInternalServerError) {
 		t.Fatalf("error = %q, want %q", resp.Error, http.StatusText(http.StatusInternalServerError))
-	}
-}
-
-func TestRespondErrorPreservesClientErrors(t *testing.T) {
-	rec := httptest.NewRecorder()
-
-	respondError(rec, http.StatusBadRequest, "id: invalid artist ID: must be a UUID")
-
-	var resp Response
-	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if resp.Error != "id: invalid artist ID: must be a UUID" {
-		t.Fatalf("error = %q, want validation message", resp.Error)
 	}
 }
 
@@ -76,11 +88,8 @@ func TestRespondServiceError(t *testing.T) {
 			wantMessage: "artist with ID 'abc' not found",
 		},
 		{
-			name: "operation error hides underlying cause",
-			err: types.NewOperationError(
-				"fetch playlist",
-				errors.New("pq: connection refused host=10.0.0.5"),
-			),
+			name:        "operation error hides underlying cause",
+			err:         types.NewOperationError("fetch playlist", errors.New("pq: connection refused host=10.0.0.5")),
 			wantStatus:  500,
 			wantMessage: "fetch playlist failed",
 		},

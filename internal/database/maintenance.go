@@ -68,16 +68,12 @@ func (r *Repository) GetConnectionStats(ctx context.Context) (active, maxConns i
 }
 
 // GetLongRunningQueries returns queries running longer than thresholdSeconds.
-func (r *Repository) GetLongRunningQueries(
-	ctx context.Context,
-	thresholdSeconds int,
-	exposeQueryText bool,
-) ([]types.LongRunningQuery, error) {
-	query := fmt.Sprintf(`
+func (r *Repository) GetLongRunningQueries(ctx context.Context, thresholdSeconds int) ([]types.LongRunningQuery, error) {
+	query := `
 		SELECT
 			pid,
 			(now() - query_start)::text AS duration,
-			%s AS query,
+			LEFT(query, 200) AS query,
 			state
 		FROM pg_stat_activity
 		WHERE state != 'idle'
@@ -86,20 +82,13 @@ func (r *Repository) GetLongRunningQueries(
 			AND datname = current_database()
 			AND pid != pg_backend_pid()
 		ORDER BY query_start ASC
-	`, longRunningQueryTextExpr(exposeQueryText))
+	`
 
 	var queries []types.LongRunningQuery
 	if err := r.db.SelectContext(ctx, &queries, query, thresholdSeconds); err != nil {
 		return nil, types.NewOperationError("get long-running queries", err)
 	}
 	return queries, nil
-}
-
-func longRunningQueryTextExpr(expose bool) string {
-	if expose {
-		return "LEFT(query, 200)"
-	}
-	return "''"
 }
 
 // GetTableStats retrieves maintenance statistics for all user tables in the schema.
