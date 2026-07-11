@@ -76,3 +76,19 @@ jobs:
     permissions:
       contents: read
       packages: write
+
+  cleanup:
+    needs: docker
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      # Every push of a rebuilt image orphans the previous manifest set
+      # (manifest list + per-arch children) as untagged versions. This
+      # deletes only truly unreferenced manifests; arch children of tagged
+      # manifest lists are preserved.
+      - name: Delete orphaned untagged images
+        uses: dataaxiom/ghcr-cleanup-action@v1
+        with:
+          packages: zwfm-aerontoolbox
+          validate: true
