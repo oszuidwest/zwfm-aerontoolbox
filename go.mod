@@ -12,9 +12,9 @@ require (
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.42.1
-	github.com/aws/aws-sdk-go-v2/credentials v1.19.28
-	github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager v0.3.1
-	github.com/aws/aws-sdk-go-v2/service/s3 v1.105.0
+	github.com/aws/aws-sdk-go-v2/credentials v1.19.29
+	github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager v0.3.4
+	github.com/aws/aws-sdk-go-v2/service/s3 v1.105.2
 	github.com/go-playground/validator/v10 v10.30.3
 	github.com/netresearch/go-cron v0.15.0
 	golang.org/x/oauth2 v0.36.0
