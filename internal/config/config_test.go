@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -147,6 +148,67 @@ func TestAPIConfigRespectsConfiguredValues(t *testing.T) {
 	}
 	if got, want := cfg.GetMaxUploadBodyBytes(), int64(16); got != want {
 		t.Errorf("GetMaxUploadBodyBytes() = %d, want %d", got, want)
+	}
+}
+
+func TestAPIAuthenticationValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		enabled bool
+		keys    []string
+		wantErr bool
+	}{
+		{name: "disabled without keys", enabled: false},
+		{name: "enabled with key", enabled: true, keys: []string{"test-api-key"}},
+		{name: "enabled with nil keys", enabled: true, wantErr: true},
+		{name: "enabled with empty keys", enabled: true, keys: []string{}, wantErr: true},
+		{name: "enabled with empty key", enabled: true, keys: []string{""}, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := minimalConfig()
+			cfg.API.Enabled = tt.enabled
+			cfg.API.Keys = tt.keys
+
+			err := validate(cfg)
+			if tt.wantErr && err == nil {
+				t.Fatal("validate() error = nil, want an authentication configuration error")
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("validate() error = %v, want nil", err)
+			}
+		})
+	}
+}
+
+func TestExampleConfigRequiresAPIKey(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "config.example.json"))
+	if err != nil {
+		t.Fatalf("read example config: %v", err)
+	}
+
+	var cfg Config
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("decode example config: %v", err)
+	}
+	if !cfg.API.Enabled {
+		t.Fatal("example config must enable API authentication")
+	}
+	if len(cfg.API.Keys) != 0 {
+		t.Fatalf("example API keys = %q, want empty list that requires operator configuration", cfg.API.Keys)
+	}
+
+	// Isolate API validation from the intentionally empty database password in
+	// the example configuration.
+	cfg.Database.Password = "test-database-password"
+	if err := validate(&cfg); err == nil || !strings.Contains(err.Error(), "api.keys must have at least one entry when enabled") {
+		t.Fatalf("validate(example) error = %v, want missing API key error", err)
+	}
+
+	cfg.API.Keys = []string{"test-random-api-key"}
+	if err := validate(&cfg); err != nil {
+		t.Fatalf("validate(configured example) error = %v, want nil", err)
 	}
 }
 

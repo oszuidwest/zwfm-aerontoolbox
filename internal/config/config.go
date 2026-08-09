@@ -46,7 +46,7 @@ type ImageConfig struct {
 // APIConfig controls API authentication and request timeouts.
 type APIConfig struct {
 	Enabled                  bool     `json:"enabled"`
-	Keys                     []string `json:"keys" validate:"required_if=Enabled true,dive,required"`
+	Keys                     []string `json:"keys" validate:"dive,required"`
 	RequestTimeoutSeconds    int      `json:"request_timeout_seconds" validate:"gte=0"`
 	UploadReadTimeoutSeconds int      `json:"upload_read_timeout_seconds" validate:"gte=0"`
 	ReadTimeoutSeconds       int      `json:"read_timeout_seconds" validate:"gte=0"`
@@ -499,10 +499,21 @@ func newConfigValidator() *validator.Validate {
 	})
 
 	v.RegisterStructValidation(validateS3Config, S3Config{})
+	v.RegisterStructValidation(validateAPIConfig, APIConfig{})
 	v.RegisterStructValidation(validateFileMonitorConfig, FileMonitorConfig{})
 	v.RegisterStructValidation(validateMediaFileCheckConfig, MediaFileCheckConfig{})
 
 	return v
+}
+
+// validateAPIConfig requires at least one credential whenever authentication
+// is enabled. Slice field validation alone treats [] as present, so enforce the
+// non-empty collection at the struct boundary.
+func validateAPIConfig(sl validator.StructLevel) {
+	api := sl.Current().Interface().(APIConfig)
+	if api.Enabled && len(api.Keys) == 0 {
+		sl.ReportError(api.Keys, "keys", "Keys", "required_when_enabled", "")
+	}
 }
 
 // validateS3Config checks that S3 has either a region or custom endpoint when enabled.

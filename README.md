@@ -23,7 +23,10 @@ Het radioautomatiseringssysteem Aeron mist tooling voor beheer en onderhoud. Aer
 wget https://raw.githubusercontent.com/oszuidwest/zwfm-aerontoolbox/main/config.example.json -O config.json
 wget https://raw.githubusercontent.com/oszuidwest/zwfm-aerontoolbox/main/docker-compose.example.yml -O docker-compose.yml
 
-# Stem config.json af op jouw situatie, dan:
+# Genereer een API-sleutel en voeg die toe aan api.keys in config.json:
+openssl rand -base64 32
+
+# Stem de overige instellingen af op jouw situatie, dan:
 docker compose up -d
 ```
 
@@ -52,6 +55,8 @@ Download een kant-en-klare Linux- of macOS-binary via de [releases-pagina](https
 git clone https://github.com/oszuidwest/zwfm-aerontoolbox.git
 cd zwfm-aerontoolbox
 cp config.example.json config.json
+# Genereer een API-sleutel en voeg die toe aan api.keys in config.json:
+openssl rand -base64 32
 go build -o zwfm-aerontoolbox .
 ./zwfm-aerontoolbox -config=config.json -port=8080
 ```
@@ -74,7 +79,18 @@ Kopieer [`config.example.json`](config.example.json) naar `config.json`. De bela
 | `notifications` | E-mailmeldingen via Microsoft Graph API |
 | `log` | Logniveau (`debug`, `info`, `warn`, `error`) en formaat (`text`, `json`) |
 
-Gebruik voor `api.keys` per omgeving unieke, willekeurig gegenereerde API-sleutels met minimaal 32 bytes entropie, bijvoorbeeld via `openssl rand -base64 32`.
+### Authenticatie
+
+De voorbeeldconfiguratie schakelt API-authenticatie standaard in en laat `api.keys` bewust leeg. De applicatie weigert daardoor te starten totdat je minstens één eigen sleutel invult:
+
+```json
+"api": {
+  "enabled": true,
+  "keys": ["jouw-lange-willekeurige-api-sleutel"]
+}
+```
+
+Gebruik per omgeving een unieke sleutel die je bijvoorbeeld genereert met `openssl rand -base64 32`. Zet `api.enabled` alleen op `false` voor lokale tests of volledig afgeschermde netwerken. Zonder authenticatie kan iedereen die de HTTP-poort bereikt muterende endpoints uitvoeren, backups downloaden en operationele statusinformatie opvragen.
 
 Voor rate limiting kun je `api.rate_limit_enabled` aanzetten. `rate_limit_requests` requests per `rate_limit_window_seconds` worden dan toegestaan per API-sleutel, of per direct peer-adres (`RemoteAddr`) wanneer geen geldige sleutel is meegestuurd. Achter een reverse proxy die client-IP's verbergt, delen alle unauthenticated requests achter die proxy dus één budget.
 
