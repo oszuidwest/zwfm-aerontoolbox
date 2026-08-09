@@ -1292,9 +1292,9 @@ De handmatige trigger en de cronjob gebruiken dezelfde single-flight gate. Daard
 
 Strikte gelijkheid (`completed_run_id == myRunID`) bevestigt dat de zichtbare `checks` exact door jouw run zijn geproduceerd. Een hogere waarde betekent dat een latere run, bijvoorbeeld via cron, jouw run heeft ingehaald. Dat is prima voor de vraag "is het systeem nu gezond?", maar verliest de exacte correlatie. Gebruik voor nauwkeurige troubleshooting daarom de strikte vergelijking en houd rekening met een mogelijke race.
 
-### Integratie met de gedetailleerde health-endpoint (bestandsbewaking)
+### Integratie met het gedetailleerde health-endpoint (bestandsbewaking)
 
-Als de bestandsbewaking is ingeschakeld, geeft de gedetailleerde health-endpoint (`GET /api/health`) een extra `file_monitor`-blok terug. De publieke `GET /health` blijft bewust minimaal en bevat dit blok niet:
+Als de bestandsbewaking is ingeschakeld, geeft het gedetailleerde health-endpoint (`GET /api/health`) een extra `file_monitor`-blok terug. De publieke `GET /health` blijft bewust minimaal en bevat dit blok niet:
 
 ```json
 {
@@ -1464,7 +1464,7 @@ Toont de runstatus plus het resultaat van de meest recente run.
 
 Met `media_file_check.scheduler` draait de controle automatisch op een cron-schema. De geplande run controleert standaard **vandaag**; met `media_file_check.lookahead_days` kun je vooruitkijken — bij `lookahead_days: 2` controleert de run vandaag t/m overmorgen (inclusief), zodat ontbrekende bestanden opvallen vóórdat ze worden uitgezonden. `0` (standaard) is alleen vandaag. Handmatige API-runs gebruiken hun eigen `from`/`to`-bereik en negeren deze instelling. Als e-mailnotificaties zijn geconfigureerd, stuurt een geplande run een alert wanneer er problemen (`missing`, `ambiguous` of `stat_error`) worden gevonden, en een herstelmelding zodra een volgende run weer schoon is. Handmatige API-runs versturen geen e-mail, zodat ad-hoc scopes de alert-status niet verstoren.
 
-### Integratie met de gedetailleerde health-endpoint (aanwezigheidscontrole)
+### Integratie met het gedetailleerde health-endpoint (aanwezigheidscontrole)
 
 Als de aanwezigheidscontrole is ingeschakeld, geeft `GET /api/health` een extra `media_file_check`-blok terug. De publieke `GET /health` blijft bewust minimaal en bevat dit blok niet:
 
