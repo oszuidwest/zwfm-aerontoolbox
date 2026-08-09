@@ -59,14 +59,14 @@ COPY --from=builder /app/zwfm-aerontoolbox /app/zwfm-aerontoolbox
 RUN chown -R aeron:aeron /app
 
 # Switch to non-root user
-USER aeron
+USER 1000:1000
 
 # Expose API port
 EXPOSE 8080
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1
+    CMD ["wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
 
 # Start API server by default
 ENTRYPOINT ["/app/zwfm-aerontoolbox"]
