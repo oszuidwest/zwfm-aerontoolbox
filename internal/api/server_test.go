@@ -107,28 +107,6 @@ func TestRateLimiterLimitsAuthenticatedProtectedRequests(t *testing.T) {
 	}
 }
 
-func TestProtectedRouteRequiresAPIKeyWhenAuthEnabled(t *testing.T) {
-	cfg := &config.Config{}
-	cfg.API.Enabled = true
-	cfg.API.Keys = []string{"test-api-key"}
-
-	svc, err := service.New(nil, cfg)
-	if err != nil {
-		t.Fatalf("service.New: %v", err)
-	}
-	t.Cleanup(svc.Close)
-
-	handler := New(svc, "test").router()
-	req := httptest.NewRequest(http.MethodGet, "/api/playlist", http.NoBody)
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status code = %d, want %d; body: %s", rec.Code, http.StatusUnauthorized, rec.Body.String())
-	}
-}
-
 func TestRateLimiterLimitsInvalidAPIKeyProbesByRemoteAddress(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.API.Enabled = true

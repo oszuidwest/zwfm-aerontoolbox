@@ -123,7 +123,7 @@ type GraphConfig struct {
 type FileMonitorConfig struct {
 	Enabled         bool                     `json:"enabled"`
 	IntervalSeconds int                      `json:"interval_seconds" validate:"gte=0"`
-	Checks          []FileMonitorCheckConfig `json:"checks" validate:"required_if=Enabled true,dive"`
+	Checks          []FileMonitorCheckConfig `json:"checks" validate:"dive"`
 }
 
 // FileMonitorCheckConfig defines a single file to monitor for staleness.

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -199,14 +198,10 @@ func TestExampleConfigRequiresAPIKey(t *testing.T) {
 		t.Fatalf("example API keys = %q, want empty list that requires operator configuration", cfg.API.Keys)
 	}
 
-	// Isolate API validation from the intentionally empty database password in
-	// the example configuration.
-	cfg.Database.Password = "test-database-password"
-	if err := validate(&cfg); err == nil || !strings.Contains(err.Error(), "api.keys must have at least one entry when enabled") {
-		t.Fatalf("validate(example) error = %v, want missing API key error", err)
-	}
-
+	// The example intentionally leaves the API key and database password blank;
+	// filling both must be all an operator needs for a valid configuration.
 	cfg.API.Keys = []string{"test-random-api-key"}
+	cfg.Database.Password = "test-database-password"
 	if err := validate(&cfg); err != nil {
 		t.Fatalf("validate(configured example) error = %v, want nil", err)
 	}

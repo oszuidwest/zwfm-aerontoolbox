@@ -72,13 +72,11 @@ De Aeron Toolbox API biedt RESTful-endpoints voor het Aeron-radioautomatiserings
 
 ## Authenticatie
 
-De voorbeeldconfiguratie schakelt authenticatie standaard in en laat `api.keys` bewust leeg. De applicatie weigert daardoor te starten totdat minstens één eigen sleutel is ingevuld. Wanneer authenticatie is ingeschakeld, vereisen alle API-endpoints een API-sleutel. De platformprobe `GET /health` valt buiten `/api` en vereist geen API-sleutel.
+Wanneer authenticatie is ingeschakeld in de configuratie, vereisen alle API-endpoints een API-sleutel. De platformprobe `GET /health` valt buiten `/api` en vereist geen API-sleutel. Zie [README ▸ Authenticatie](README.md#authenticatie) voor de standaardconfiguratie, het genereren van sleutels en de risico's van uitgeschakelde authenticatie.
 
 **Header:** `X-API-Key: jouw-api-sleutel`
 
 Gebruik per omgeving unieke, willekeurig gegenereerde API-sleutels van minimaal 32 bytes entropie (bijvoorbeeld `openssl rand -base64 32`). Hergebruik geen wachtwoorden, woordenboekwoorden of korte gedeelde secrets.
-
-Zet `api.enabled` alleen op `false` voor lokale tests of volledig afgeschermde netwerken. Zonder authenticatie zijn muterende endpoints, backupdownloads en operationele statusinformatie bereikbaar voor iedereen die de HTTP-poort kan benaderen.
 
 Optionele rate limiting kan worden ingeschakeld met `api.rate_limit_enabled`. De limiter telt per API-sleutel, of per direct peer-adres (`RemoteAddr`) wanneer geen geldige sleutel is meegestuurd. Achter een reverse proxy die client-IP's verbergt, delen alle unauthenticated requests achter die proxy dus één budget.
 
