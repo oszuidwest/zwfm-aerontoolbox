@@ -41,7 +41,7 @@ jobs:
       # Ignore rules live in .hadolint.yaml - do not duplicate here.
       - name: Hadolint
         if: steps.check_dockerfile.outputs.has_dockerfile == 'true'
-        uses: hadolint/hadolint-action@v3.3.0
+        uses: hadolint/hadolint-action@v3.4.0
         with:
           dockerfile: ${{ env.DOCKERFILE_PATH }}
 
