@@ -51,3 +51,4 @@ artifacts/
 /docker
 /dump
 CLAUDE.md
+/.cache
