@@ -20,7 +20,7 @@
     "max_pixels": 25000000
   },
   "api": {
-    "enabled": false,
+    "enabled": true,
     "keys": [],
     "request_timeout_seconds": 30,
     "upload_read_timeout_seconds": 180,

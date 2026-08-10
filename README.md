@@ -1,165 +1,106 @@
 # Aeron Toolbox
 
-Het radioautomatiseringssysteem Aeron mist tooling voor beheer en onderhoud. Aeron Toolbox vult dat gat: een toolkit waarmee je via HTTP afbeeldingen beheert, media doorzoekt, de database onderhoudt, backups maakt en bestanden bewaakt.
+Aeron Toolbox is een onofficiële HTTP-API voor beheer en onderhoud van Aeron: afbeeldingen, media, databasecontroles, back-ups en bestandsbewaking.
 
 > [!WARNING]
-> Dit is een **onofficiële** tool, niet ontwikkeld door of in samenwerking met Nextwave Broadcast. Gebruik op eigen risico. Maak altijd een backup voordat je begint.
+> Niet ontwikkeld door of in samenwerking met Nextwave Broadcast. Maak vooraf een back-up en gebruik de software op eigen risico.
 
-## Wat kan het?
+## Functionaliteit
 
-- **Afbeeldingen:** upload en optimaliseer albumhoezen en artiestfoto's
-- **Media:** doorzoek artiesten, tracks en playlists met metadata
-- **Onderhoud:** bewaak de conditie van de database en ontvang automatisch een melding bij problemen
-- **Backups:** maak, valideer en download databasebackups (optioneel naar S3)
-- **Bestandsbewaking:** houd bestanden zoals nieuws- of weerbulletins in de gaten en ontvang een melding als ze te oud worden of ontbreken
-- **Aanwezigheidscontrole:** controleer of de audio uit de playlist daadwerkelijk op schijf staat, zodat ontbrekende of verplaatste tracks opvallen vóór de uitzending
+- Albumhoezen en artiestfoto's uploaden en optimaliseren
+- Artiesten, tracks en playlists met metadata opvragen
+- De databasestatus controleren en problemen melden
+- Databaseback-ups maken, valideren, downloaden en naar S3 synchroniseren
+- Ontbrekende of verouderde bestanden signaleren
+- Controleren of geplande audio op schijf staat
 
 ## Snel starten
 
-### Docker (aanbevolen)
+Vereist: toegang tot de PostgreSQL-database van Aeron.
 
 ```bash
-# Download configuratie
 wget https://raw.githubusercontent.com/oszuidwest/zwfm-aerontoolbox/main/config.example.json -O config.json
 wget https://raw.githubusercontent.com/oszuidwest/zwfm-aerontoolbox/main/docker-compose.example.yml -O docker-compose.yml
 
-# Stem config.json af op jouw situatie, dan:
+# Genereer een API-sleutel en voeg die toe aan api.keys in config.json:
+openssl rand -base64 32
+
+# Stem de overige instellingen af op jouw situatie, dan:
 docker compose up -d
 ```
 
-Of direct met `docker run`:
+De meegeleverde Docker-configuratie gebruikt `Europe/Amsterdam` voor geplande taken. Voeg voor `file_monitor` en `media_file_check` de betrokken hostmappen als volumes toe aan `docker-compose.yml`.
 
-```bash
-docker run -d -p 8080:8080 \
-  -e TZ=Europe/Amsterdam \
-  -v $(pwd)/config.json:/app/config.json:ro \
-  -v $(pwd)/backups:/backups \
-  --name zwfm-aerontoolbox \
-  --restart unless-stopped \
-  ghcr.io/oszuidwest/zwfm-aerontoolbox:latest
-```
+### Andere installatiemethoden
 
-> [!NOTE]
-> De `TZ`-omgevingsvariabele bepaalt de tijdzone voor geplande taken (backups en health checks).
-
-### Binary
-
-Download een kant-en-klare Linux- of macOS-binary via de [releases-pagina](https://github.com/oszuidwest/zwfm-aerontoolbox/releases).
-
-### Vanaf broncode
+- Download een Linux- of macOS-binary via [GitHub Releases](https://github.com/oszuidwest/zwfm-aerontoolbox/releases).
+- Zelf bouwen vereist Go 1.26 of nieuwer:
 
 ```bash
 git clone https://github.com/oszuidwest/zwfm-aerontoolbox.git
 cd zwfm-aerontoolbox
 cp config.example.json config.json
+# Genereer een API-sleutel en voeg die toe aan api.keys in config.json:
+openssl rand -base64 32
 go build -o zwfm-aerontoolbox .
 ./zwfm-aerontoolbox -config=config.json -port=8080
 ```
 
-Vereist: Go 1.26+
+Voor back-ups hebben installaties buiten Docker ook `pg_dump` en `pg_restore` nodig. De majorversie van deze clients moet gelijk zijn aan of nieuwer zijn dan die van de PostgreSQL-server. De applicatie controleert bij het opstarten of de binaries beschikbaar zijn wanneer `backup.enabled` aanstaat.
 
-## Configuratie
-
-Kopieer [`config.example.json`](config.example.json) naar `config.json`. De belangrijkste secties:
-
-| Sectie | Wat configureer je? |
-|--------|---------------------|
-| `database` | PostgreSQL-verbinding (host, poort, inloggegevens, schema) |
-| `image` | Doelafmetingen en JPEG-kwaliteit voor geüploade afbeeldingen |
-| `api` | API-sleutels voor authenticatie en optionele rate limiting |
-| `maintenance` | Drempelwaarden en automatische scheduler voor database health checks |
-| `backup` | Pad naar backups, retentie, scheduler en optionele S3-sync |
-| `file_monitor` | Signaleert verouderde of ontbrekende bestanden op schijf |
-| `media_file_check` | Controleert op basis van de database of playlist-audio op schijf staat (exacte `drive_mounts` + `search_dirs` als fallback) |
-| `notifications` | E-mailmeldingen via Microsoft Graph API |
-| `log` | Logniveau (`debug`, `info`, `warn`, `error`) en formaat (`text`, `json`) |
-
-Gebruik voor `api.keys` per omgeving unieke, willekeurig gegenereerde API-sleutels met minimaal 32 bytes entropie, bijvoorbeeld via `openssl rand -base64 32`.
-
-Voor rate limiting kun je `api.rate_limit_enabled` aanzetten. `rate_limit_requests` requests per `rate_limit_window_seconds` worden dan toegestaan per API-sleutel, of per direct peer-adres (`RemoteAddr`) wanneer geen geldige sleutel is meegestuurd. Achter een reverse proxy die client-IP's verbergt, delen alle unauthenticated requests achter die proxy dus één budget.
-
-### Backupfunctionaliteit
-
-Voor backups heb je `pg_dump` en `pg_restore` nodig op het systeem:
-
-```bash
-# Debian/Ubuntu
-apt-get install postgresql-client
-
-# Alpine (Docker)
-apk add postgresql18-client
-
-# macOS
-brew install libpq
-```
-
-De applicatie valideert bij het opstarten of deze tools beschikbaar zijn wanneer `backup.enabled: true`.
-
-De majorversie van `pg_dump` en `pg_restore` moet gelijk zijn aan of nieuwer zijn dan die van de PostgreSQL-server. De standaard Docker-image gebruikt daarom PostgreSQL-client 18, geschikt voor PostgreSQL 16, 17 en 18. Bouw voor een nieuwere server een image met een passend clientpakket, bijvoorbeeld:
+De standaard Docker-image gebruikt PostgreSQL-client 18 en ondersteunt daarmee PostgreSQL 16, 17 en 18. Bouw voor een nieuwere server een image met een passend clientpakket, zodra dat beschikbaar is in de gebruikte Alpine-versie:
 
 ```bash
 docker build --build-arg POSTGRESQL_CLIENT_PACKAGE=postgresql19-client .
 ```
 
-Dit werkt zodra dat pakket beschikbaar is in de gebruikte Alpine-versie. Als alternatief kun je `backup.pg_dump_path` en `backup.pg_restore_path` naar geschikte binaries laten verwijzen.
+Als alternatief kun je `backup.pg_dump_path` en `backup.pg_restore_path` naar geschikte binaries laten verwijzen.
 
-### Automatische health checks
+## Configuratie
 
-Database health checks kunnen automatisch worden uitgevoerd. Bij problemen (hoge bloat, veel connecties, langlopende queries) wordt een e-mailmelding verstuurd:
+Kopieer [`config.example.json`](config.example.json) naar `config.json` en pas deze secties aan:
+
+| Sectie | Doel |
+|---|---|
+| `database` | PostgreSQL-verbinding en schema |
+| `image` | Afmetingen, kwaliteit en limieten voor afbeeldingen |
+| `api` | Authenticatie, time-outs en rate limiting |
+| `maintenance` | Databasecontroles en planning |
+| `backup` | Opslag, retentie, planning en S3-synchronisatie |
+| `file_monitor` | Vaste bestanden bewaken |
+| `media_file_check` | Playlist-audio op schijf controleren |
+| `notifications` | E-mailmeldingen via Microsoft Graph |
+| `log` | Logniveau en uitvoerformaat |
+
+De voorbeeldconfiguratie schakelt API-authenticatie standaard in en laat `api.keys` bewust leeg, zodat de applicatie weigert te starten totdat je minstens één eigen sleutel invult:
 
 ```json
-"maintenance": {
-  "connection_usage_threshold_pct": 80,
-  "long_query_threshold_seconds": 10,
-  "scheduler": {
-    "enabled": true,
-    "schedule": "0 4 * * 0"
-  }
+"api": {
+  "enabled": true,
+  "keys": ["jouw-lange-willekeurige-api-sleutel"]
 }
 ```
 
-Dit controleert elke zondag om 04:00 de database en stuurt een melding bij problemen. Zie [API.md](API.md) voor details.
+Gebruik per omgeving een unieke sleutel met minimaal 32 bytes entropie, bijvoorbeeld gegenereerd met `openssl rand -base64 32`. `config.json` bevat geheimen en hoort niet in versiebeheer. Zet `api.enabled` alleen op `false` voor lokale tests of volledig afgeschermde netwerken; zonder authenticatie kan iedereen die de HTTP-poort bereikt muterende endpoints uitvoeren, backups downloaden en operationele statusinformatie opvragen.
 
-### E-mailnotificaties
-
-Ontvang e-mailmeldingen bij mislukte backups, S3-synchronisatie, database health checks en verouderde of ontbrekende bestanden. Vereist een Azure AD app-registratie met `Mail.Send`-machtiging.
-
-```json
-"notifications": {
-  "email": {
-    "tenant_id": "je-azure-tenant-id",
-    "client_id": "je-app-client-id",
-    "client_secret": "je-client-secret",
-    "from_address": "noreply@jouwdomein.nl",
-    "recipients": "admin@jouwdomein.nl,beheer@jouwdomein.nl"
-  }
-}
-```
-
-De applicatie stuurt:
-- **Foutmeldingen:** bij mislukte backup, S3-sync, database health check of verouderde/ontbrekende bestanden
-- **Herstelmeldingen:** wanneer een eerder gemeld probleem is opgelost of een bestand weer actueel is
-
-Test de configuratie via `POST /api/notifications/test-email`.
+Zie [API.md](API.md) voor details over instellingen en endpoints.
 
 ## Voorbeelden
 
-```bash
-# Health check
-curl http://localhost:8080/health
+Publieke statuscontrole:
 
-# Artiestafbeelding uploaden (via URL)
+```bash
+curl http://localhost:8080/health
+```
+
+Artiestafbeelding uploaden via een URL:
+
+```bash
 curl -X POST http://localhost:8080/api/artists/{id}/image \
   -H "X-API-Key: jouw-api-sleutel" \
   -H "Content-Type: application/json" \
   -d '{"url":"https://example.com/artist.jpg"}'
-
-# Database backup starten (retourneert 202 Accepted, draait async)
-curl -X POST http://localhost:8080/api/db/backup \
-  -H "X-API-Key: jouw-api-sleutel"
 ```
-
-Zie [API.md](API.md) voor de volledige API-documentatie.
 
 ## Licentie
 
