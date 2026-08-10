@@ -26,7 +26,7 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -57,7 +57,7 @@ jobs:
 
   integration:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     strategy:
       fail-fast: false
       matrix:
@@ -1238,7 +1238,7 @@ jobs:
           OUTPUT=$(./zwfm-aerontoolbox -config=test_custom_path.json -port=8893 2>&1 || true)
           echo "Output: $OUTPUT"
 
-          if echo "$OUTPUT" | grep -q "pg_dump not found at path"; then
+          if echo "$OUTPUT" | grep -q "pg_dump not found or not executable at path"; then
             echo "Correct: custom pad wordt gevalideerd"
           else
             echo "::error::Custom pad zou gevalideerd moeten worden"
@@ -1261,7 +1261,7 @@ jobs:
           OUTPUT=$(./zwfm-aerontoolbox -config=test_custom_restore.json -port=8894 2>&1 || true)
           echo "Output: $OUTPUT"
 
-          if echo "$OUTPUT" | grep -q "pg_restore not found at path"; then
+          if echo "$OUTPUT" | grep -q "pg_restore not found or not executable at path"; then
             echo "Correct: custom pg_restore pad wordt gevalideerd"
           else
             echo "::error::Custom pg_restore pad zou gevalideerd moeten worden"
