@@ -124,7 +124,7 @@ func TestNewBackupServiceLeavesObjectStoreNilWhenS3Disabled(t *testing.T) {
 	pgDumpPath := filepath.Join(dir, "pg_dump")
 	pgRestorePath := filepath.Join(dir, "pg_restore")
 	for _, path := range []string{pgDumpPath, pgRestorePath} {
-		if err := os.WriteFile(path, []byte("test tool"), 0o600); err != nil {
+		if err := os.WriteFile(path, []byte("test tool"), 0o700); err != nil { //nolint:gosec // Test tools must be executable.
 			t.Fatalf("WriteFile(%s): %v", path, err)
 		}
 	}
@@ -148,6 +148,41 @@ func TestNewBackupServiceLeavesObjectStoreNilWhenS3Disabled(t *testing.T) {
 
 	if svc.s3 != nil {
 		t.Fatal("s3 object store is non-nil when S3 is disabled")
+	}
+}
+
+func TestResolveToolPathRejectsInvalidCustomPaths(t *testing.T) {
+	nonExecutablePath := filepath.Join(t.TempDir(), "pg_dump")
+	if err := os.WriteFile(nonExecutablePath, []byte("test tool"), 0o600); err != nil {
+		t.Fatalf("WriteFile(%s): %v", nonExecutablePath, err)
+	}
+
+	tests := []struct {
+		name string
+		path string
+	}{
+		{
+			name: "directory",
+			path: t.TempDir(),
+		},
+		{
+			name: "non-executable file",
+			path: nonExecutablePath,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := resolveToolPath(tt.path, "pg_dump")
+			if err == nil {
+				t.Fatal("resolveToolPath returned nil error")
+			}
+
+			var configErr *types.ConfigError
+			if !errors.As(err, &configErr) {
+				t.Fatalf("resolveToolPath error = %T, want *types.ConfigError", err)
+			}
+		})
 	}
 }
 
