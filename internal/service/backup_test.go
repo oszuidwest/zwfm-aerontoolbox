@@ -124,7 +124,7 @@ func TestNewBackupServiceLeavesObjectStoreNilWhenS3Disabled(t *testing.T) {
 	pgDumpPath := filepath.Join(dir, "pg_dump")
 	pgRestorePath := filepath.Join(dir, "pg_restore")
 	for _, path := range []string{pgDumpPath, pgRestorePath} {
-		if err := os.WriteFile(path, []byte("test tool"), 0o700); err != nil { //nolint:gosec // Test tools must be executable.
+		if err := os.WriteFile(path, []byte("test tool"), 0o700); err != nil { //nolint:gosec // G306: test tools must be executable.
 			t.Fatalf("WriteFile(%s): %v", path, err)
 		}
 	}

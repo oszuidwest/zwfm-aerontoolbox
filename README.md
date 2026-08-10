@@ -48,7 +48,7 @@ go build -o zwfm-aerontoolbox .
 
 Voor back-ups hebben installaties buiten Docker ook `pg_dump` en `pg_restore` nodig, met een majorversie gelijk aan of nieuwer dan die van de PostgreSQL-server. Wanneer `backup.enabled` aanstaat, controleert de applicatie bij het opstarten of de binaries beschikbaar zijn.
 
-De Docker-image bevat PostgreSQL-client 18. Voor een andere clientversie kun je `backup.pg_dump_path` en `backup.pg_restore_path` naar geschikte binaries laten verwijzen; de image zelf bevat geen andere versies, dus in Docker moet je die binaries toevoegen via een volume-mount of een aangepaste image.
+De Docker-image bevat PostgreSQL-client 18. Voor een andere clientversie verwijs je `backup.pg_dump_path` en `backup.pg_restore_path` naar binaries die je via een volume-mount of aangepaste image toevoegt.
 
 ## Configuratie
 
