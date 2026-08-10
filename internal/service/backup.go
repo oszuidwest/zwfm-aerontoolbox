@@ -144,10 +144,14 @@ var safeBackupFilenamePattern = regexp.MustCompile(`^[a-zA-Z0-9_\-.]+$`)
 // resolveToolPath returns the configured tool path or resolves toolName from PATH.
 func resolveToolPath(customPath, toolName string) (string, error) {
 	if customPath != "" {
-		if _, err := os.Stat(customPath); err != nil {
-			return "", types.NewConfigError(toolName, fmt.Sprintf("%s not found at path: %s", toolName, customPath))
+		path, err := exec.LookPath(customPath)
+		if err != nil {
+			return "", types.NewConfigError(
+				toolName,
+				fmt.Sprintf("%s not found or not executable at path: %s", toolName, customPath),
+			)
 		}
-		return customPath, nil
+		return path, nil
 	}
 
 	path, err := exec.LookPath(toolName)

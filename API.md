@@ -12,7 +12,7 @@ Als `api.enabled` aanstaat, vereisen alle `/api`-endpoints deze header:
 X-API-Key: jouw-api-sleutel
 ```
 
-`GET /health` blijft publiek. Gebruik per omgeving een unieke sleutel met minimaal 32 bytes entropie, bijvoorbeeld gegenereerd met `openssl rand -base64 32`.
+`GET /health` blijft publiek. Gebruik per omgeving een unieke sleutel met minimaal 32 bytes entropie, bijvoorbeeld gegenereerd met `openssl rand -base64 32`. Zie [README ▸ Authenticatie](README.md#authenticatie) voor de standaardconfiguratie, het genereren van sleutels en de risico's van uitgeschakelde authenticatie.
 
 ### Rate limiting
 
@@ -382,7 +382,7 @@ Een item in `long_running_queries` bevat `pid`, `duration`, `query` en `state`. 
 
 ## Back-ups
 
-Deze endpoints bestaan alleen als `backup.enabled` aanstaat; anders volgt `404`. De applicatie vereist dan bij het opstarten `pg_dump` en `pg_restore`.
+Deze endpoints bestaan alleen als `backup.enabled` aanstaat; anders volgt `404`. Wanneer backups zijn ingeschakeld, controleert de applicatie bij het opstarten of `pg_dump` en `pg_restore` beschikbaar zijn. Zonder deze tools weigert de applicatie te starten. Zie de [README](README.md#andere-installatiemethoden) voor installatie-instructies en versievereisten.
 
 Een gemaakte back-up wordt vóór succes gecontroleerd met `pg_restore --list`. Er kan één back-up tegelijk draaien. S3-synchronisatie begint pas na een geslaagde back-up en validatie.
 
