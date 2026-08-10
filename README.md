@@ -22,7 +22,10 @@ Vereist: toegang tot de PostgreSQL-database van Aeron.
 wget https://raw.githubusercontent.com/oszuidwest/zwfm-aerontoolbox/main/config.example.json -O config.json
 wget https://raw.githubusercontent.com/oszuidwest/zwfm-aerontoolbox/main/docker-compose.example.yml -O docker-compose.yml
 
-# Pas config.json aan en start de container.
+# Genereer een API-sleutel en voeg die toe aan api.keys in config.json:
+openssl rand -base64 32
+
+# Stem de overige instellingen af op jouw situatie, dan:
 docker compose up -d
 ```
 
@@ -37,6 +40,8 @@ De meegeleverde Docker-configuratie gebruikt `Europe/Amsterdam` voor geplande ta
 git clone https://github.com/oszuidwest/zwfm-aerontoolbox.git
 cd zwfm-aerontoolbox
 cp config.example.json config.json
+# Genereer een API-sleutel en voeg die toe aan api.keys in config.json:
+openssl rand -base64 32
 go build -o zwfm-aerontoolbox .
 ./zwfm-aerontoolbox -config=config.json -port=8080
 ```
@@ -59,7 +64,16 @@ Kopieer [`config.example.json`](config.example.json) naar `config.json` en pas d
 | `notifications` | E-mailmeldingen via Microsoft Graph |
 | `log` | Logniveau en uitvoerformaat |
 
-Gebruik in productie unieke API-sleutels met minimaal 32 bytes entropie, bijvoorbeeld gegenereerd met `openssl rand -base64 32`. `config.json` bevat geheimen en hoort niet in versiebeheer.
+De voorbeeldconfiguratie schakelt API-authenticatie standaard in en laat `api.keys` bewust leeg, zodat de applicatie weigert te starten totdat je minstens één eigen sleutel invult:
+
+```json
+"api": {
+  "enabled": true,
+  "keys": ["jouw-lange-willekeurige-api-sleutel"]
+}
+```
+
+Gebruik per omgeving een unieke sleutel met minimaal 32 bytes entropie, bijvoorbeeld gegenereerd met `openssl rand -base64 32`. `config.json` bevat geheimen en hoort niet in versiebeheer. Zet `api.enabled` alleen op `false` voor lokale tests of volledig afgeschermde netwerken; zonder authenticatie kan iedereen die de HTTP-poort bereikt muterende endpoints uitvoeren, backups downloaden en operationele statusinformatie opvragen.
 
 Zie [API.md](API.md) voor details over instellingen en endpoints.
 

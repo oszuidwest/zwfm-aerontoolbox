@@ -150,6 +150,63 @@ func TestAPIConfigRespectsConfiguredValues(t *testing.T) {
 	}
 }
 
+func TestAPIAuthenticationValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		enabled bool
+		keys    []string
+		wantErr bool
+	}{
+		{name: "disabled without keys", enabled: false},
+		{name: "enabled with key", enabled: true, keys: []string{"test-api-key"}},
+		{name: "enabled with nil keys", enabled: true, wantErr: true},
+		{name: "enabled with empty keys", enabled: true, keys: []string{}, wantErr: true},
+		{name: "enabled with empty key", enabled: true, keys: []string{""}, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := minimalConfig()
+			cfg.API.Enabled = tt.enabled
+			cfg.API.Keys = tt.keys
+
+			err := validate(cfg)
+			if tt.wantErr && err == nil {
+				t.Fatal("validate() error = nil, want an authentication configuration error")
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("validate() error = %v, want nil", err)
+			}
+		})
+	}
+}
+
+func TestExampleConfigRequiresAPIKey(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "config.example.json"))
+	if err != nil {
+		t.Fatalf("read example config: %v", err)
+	}
+
+	var cfg Config
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("decode example config: %v", err)
+	}
+	if !cfg.API.Enabled {
+		t.Fatal("example config must enable API authentication")
+	}
+	if len(cfg.API.Keys) != 0 {
+		t.Fatalf("example API keys = %q, want empty list that requires operator configuration", cfg.API.Keys)
+	}
+
+	// The example intentionally leaves the API key and database password blank;
+	// filling both must be all an operator needs for a valid configuration.
+	cfg.API.Keys = []string{"test-random-api-key"}
+	cfg.Database.Password = "test-database-password"
+	if err := validate(&cfg); err != nil {
+		t.Fatalf("validate(configured example) error = %v, want nil", err)
+	}
+}
+
 func TestAPIConfigValidationRejectsNegativeValues(t *testing.T) {
 	tests := []struct {
 		name   string
