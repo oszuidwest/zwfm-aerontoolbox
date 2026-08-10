@@ -656,7 +656,7 @@ Bekijk gedetailleerde databasestatistieken inclusief tabelgroottes, bloat-percen
 ```json
 {
   "database_name": "aeron",
-  "database_version": "PostgreSQL 16.1",
+  "database_version": "PostgreSQL 18.1",
   "database_size": "2.45 GB",
   "database_size_bytes": 2630451200,
   "schema_name": "aeron",
