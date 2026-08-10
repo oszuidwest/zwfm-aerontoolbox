@@ -46,15 +46,9 @@ go build -o zwfm-aerontoolbox .
 ./zwfm-aerontoolbox -config=config.json -port=8080
 ```
 
-Voor back-ups hebben installaties buiten Docker ook `pg_dump` en `pg_restore` nodig. De majorversie van deze clients moet gelijk zijn aan of nieuwer zijn dan die van de PostgreSQL-server. De applicatie controleert bij het opstarten of de binaries beschikbaar zijn wanneer `backup.enabled` aanstaat.
+Voor back-ups hebben installaties buiten Docker ook `pg_dump` en `pg_restore` nodig, met een majorversie gelijk aan of nieuwer dan die van de PostgreSQL-server. Wanneer `backup.enabled` aanstaat, controleert de applicatie bij het opstarten of de binaries beschikbaar zijn.
 
-De standaard Docker-image gebruikt PostgreSQL-client 18 en ondersteunt daarmee PostgreSQL 16, 17 en 18. Bouw voor een nieuwere server een image met een passend clientpakket, zodra dat beschikbaar is in de gebruikte Alpine-versie:
-
-```bash
-docker build --build-arg POSTGRESQL_CLIENT_PACKAGE=postgresql19-client .
-```
-
-Als alternatief kun je `backup.pg_dump_path` en `backup.pg_restore_path` naar geschikte binaries laten verwijzen.
+De Docker-image bevat PostgreSQL-client 18. Voor een andere clientversie kun je `backup.pg_dump_path` en `backup.pg_restore_path` naar geschikte binaries laten verwijzen; de image zelf bevat geen andere versies, dus in Docker moet je die binaries toevoegen via een volume-mount of een aangepaste image.
 
 ## Configuratie
 
