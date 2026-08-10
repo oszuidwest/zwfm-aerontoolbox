@@ -40,15 +40,11 @@ De meegeleverde Docker-configuratie gebruikt `Europe/Amsterdam` voor geplande ta
 git clone https://github.com/oszuidwest/zwfm-aerontoolbox.git
 cd zwfm-aerontoolbox
 cp config.example.json config.json
-# Genereer een API-sleutel en voeg die toe aan api.keys in config.json:
-openssl rand -base64 32
 go build -o zwfm-aerontoolbox .
 ./zwfm-aerontoolbox -config=config.json -port=8080
 ```
 
-Voor back-ups hebben installaties buiten Docker ook `pg_dump` en `pg_restore` nodig, met een majorversie gelijk aan of nieuwer dan die van de PostgreSQL-server. Wanneer `backup.enabled` aanstaat, controleert de applicatie bij het opstarten of de binaries beschikbaar zijn.
-
-De Docker-image bevat PostgreSQL-client 18. Voor een andere clientversie verwijs je `backup.pg_dump_path` en `backup.pg_restore_path` naar binaries die je via een volume-mount of aangepaste image toevoegt.
+Voor back-ups buiten Docker zijn `pg_dump` en `pg_restore` nodig van dezelfde of een nieuwere majorversie dan de server; bij het opstarten worden ze gecontroleerd. De Docker-image bevat PostgreSQL-client 18. Andere binaries stel je in met `backup.pg_dump_path` en `backup.pg_restore_path`.
 
 ## Configuratie
 
@@ -66,16 +62,9 @@ Kopieer [`config.example.json`](config.example.json) naar `config.json` en pas d
 | `notifications` | E-mailmeldingen via Microsoft Graph |
 | `log` | Logniveau en uitvoerformaat |
 
-De voorbeeldconfiguratie schakelt API-authenticatie standaard in en laat `api.keys` bewust leeg, zodat de applicatie weigert te starten totdat je minstens één eigen sleutel invult:
+### Authenticatie
 
-```json
-"api": {
-  "enabled": true,
-  "keys": ["jouw-lange-willekeurige-api-sleutel"]
-}
-```
-
-Gebruik per omgeving een unieke sleutel met minimaal 32 bytes entropie, bijvoorbeeld gegenereerd met `openssl rand -base64 32`. `config.json` bevat geheimen en hoort niet in versiebeheer. Zet `api.enabled` alleen op `false` voor lokale tests of volledig afgeschermde netwerken; zonder authenticatie kan iedereen die de HTTP-poort bereikt muterende endpoints uitvoeren, backups downloaden en operationele statusinformatie opvragen.
+Authenticatie staat standaard aan. Vul in `api.keys` minstens één unieke sleutel in, bijvoorbeeld gegenereerd met `openssl rand -base64 32`; met een lege lijst start de applicatie niet. Zet authenticatie alleen uit in een afgeschermde testomgeving en commit `config.json` nooit.
 
 Zie [API.md](API.md) voor details over instellingen en endpoints.
 

@@ -1,111 +1,38 @@
-# Aeron Toolbox API-documentatie
+# Aeron Toolbox API
 
-## Inhoudsopgave
+HTTP-API voor beheer en onderhoud van Aeron. Alle paden hieronder zijn volledig; de standaardserver draait op `http://localhost:8080`.
 
-- [Overzicht](#overzicht)
-- [Snel overzicht van de endpoints](#snel-overzicht-van-de-endpoints)
-- [Authenticatie](#authenticatie)
-- [Response-formaat](#response-formaat)
-- [Foutmeldingen](#foutmeldingen)
-- [Endpoints](#endpoints)
-  - [Statuscontrole](#statuscontrole)
-  - [Artiestendpoints](#artiestendpoints)
-  - [Trackendpoints](#trackendpoints)
-  - [Playlist-endpoints](#playlist-endpoints)
-  - [Database onderhoud](#database-onderhoud)
-  - [Backup-endpoints](#backup-endpoints)
-  - [Bestandsbewaking](#bestandsbewaking)
-  - [Aanwezigheidscontrole](#aanwezigheidscontrole)
-  - [Notificaties](#notificaties)
-- [Codevoorbeelden](#codevoorbeelden)
-- [Configuratie](#configuratie)
+## Conventies
 
-## Overzicht
+### Authenticatie
 
-De Aeron Toolbox API biedt RESTful-endpoints voor het Aeron-radioautomatiseringssysteem en geeft directe databasetoegang voor afbeeldingenbeheer, het doorzoeken van media, database-onderhoud en backupbeheer.
+Als `api.enabled` aanstaat, vereisen alle `/api`-endpoints deze header:
 
-**Basis-URL:** `http://localhost:8080/api`
-
-**Publieke readinessprobe:** `http://localhost:8080/health`
-
-## Snel overzicht van de endpoints
-
-| Endpoint | Methode | Beschrijving | Auth |
-|----------|---------|--------------|------|
-| **Algemeen** |
-| `/health` | GET | Readiness-status controleren | Nee |
-| `/api/health` | GET | Gedetailleerde health en operationele signalen | Ja |
-| **Artiesten** |
-| `/api/artists` | GET | Statistieken over artiesten | Ja |
-| `/api/artists/{id}` | GET | Specifieke artiest ophalen | Ja |
-| `/api/artists/{id}/image` | GET | Artiestafbeelding ophalen | Ja |
-| `/api/artists/{id}/image` | POST | Artiestafbeelding uploaden | Ja |
-| `/api/artists/{id}/image` | DELETE | Artiestafbeelding verwijderen | Ja |
-| `/api/artists/bulk-delete` | DELETE | Alle artiestafbeeldingen verwijderen | Ja |
-| **Tracks** |
-| `/api/tracks` | GET | Statistieken over tracks | Ja |
-| `/api/tracks/{id}` | GET | Specifieke track ophalen | Ja |
-| `/api/tracks/{id}/image` | GET | Trackafbeelding ophalen | Ja |
-| `/api/tracks/{id}/image` | POST | Trackafbeelding uploaden | Ja |
-| `/api/tracks/{id}/image` | DELETE | Trackafbeelding verwijderen | Ja |
-| `/api/tracks/bulk-delete` | DELETE | Alle trackafbeeldingen verwijderen | Ja |
-| **Playlist** |
-| `/api/playlist` | GET | Playlistblokken voor datum | Ja |
-| `/api/playlist?block_id={id}` | GET | Tracks in playlistblok | Ja |
-| **Database onderhoud** |
-| `/api/db/maintenance/health` | GET | Database health en statistieken | Ja |
-| **Bestandsbewaking** |
-| `/api/file-monitor/status` | GET | Status bestandsbewaking | Ja |
-| `/api/file-monitor/check` | POST | Handmatige controle starten | Ja |
-| **Aanwezigheidscontrole** |
-| `/api/media/files/check` | POST | Controle op ontbrekende audiobestanden starten | Ja |
-| `/api/media/files/check/status` | GET | Resultaat van de aanwezigheidscontrole | Ja |
-| **Backups** |
-| `/api/db/backup` | POST | Nieuwe backup aanmaken | Ja |
-| `/api/db/backup/status` | GET | Backup status opvragen | Ja |
-| `/api/db/backups` | GET | Lijst van alle backups | Ja |
-| `/api/db/backups/{filename}` | GET | Specifieke backup downloaden | Ja |
-| `/api/db/backups/{filename}/validate` | GET | Backup integriteit valideren | Ja |
-| `/api/db/backups/{filename}` | DELETE | Backup verwijderen | Ja |
-| **Notificaties** |
-| `/api/notifications/test-email` | POST | Test e-mail versturen | Ja |
-
-## Authenticatie
-
-Wanneer authenticatie is ingeschakeld in de configuratie, vereisen alle API-endpoints een API-sleutel. De platformprobe `GET /health` valt buiten `/api` en vereist geen API-sleutel. Zie [README ▸ Authenticatie](README.md#authenticatie) voor de standaardconfiguratie, het genereren van sleutels en de risico's van uitgeschakelde authenticatie.
-
-**Header:** `X-API-Key: jouw-api-sleutel`
-
-Gebruik per omgeving unieke, willekeurig gegenereerde API-sleutels van minimaal 32 bytes entropie (bijvoorbeeld `openssl rand -base64 32`). Hergebruik geen wachtwoorden, woordenboekwoorden of korte gedeelde secrets.
-
-Optionele rate limiting kan worden ingeschakeld met `api.rate_limit_enabled`. De limiter telt per API-sleutel, of per direct peer-adres (`RemoteAddr`) wanneer geen geldige sleutel is meegestuurd. Achter een reverse proxy die client-IP's verbergt, delen alle unauthenticated requests achter die proxy dus één budget.
-
-**Response bij ontbrekende autorisatie:**
-```json
-{
-  "success": false,
-  "error": "Unauthorized: invalid or missing API key"
-}
+```http
+X-API-Key: jouw-api-sleutel
 ```
 
-## Algemene response-headers
+`GET /health` blijft publiek. Gebruik per omgeving een unieke sleutel met minimaal 32 bytes entropie, bijvoorbeeld gegenereerd met `openssl rand -base64 32`. Zie [README ▸ Authenticatie](README.md#authenticatie) voor de standaardconfiguratie, het genereren van sleutels en de risico's van uitgeschakelde authenticatie.
 
-JSON-responses bevatten:
-- `Content-Type: application/json; charset=utf-8`
+### Rate limiting
 
-Succesvolle binaire responses, zoals afbeeldingsdownloads en backupdownloads, gebruiken het passende bestandstype in plaats van JSON. Foutresponses voor deze endpoints zijn wel JSON.
+`api.rate_limit_enabled` schakelt een fixed-window-limiet in voor `/api`. Geldige API-sleutels krijgen elk een eigen budget; overige verzoeken worden gegroepeerd op het directe peer-adres (`RemoteAddr`). Adressen uit proxyheaders worden niet gebruikt.
 
-## Response-formaat
+Een overschrijding retourneert `429 Too Many Requests`, een `Retry-After`-header en de normale JSON-foutresponse. `GET /health` valt buiten de limiter.
 
-Alle JSON-responses gebruiken een consistent wrapper-formaat:
+### JSON-responses
+
+Succesvolle JSON-response:
+
 ```json
 {
   "success": true,
-  "data": { ... }  // Bij succesvolle requests
+  "data": {}
 }
 ```
 
-Of bij fouten:
+Foutresponse:
+
 ```json
 {
   "success": false,
@@ -113,39 +40,84 @@ Of bij fouten:
 }
 ```
 
-> [!NOTE]
-> In de JSON-voorbeelden hieronder wordt voor de leesbaarheid alleen de inhoud van het `data`-veld getoond, en bij foutresponses alleen het `error`-veld. JSON-responses gebruiken in werkelijkheid de complete wrapper (inclusief `"success"`). Succesvolle binaire responses gebruiken geen JSON-wrapper.
+De voorbeelden in dit document tonen de volledige response. Afbeeldingen en back-updownloads zijn binair en gebruiken geen JSON-wrapper. Een publieke readinessfout is de enige foutresponse die naast `error` ook `data` bevat.
 
-## Foutmeldingen
+Onveilige cross-originverzoeken vanuit browsers worden geblokkeerd. Zo'n blokkade kan vóór de API-handler een `403 Forbidden` in platte tekst retourneren.
 
-Alle fouten volgen dit formaat:
-```json
-{
-  "success": false,
-  "error": "error message"
-}
+### Statuscodes
+
+| Code | Betekenis |
+|---|---|
+| `200` | Verzoek geslaagd |
+| `202` | Achtergrondtaak gestart |
+| `400` | Ongeldige invoer of ontbrekende bevestigingsheader |
+| `401` | Ontbrekende of ongeldige API-sleutel |
+| `403` | Geblokkeerd cross-origin verzoek |
+| `404` | Endpoint, record of bestand niet gevonden, of functie uitgeschakeld |
+| `408` | Uploadbody niet op tijd gelezen |
+| `409` | Dezelfde achtergrondtaak draait al |
+| `413` | Requestbody te groot |
+| `429` | Rate limit overschreden |
+| `500` | Interne bewerking mislukt |
+| `502` | Authenticatie bij of verzending via de mailprovider mislukt |
+| `503` | Publieke readinesscontrole kan de database niet bereiken |
+
+Bij synchrone `5xx`-fouten worden interne details gelogd en alleen veilige fouttekst teruggestuurd. Runtimeberichten en veldwaarden zijn Engelstalig.
+
+### Achtergrondtaken pollen
+
+Bestandscontroles retourneren een `run_id`. Poll het opgegeven statusendpoint totdat:
+
+```text
+completed_run_id >= run_id && running == false
 ```
 
-**HTTP-statuscodes:**
-- `400` Bad Request - Ongeldige invoerparameters
-- `401` Unauthorized - Ongeldige of ontbrekende API-sleutel
-- `404` Not Found - Bron niet gevonden
-- `409` Conflict - Operatie al bezig (backup)
-- `500` Internal Server Error - Serverfout
-- `503` Service Unavailable - Readiness faalt doordat de database niet bereikbaar is
+Bij `completed_run_id == run_id` hoort het zichtbare resultaat exact bij de gestarte run. Een hogere waarde betekent dat een latere geplande run het resultaat inmiddels heeft vervangen.
 
----
+Een back-up retourneert geen `run_id`; poll daar `running` tot de waarde `false` is.
 
-## Endpoints
+## Endpointoverzicht
 
-### Statuscontrole
+| Methode | Pad | Doel |
+|---|---|---|
+| `GET` | `/health` | Publieke readinesscontrole |
+| `GET` | `/api/health` | Gedetailleerde operationele status |
+| `GET` | `/api/artists` | Afbeeldingsstatistieken van artiesten |
+| `GET` | `/api/artists/{id}` | Artiest ophalen |
+| `GET` | `/api/artists/{id}/image` | Artiestafbeelding downloaden |
+| `POST` | `/api/artists/{id}/image` | Artiestafbeelding opslaan |
+| `DELETE` | `/api/artists/{id}/image` | Artiestafbeelding verwijderen |
+| `DELETE` | `/api/artists/bulk-delete` | Alle artiestafbeeldingen verwijderen |
+| `GET` | `/api/tracks` | Afbeeldingsstatistieken van tracks |
+| `GET` | `/api/tracks/{id}` | Track ophalen |
+| `GET` | `/api/tracks/{id}/image` | Trackafbeelding downloaden |
+| `POST` | `/api/tracks/{id}/image` | Trackafbeelding opslaan |
+| `DELETE` | `/api/tracks/{id}/image` | Trackafbeelding verwijderen |
+| `DELETE` | `/api/tracks/bulk-delete` | Alle trackafbeeldingen verwijderen |
+| `GET` | `/api/playlist` | Playlistblokken of tracks ophalen |
+| `GET` | `/api/db/maintenance/health` | Databasestatus ophalen |
+| `POST` | `/api/db/backup` | Back-up starten |
+| `GET` | `/api/db/backup/status` | Back-upstatus ophalen |
+| `GET` | `/api/db/backups` | Back-ups tonen |
+| `GET` | `/api/db/backups/{filename}` | Back-up downloaden |
+| `GET` | `/api/db/backups/{filename}/validate` | Back-up valideren |
+| `DELETE` | `/api/db/backups/{filename}` | Back-up verwijderen |
+| `GET` | `/api/file-monitor/status` | Status van vaste bestanden ophalen |
+| `POST` | `/api/file-monitor/check` | Controle van vaste bestanden starten |
+| `POST` | `/api/media/files/check` | Controle van playlist-audio starten |
+| `GET` | `/api/media/files/check/status` | Resultaat van playlist-audiocontrole ophalen |
+| `POST` | `/api/notifications/test-email` | Testmail versturen |
 
-Controleer de publieke readiness-status van de API. Deze endpoint is bewust minimaal zodat load balancers en container health checks geen operationele details nodig hebben. Gebruik deze endpoint niet als liveness-restarttrigger: een database-uitval levert `503` op, en een procesrestart herstelt de database niet.
+`HEAD` wordt voor alle `GET`-routes als een `GET` zonder responsebody afgehandeld.
 
-**Endpoint:** `GET /health`
-**Authenticatie:** Niet vereist
+## Status
 
-**Response:** `200 OK`
+### `GET /health`
+
+Publieke readinesscontrole voor containers en load balancers. Gebruik dit endpoint niet als liveness-restarttrigger: een database-uitval levert `503` op, maar een procesrestart herstelt de database niet.
+
+Gezond, `200 OK`:
+
 ```json
 {
   "success": true,
@@ -155,7 +127,8 @@ Controleer de publieke readiness-status van de API. Deze endpoint is bewust mini
 }
 ```
 
-**Response:** `503 Service Unavailable` wanneer de database niet bereikbaar is
+Database onbereikbaar, `503 Service Unavailable`:
+
 ```json
 {
   "success": false,
@@ -166,22 +139,16 @@ Controleer de publieke readiness-status van de API. Deze endpoint is bewust mini
 }
 ```
 
-`GET /health` is de enige JSON-response die bij een non-2xx status nog een `data`-object kan bevatten. Zo kunnen probes de HTTP-statuscode gebruiken, terwijl operators en monitoring nog de readiness-verdict kunnen lezen. Gedetailleerde oorzaken staan achter authenticatie op `GET /api/health`.
+### `GET /api/health`
 
-### Gedetailleerde statuscontrole
+Retourneert altijd `200 OK` wanneer de statusresponse kan worden opgebouwd. Lees `status` en `database_status` voor het operationele oordeel.
 
-Controleer de gedetailleerde operationele status.
-
-**Endpoint:** `GET /api/health`
-**Authenticatie:** Vereist
-
-**Response:** `200 OK`
 ```json
 {
   "success": true,
   "data": {
-    "status": "healthy",
-    "version": "dev",
+    "status": "degraded",
+    "version": "1.0.0",
     "database": "aeron",
     "database_status": "connected",
     "notifications": {
@@ -189,1689 +156,503 @@ Controleer de gedetailleerde operationele status.
       "secret_expiry": {
         "expires_at": "2026-12-01T00:00:00Z",
         "expires_soon": false,
-        "days_left": 245
+        "days_left": 113
       }
     },
     "file_monitor": {
       "enabled": true,
       "checks_total": 2,
-      "checks_stale": 0,
-      "checks_alerting": 0
+      "checks_stale": 1,
+      "checks_alerting": 1
+    },
+    "media_file_check": {
+      "enabled": true,
+      "problems": 0
     }
   }
 }
 ```
 
-Het `notifications`-veld is altijd aanwezig en toont:
-- `configured`: Of de e-mailnotificatie is geconfigureerd
-- `last_error` / `last_error_at`: Laatste fout bij het versturen van e-mail (alleen bij fouten)
-- `secret_expiry`: Verloopinformatie van het Azure AD client secret (alleen indien geconfigureerd)
-  - `expires_at`: Vervaldatum
-  - `expires_soon`: `true` wanneer het secret binnen 30 dagen verloopt
-  - `days_left`: Aantal resterende dagen
-  - `error`: Foutmelding bij ophalen (bijv. onvoldoende rechten)
-
-Het `file_monitor`-veld is alleen aanwezig wanneer de bestandsbewaking is ingeschakeld en toont:
-- `enabled`: Of de bestandsbewaking is geconfigureerd
-- `checks_total`: Totaal aantal geconfigureerde checks
-- `checks_stale`: Ruwe telling van bestanden die te oud zijn of niet bereikbaar zijn (inclusief buiten `active_window`)
-- `checks_alerting`: Window-aware telling; bestanden buiten hun `active_window` tellen hier niet mee
-
-De `status`-waarden hebben een vaste prioriteitsvolgorde: `"unhealthy"` > `"degraded"` > `"healthy"`.
-
-| Conditie | Status |
+| Veld | Betekenis |
 |---|---|
-| `database_status` is `"disconnected"` | `"unhealthy"` (hoogste prioriteit) |
-| `expires_soon` is `true` | `"degraded"` |
-| `checks_alerting` groter dan `0` | `"degraded"` |
-| Geen van bovenstaande | `"healthy"` |
+| `status` | `healthy`, `degraded` of `unhealthy` |
+| `version` | Buildversie |
+| `database` | Geconfigureerde databasenaam |
+| `database_status` | `connected` of `disconnected` |
+| `notifications` | Altijd aanwezig; configuratie, laatste verzendfout en eventuele vervaldatum van het clientsecret |
+| `file_monitor` | Alleen aanwezig als `file_monitor.enabled` aanstaat |
+| `media_file_check` | Alleen aanwezig als `media_file_check.enabled` aanstaat |
 
-Een database-uitval overschrijft altijd een eventueel `"degraded"`-signaal van notificaties of de bestandsbewaking.
+Statusprioriteit: een verbroken databaseverbinding is `unhealthy`. Een bijna verlopen mailsecret, `checks_alerting > 0` of problemen in de laatste geplande mediafilecontrole maken een verbonden systeem `degraded`. Dat laatste signaal telt alleen mee als de scheduler voor die controle aanstaat.
 
-`GET /api/health` blijft `200 OK` zolang de API de gedetailleerde status kan leveren. Lees `status` en `database_status` voor het operationele verdict.
+`checks_stale` telt alle verouderde of onbereikbare bestanden. `checks_alerting` houdt rekening met `active_window`. `media_file_check.problems` telt fouten uit de laatste geplande run; handmatige runs beïnvloeden deze healthstatus niet.
 
----
+## Artiesten en tracks
 
-## Artiestendpoints
+In deze sectie staat `{type}` voor `artists` of `tracks`. `{id}` moet een hoofdletterongevoelige UUID v4 zijn.
 
-### Artieststatistieken ophalen
+### Statistieken
 
-Bekijk statistieken over artiesten en hun afbeeldingen.
+```http
+GET /api/{type}
+```
 
-**Endpoint:** `GET /api/artists`
-**Authenticatie:** Vereist
-
-**Response:** `200 OK`
 ```json
 {
-  "total": 1250,
-  "with_images": 450,
-  "without_images": 800
-}
-```
-
-### Artiest ophalen via ID
-
-Bekijk artiestgegevens inclusief afbeeldingsstatus.
-
-**Endpoint:** `GET /api/artists/{id}`
-**Authenticatie:** Vereist
-
-**Parameters:**
-- `id` (padparameter, vereist): Artiest-UUID
-
-**Response:** `200 OK`
-```json
-{
-  "artistid": "123e4567-e89b-12d3-a456-426614174000",
-  "artist": "The Beatles",
-  "info": "Britse rockband uit Liverpool",
-  "website": "https://www.thebeatles.com",
-  "twitter": "thebeatles",
-  "instagram": "thebeatles",
-  "has_image": true,
-  "repeat_value": 0
-}
-```
-
-**Foutresponse:** `404 Not Found`
-```json
-{
-  "error": "artist with ID '123e4567-e89b-12d3-a456-426614174000' not found"
-}
-```
-
-### Artiestafbeelding ophalen
-
-Bekijk de afbeelding van de artiest.
-
-**Endpoint:** `GET /api/artists/{id}/image`
-**Authenticatie:** Vereist
-
-**Parameters:**
-- `id` (padparameter, vereist): Artiest-UUID
-
-**Response:** `200 OK`
-- Content-Type: `image/jpeg`, `image/png` of `image/webp`
-- Binaire afbeeldingsdata
-
-**Foutresponse:** `404 Not Found`
-```json
-{
-  "error": "artist image with ID '123e4567-e89b-12d3-a456-426614174000' not found"
-}
-```
-
-### Artiestafbeelding uploaden
-
-Een artiestafbeelding uploaden of bijwerken.
-
-**Endpoint:** `POST /api/artists/{id}/image`
-**Authenticatie:** Vereist
-
-**Parameters:**
-- `id` (padparameter, vereist): Artiest-UUID
-
-**Request Body:**
-```json
-{
-  "url": "https://voorbeeld.nl/artiest.jpg",
-  "image": "base64-gecodeerde-afbeeldingsdata"
-}
-```
-*Let op: Gebruik óf `url` óf `image`, niet beide tegelijk*
-
-**Response:** `200 OK`
-```json
-{
-  "artist": "The Beatles",
-  "original_size": 245678,
-  "optimized_size": 45678,
-  "savings_percent": 81.4
-}
-```
-
-**Foutresponses:**
-- `400` Bad Request - Ongeldige invoer of afbeeldingsvalidatie mislukt
-- `404` Not Found - Artiest niet gevonden
-
-### Artiestafbeelding verwijderen
-
-Het verwijderen van een artiestafbeelding.
-
-**Endpoint:** `DELETE /api/artists/{id}/image`
-**Authenticatie:** Vereist
-
-**Parameters:**
-- `id` (padparameter, vereist): Artiest-UUID
-
-**Response:** `200 OK`
-```json
-{
-  "message": "artist image deleted successfully",
-  "artist_id": "123e4567-e89b-12d3-a456-426614174000"
-}
-```
-
-**Foutresponse:** `404 Not Found`
-```json
-{
-  "error": "artist image with ID '123e4567-e89b-12d3-a456-426614174000' not found"
-}
-```
-
-### Bulkverwijdering artiestafbeeldingen
-
-Het verwijderen van alle artiestafbeeldingen uit de database.
-
-**Endpoint:** `DELETE /api/artists/bulk-delete`
-**Authenticatie:** Vereist
-
-**Vereiste header:**
-- `X-Confirm-Bulk-Delete: DELETE ALL`
-
-**Response:** `200 OK`
-```json
-{
-  "deleted": 450,
-  "message": "450 artist images deleted"
-}
-```
-
-**Foutresponse:** `400 Bad Request`
-```json
-{
-  "error": "Missing confirmation header: X-Confirm-Bulk-Delete"
-}
-```
-
----
-
-## Trackendpoints
-
-### Trackstatistieken ophalen
-
-Bekijk statistieken over tracks en hun afbeeldingen.
-
-**Endpoint:** `GET /api/tracks`
-**Authenticatie:** Vereist
-
-**Response:** `200 OK`
-```json
-{
-  "total": 5000,
-  "with_images": 1200,
-  "without_images": 3800
-}
-```
-
-### Track ophalen via ID
-
-Bekijk trackgegevens inclusief afbeeldingsstatus.
-
-**Endpoint:** `GET /api/tracks/{id}`
-**Authenticatie:** Vereist
-
-**Parameters:**
-- `id` (padparameter, vereist): Track-UUID
-
-**Response:** `200 OK`
-```json
-{
-  "titleid": "456e7890-e89b-12d3-a456-426614174000",
-  "tracktitle": "Hey Jude",
-  "artist": "The Beatles",
-  "artistid": "123e4567-e89b-12d3-a456-426614174000",
-  "year": 1968,
-  "knownlength": 431000,
-  "introtime": 8000,
-  "outrotime": 120000,
-  "tempo": 75,
-  "bpm": 75,
-  "gender": 0,
-  "language": 2,
-  "mood": 1,
-  "exporttype": 0,
-  "repeat_value": 0,
-  "rating": 5,
-  "has_image": true,
-  "website": "",
-  "conductor": "",
-  "orchestra": ""
-}
-```
-
-**Veldverklaringen:**
-- `knownlength`, `introtime`, `outrotime`: Duur in milliseconden
-- `tempo`, `bpm`: Tempo/BPM van de track
-- `gender`, `language`, `mood`: Numerieke classificatiecodes
-- `rating`: Waardering (0-5)
-- `repeat_value`: Herhalingswaarde voor scheduling
-
-**Foutresponse:** `404 Not Found`
-```json
-{
-  "error": "track with ID '456e7890-e89b-12d3-a456-426614174000' not found"
-}
-```
-
-### Trackafbeelding ophalen
-
-Bekijk de albumhoes van de track.
-
-**Endpoint:** `GET /api/tracks/{id}/image`
-**Authenticatie:** Vereist
-
-**Parameters:**
-- `id` (padparameter, vereist): Track-UUID
-
-**Response:** `200 OK`
-- Content-Type: `image/jpeg`, `image/png` of `image/webp`
-- Binaire afbeeldingsdata
-
-**Foutresponse:** `404 Not Found`
-```json
-{
-  "error": "track image with ID '456e7890-e89b-12d3-a456-426614174000' not found"
-}
-```
-
-### Trackafbeelding uploaden
-
-Een albumhoes uploaden of bijwerken.
-
-**Endpoint:** `POST /api/tracks/{id}/image`
-**Authenticatie:** Vereist
-
-**Parameters:**
-- `id` (padparameter, vereist): Track-UUID
-
-**Request Body:**
-```json
-{
-  "url": "https://voorbeeld.nl/albumhoes.jpg",
-  "image": "base64-gecodeerde-afbeeldingsdata"
-}
-```
-*Let op: Gebruik óf `url` óf `image`, niet beide tegelijk*
-
-**Response:** `200 OK`
-```json
-{
-  "artist": "The Beatles",
-  "track": "Hey Jude",
-  "original_size": 345678,
-  "optimized_size": 65678,
-  "savings_percent": 81.0
-}
-```
-
-**Foutresponses:**
-- `400` Bad Request - Ongeldige invoer of afbeeldingsvalidatie mislukt
-- `404` Not Found - Track niet gevonden
-
-### Trackafbeelding verwijderen
-
-Het verwijderen van de albumhoes van een track.
-
-**Endpoint:** `DELETE /api/tracks/{id}/image`
-**Authenticatie:** Vereist
-
-**Parameters:**
-- `id` (padparameter, vereist): Track-UUID
-
-**Response:** `200 OK`
-```json
-{
-  "message": "track image deleted successfully",
-  "track_id": "456e7890-e89b-12d3-a456-426614174000"
-}
-```
-
-**Foutresponse:** `404 Not Found`
-```json
-{
-  "error": "track image with ID '456e7890-e89b-12d3-a456-426614174000' not found"
-}
-```
-
-### Bulkverwijdering trackafbeeldingen
-
-Het verwijderen van alle trackafbeeldingen uit de database.
-
-**Endpoint:** `DELETE /api/tracks/bulk-delete`
-**Authenticatie:** Vereist
-
-**Vereiste header:**
-- `X-Confirm-Bulk-Delete: DELETE ALL`
-
-**Response:** `200 OK`
-```json
-{
-  "deleted": 1200,
-  "message": "1200 track images deleted"
-}
-```
-
-**Foutresponse:** `400 Bad Request`
-```json
-{
-  "error": "Missing confirmation header: X-Confirm-Bulk-Delete"
-}
-```
-
----
-
-## Playlist-endpoints
-
-### Playlistblokken ophalen
-
-Bekijk alle playlistblokken voor een specifieke datum.
-
-**Endpoint:** `GET /api/playlist`
-**Authenticatie:** Vereist
-
-**Queryparameters:**
-- `date` (optioneel): Datum in YYYY-MM-DD-indeling (standaard: vandaag)
-
-**Response:** `200 OK`
-```json
-[
-  {
-    "blockid": "block-uuid-1",
-    "name": "Ochtend Show",
-    "date": "2025-09-17",
-    "start_time": "06:00:00",
-    "end_time": "10:00:00",
-    "tracks": [
-      {
-        "trackid": "track-uuid-1",
-        "tracktitle": "Nummer Titel",
-        "artistid": "artist-uuid-1",
-        "artistname": "Artiest Naam",
-        "start_time": "06:00:00",
-        "end_time": "06:03:24",
-        "duration": 204000,
-        "has_track_image": true,
-        "has_artist_image": false,
-        "exporttype": 0,
-        "mode": 2,
-        "is_voicetrack": false,
-        "is_commblock": false
-      }
-    ]
-  }
-]
-```
-
-### Playlisttracks per blok ophalen
-
-Bekijk tracks voor een specifiek playlistblok.
-
-**Endpoint:** `GET /api/playlist?block_id={block_id}`
-**Authenticatie:** Vereist
-
-**Queryparameters:**
-- `block_id` (vereist): Playlistblok-UUID
-- `limit` (optioneel): Maximaal aantal tracks (standaard: 1000)
-- `offset` (optioneel): Offset voor paginering (standaard: 0)
-- `track_image` (optioneel): Filter op trackafbeeldingsstatus (`true`/`false`/`yes`/`no`/`1`/`0`)
-- `artist_image` (optioneel): Filter op artiestafbeeldingsstatus (`true`/`false`/`yes`/`no`/`1`/`0`)
-- `sort` (optioneel): Sorteerveld (`start_time`, `track`, `artist`, `duration`)
-- `desc` (optioneel): Sorteer aflopend indien `true`
-
-**Response:** `200 OK`
-```json
-[
-  {
-    "trackid": "track-uuid-1",
-    "tracktitle": "Nummer Titel",
-    "artistid": "artist-uuid-1",
-    "artistname": "Artiest Naam",
-    "start_time": "06:00:00",
-    "end_time": "06:03:24",
-    "duration": 204000,
-    "has_track_image": true,
-    "has_artist_image": false,
-    "exporttype": 0,
-    "mode": 2,
-    "is_voicetrack": false,
-    "is_commblock": false
-  }
-]
-```
-
----
-
-## Database onderhoud
-
-### Database health ophalen
-
-Bekijk gedetailleerde databasestatistieken inclusief tabelgroottes, bloat-percentages, connectiegebruik, langlopende queries en onderhoudsaanbevelingen.
-
-**Endpoint:** `GET /api/db/maintenance/health`
-**Authenticatie:** Vereist
-
-**Response:** `200 OK`
-```json
-{
-  "database_name": "aeron",
-  "database_version": "PostgreSQL 18.1",
-  "database_size": "2.45 GB",
-  "database_size_bytes": 2630451200,
-  "schema_name": "aeron",
-  "active_connections": 12,
-  "max_connections": 100,
-  "connection_usage_pct": 12.0,
-  "tables": [
-    {
-      "name": "track",
-      "row_count": 125000,
-      "dead_tuples": 4500,
-      "dead_tuple_pct": 3.6,
-      "modifications_since_analyze": 1250,
-      "total_size": "1.2 GB",
-      "total_size_bytes": 1288490188,
-      "table_size": "1.0 GB",
-      "table_size_bytes": 1073741824,
-      "index_size": "150 MB",
-      "index_size_bytes": 157286400,
-      "toast_size": "50 MB",
-      "toast_size_bytes": 52428800,
-      "last_vacuum": "2025-12-20T03:00:00Z",
-      "last_autovacuum": "2025-12-21T04:15:00Z",
-      "last_analyze": "2025-12-20T03:00:00Z",
-      "last_autoanalyze": "2025-12-21T04:15:00Z",
-      "seq_scans": 1250,
-      "idx_scans": 45000,
-      "needs_vacuum": true,
-      "needs_analyze": false
-    }
-  ],
-  "long_running_queries": [],
-  "needs_maintenance": true,
-  "recommendations": [
-    "Table 'playlistitem' has 15.2% dead tuples - VACUUM recommended",
-    "Table 'artist' has 12500 dead tuples - VACUUM recommended"
-  ],
-  "checked_at": "2025-12-22T14:30:00Z"
-}
-```
-
-> **Breaking change:** het veld `dead_tuple_ratio` in de tabelresponse is hernoemd naar `dead_tuple_pct`. De waarde was altijd al een percentage (0–100), niet een ratio (0–1); de naam is gecorrigeerd om verwarring te voorkomen. Externe afnemers moeten de nieuwe veldnaam gebruiken.
-
-### Automatische health check
-
-De health check kan automatisch worden uitgevoerd via de ingebouwde scheduler. Bij problemen wordt een e-mailmelding verstuurd. Configureer dit in `config.json`:
-
-```json
-"maintenance": {
-  "bloat_threshold": 10.0,
-  "dead_tuple_threshold": 10000,
-  "connection_usage_threshold_pct": 80,
-  "long_query_threshold_seconds": 10,
-  "expose_long_running_query_text": false,
-  "scheduler": {
-    "enabled": true,
-    "schedule": "0 4 * * 0"
+  "success": true,
+  "data": {
+    "total": 1250,
+    "with_images": 450,
+    "without_images": 800
   }
 }
 ```
 
-**Parameters:**
-- `bloat_threshold`: Percentage dead tuples waarboven een waarschuwing wordt gegeven
-- `dead_tuple_threshold`: Absoluut aantal dead tuples waarboven een waarschuwing wordt gegeven
-- `connection_usage_threshold_pct`: Percentage connectiegebruik waarboven een waarschuwing wordt gegeven (standaard: 80)
-- `long_query_threshold_seconds`: Drempel in seconden waarboven een query als langlopend wordt beschouwd (standaard: 10)
-- `expose_long_running_query_text`: Toon SQL-fragmenten voor langlopende queries in de authenticated maintenance response (standaard: `false`)
-- `scheduler.enabled`: Schakel automatische health checks in/uit
-- `scheduler.schedule`: Cron-expressie (zie backup-sectie voor voorbeelden)
+### Details
 
-Bij detectie van problemen (hoge bloat, veel connecties, langlopende queries) wordt een e-mailmelding verstuurd. Wanneer alle problemen zijn opgelost, volgt een herstelmelding. De tijdzone wordt bepaald door de systeemtijdzone (instelbaar via de `TZ`-omgevingsvariabele).
+```http
+GET /api/{type}/{id}
+```
 
----
+Artiestvelden:
 
-## Backup-endpoints
+| Veld | Betekenis |
+|---|---|
+| `artistid` | Artiest-UUID |
+| `artist` | Naam |
+| `info` | Vrije beschrijving |
+| `website`, `twitter`, `instagram` | Online verwijzingen |
+| `has_image` | Of een afbeelding is opgeslagen |
+| `repeat_value` | Herhalingswaarde voor planning |
 
-> [!WARNING]
-> Backup-endpoints zijn alleen beschikbaar indien `backup.enabled: true` in de configuratie.
+Trackvelden:
 
-> [!IMPORTANT]
-> **Systeemvereisten:** Wanneer `backup.enabled: true`, controleert de applicatie bij het opstarten of `pg_dump` en `pg_restore` beschikbaar zijn. Zonder deze tools weigert de applicatie te starten. Zie de README voor installatie-instructies en versievereisten.
+| Veld | Betekenis |
+|---|---|
+| `titleid` | Track-UUID |
+| `tracktitle`, `artist`, `artistid` | Titel- en artiestgegevens |
+| `year` | Jaar uit Aeron |
+| `knownlength`, `introtime`, `outrotime` | Tijden in milliseconden |
+| `tempo`, `bpm` | Tempowaarden |
+| `gender`, `language`, `mood` | Numerieke Aeron-classificaties |
+| `exporttype`, `repeat_value`, `rating` | Planning- en exportwaarden |
+| `has_image` | Of een afbeelding is opgeslagen |
+| `website`, `conductor`, `orchestra` | Aanvullende metadata |
 
-### Backup workflow
+Een onbekend ID retourneert `404`. Een ID dat geen UUID v4 is retourneert `400`.
 
-Backups worden asynchroon uitgevoerd:
+### Afbeelding downloaden
 
-1. **Backup starten:** `POST /api/db/backup` → retourneert direct `202 Accepted`
-2. **Status controleren:** `GET /api/db/backup/status` → toont voortgang en eventuele fouten
-3. **Backup downloaden:** `GET /api/db/backups/{filename}` → download het bestand
+```http
+GET /api/{type}/{id}/image
+```
 
-**Automatische validatie:**
-Na het aanmaken van een backup wordt deze automatisch gevalideerd via `pg_restore --list` (controleert TOC en checksums). Alleen gevalideerde backups worden als succesvol gemarkeerd en naar S3 gesynchroniseerd.
+De response is binair met een gedetecteerd `Content-Type`, bijvoorbeeld `image/jpeg`, `image/png` of `image/webp`, en een `Content-Length`. Een ontbrekende afbeelding retourneert een JSON-fout met `404`.
 
-Deze aanpak biedt voordelen:
-- Request retourneert direct (geen problemen met time-outs)
-- Fouten zijn zichtbaar via het status endpoint
-- Er kan slechts één backup tegelijk draaien
-- Bij connectieverlies loopt backup door op de server
-- Corrupte backups worden gedetecteerd vóór S3 sync
+### Afbeelding uploaden
 
-### Automatische backups
+```http
+POST /api/{type}/{id}/image
+Content-Type: application/json
+```
 
-Backups kunnen automatisch worden uitgevoerd via de ingebouwde scheduler. Configureer dit in `config.json`:
+Geef exact één bron op:
 
 ```json
-"backup": {
-  "timeout_minutes": 30,
-  "scheduler": {
-    "enabled": true,
-    "schedule": "0 3 * * *"
+{"url":"https://voorbeeld.nl/afbeelding.jpg"}
+```
+
+of:
+
+```json
+{"image":"<base64-gecodeerde JPEG- of PNG-data>"}
+```
+
+Trackresponse:
+
+```json
+{
+  "success": true,
+  "data": {
+    "artist": "The Beatles",
+    "track": "Hey Jude",
+    "original_size": 345678,
+    "optimized_size": 65678,
+    "savings_percent": 81.0
   }
 }
 ```
 
-**Parameters:**
-- `timeout_minutes`: Maximale tijd voor pg_dump (standaard: 30 minuten)
-- `pg_dump_path`: Custom pad naar pg_dump executable (leeg = automatische detectie via PATH)
-- `pg_restore_path`: Custom pad naar pg_restore executable (leeg = automatische detectie via PATH)
-- `enabled`: Schakel automatische backups in/uit
-- `schedule`: Cron-expressie voor het backup-schema
+Bij een artiest ontbreekt het veld `track`. Uploadfouten gebruiken onder meer `400` voor ongeldige invoer, `404` voor een onbekend ID, `408` voor een leestime-out en `413` voor een te grote JSON-body.
 
-De tijdzone voor alle geplande taken (backup én onderhoud) wordt bepaald door de systeemtijdzone. In Docker: stel `TZ=Europe/Amsterdam` in als omgevingsvariabele.
+Ondersteund zijn JPEG en PNG; een URL-bron moet HTTP of HTTPS gebruiken. Een afbeelding boven de doelafmetingen wordt met behoud van verhouding verkleind. De JPEG-gecodeerde versie wordt alleen opgeslagen als die kleiner is; anders blijven de oorspronkelijke bytes behouden. `reject_smaller` kan afbeeldingen onder de doelafmetingen weigeren.
 
-**Cron-expressieformaat:** `minuut uur dag maand weekdag`
+### Afbeelding verwijderen
 
-| Expressie | Betekenis |
-|-----------|-----------|
-| `0 3 * * *` | Elke dag om 3:00 |
-| `0 */6 * * *` | Elke 6 uur |
-| `0 3 * * 0` | Elke zondag om 3:00 |
-| `0 3 1 * *` | 1e van elke maand om 3:00 |
-
-### S3 synchronisatie
-
-Backups kunnen automatisch worden gesynchroniseerd naar S3-compatibele storage (AWS S3, MinIO, Backblaze B2, DigitalOcean Spaces). Configureer dit in `config.json`:
-
-```json
-"backup": {
-  "s3": {
-    "enabled": true,
-    "bucket": "mijn-backups",
-    "region": "eu-west-1",
-    "endpoint": "",
-    "access_key_id": "AKIAIOSFODNN7EXAMPLE",
-    "secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-    "path_prefix": "aeron/backups/",
-    "force_path_style": false
-  }
-}
+```http
+DELETE /api/{type}/{id}/image
 ```
 
-**Parameters:**
-- `enabled`: Schakel S3 synchronisatie in/uit
-- `bucket`: S3 bucket naam
-- `region`: AWS regio (bijv. `eu-west-1`)
-- `endpoint`: Custom endpoint voor S3-compatibele services (optioneel)
-- `access_key_id`: AWS access key ID
-- `secret_access_key`: AWS secret access key
-- `path_prefix`: Prefix voor S3 keys (optioneel, bijv. `backups/`)
-- `force_path_style`: Gebruik path-style URLs (vereist voor MinIO)
+De response bevat `message` en `artist_id` of `track_id`. Een onbekend ID retourneert `404`; een bestaand record zonder afbeelding blijft een geslaagde verwijdering.
 
-**Voorbeeld voor MinIO:**
-```json
-"s3": {
-  "enabled": true,
-  "bucket": "backups",
-  "region": "us-east-1",
-  "endpoint": "http://minio.local:9000",
-  "access_key_id": "minioadmin",
-  "secret_access_key": "minioadmin",
-  "path_prefix": "",
-  "force_path_style": true
-}
+### Alle afbeeldingen verwijderen
+
+```http
+DELETE /api/artists/bulk-delete
+DELETE /api/tracks/bulk-delete
+X-Confirm-Bulk-Delete: DELETE ALL
 ```
 
-**Gedrag:**
-- Na elke succesvolle backup wordt het bestand asynchroon naar S3 geüpload
-- Bij het verwijderen van lokale backups (handmatig of door retentie) wordt ook de S3-kopie verwijderd
-- S3-fouten blokkeren de backup niet; de status is zichtbaar via `GET /api/db/backup/status`
-- Uploads gebruiken multipart voor grote bestanden
+De bevestigingsheader moet exact overeenkomen. De response bevat `deleted` en `message`; zonder bevestiging volgt `400`.
 
-### Backup starten
+## Playlist
 
-Een nieuwe databasebackup starten op de achtergrond.
+### `GET /api/playlist`
 
-**Endpoint:** `POST /api/db/backup`
-**Authenticatie:** Vereist
+Zonder `block_id` retourneert dit endpoint de playlistblokken voor één datum, inclusief hun tracks.
 
-**Request Body:**
+| Parameter | Gedrag |
+|---|---|
+| `date` | `YYYY-MM-DD`; standaard de huidige datum van PostgreSQL |
+
+Een blok bevat `blockid`, `name`, `date`, `start_time`, `end_time` en `tracks`.
+
+### `GET /api/playlist?block_id={uuid}`
+
+Met `block_id` retourneert hetzelfde endpoint alleen de tracks van dat blok.
+
+| Parameter | Gedrag |
+|---|---|
+| `block_id` | Playlistblok-UUID; schakelt de blokmodus in |
+| `limit` | Positief maximum; zonder waarde geldt geen limiet |
+| `offset` | Niet-negatieve offset; wordt alleen gebruikt samen met `limit` |
+| `track_image` | `true`, `false`, `yes`, `no`, `1` of `0` |
+| `artist_image` | `true`, `false`, `yes`, `no`, `1` of `0` |
+| `sort` | `start_time` (standaard), `track`, `artist` of `duration` |
+| `desc` | Alleen de waarde `true` sorteert aflopend |
+
+Een playlistitem bevat:
+
+| Veld | Betekenis |
+|---|---|
+| `trackid`, `tracktitle` | Trackgegevens |
+| `artistid`, `artistname` | Artiestgegevens |
+| `start_time`, `end_time` | Tijd als `HH:MM:SS` |
+| `duration` | Duur in milliseconden |
+| `has_track_image`, `has_artist_image` | Afbeeldingsstatus |
+| `exporttype`, `mode` | Aeron-waarden |
+| `is_voicetrack`, `is_commblock` | Itemclassificatie |
+
+De response is in beide modi een array in `data`; er wordt geen apart pagineringsobject toegevoegd.
+
+## Databaseonderhoud
+
+### `GET /api/db/maintenance/health`
+
+Retourneert database-, tabel-, connectie- en querystatistieken.
+
+| Veld | Betekenis |
+|---|---|
+| `database_name`, `database_version`, `schema_name` | Database-identificatie |
+| `database_size`, `database_size_bytes` | Totale grootte, leesbaar en in bytes |
+| `active_connections`, `max_connections`, `connection_usage_pct` | Connectiegebruik |
+| `tables` | Status per tabel |
+| `long_running_queries` | Queries boven de ingestelde tijdsdrempel |
+| `needs_maintenance` | Of minimaal één tabel `VACUUM` of `ANALYZE` nodig heeft |
+| `recommendations` | Operatoracties; `No issues detected` als de lijst anders leeg zou zijn |
+| `checked_at` | Tijdstip van de controle |
+
+Tabelvelden:
+
+| Veld | Betekenis |
+|---|---|
+| `name`, `row_count` | Tabelnaam en geschat aantal rijen |
+| `dead_tuples`, `dead_tuple_pct` | Dode rijen, absoluut en als percentage |
+| `modifications_since_analyze` | Wijzigingen sinds de laatste analyse |
+| `total_size`, `total_size_bytes` | Totale tabelgrootte |
+| `table_size`, `table_size_bytes` | Datagrootte |
+| `index_size`, `index_size_bytes` | Indexgrootte |
+| `toast_size`, `toast_size_bytes` | TOAST-grootte |
+| `last_vacuum`, `last_autovacuum` | Laatste vacuümtijden; kunnen `null` zijn |
+| `last_analyze`, `last_autoanalyze` | Laatste analysetijden; kunnen `null` zijn |
+| `seq_scans`, `idx_scans` | Scanstatistieken |
+| `needs_vacuum`, `needs_analyze` | Afgeleide onderhoudssignalen |
+
+Een item in `long_running_queries` bevat `pid`, `duration`, `query` en `state`. `query` is leeg tenzij `maintenance.expose_long_running_query_text` aanstaat.
+
+## Back-ups
+
+Deze endpoints bestaan alleen als `backup.enabled` aanstaat; anders volgt `404`. Wanneer backups zijn ingeschakeld, controleert de applicatie bij het opstarten of `pg_dump` en `pg_restore` beschikbaar zijn. Zonder deze tools weigert de applicatie te starten. Zie de [README](README.md#andere-installatiemethoden) voor installatie-instructies en versievereisten.
+
+Een gemaakte back-up wordt vóór succes gecontroleerd met `pg_restore --list`. Er kan één back-up tegelijk draaien. S3-synchronisatie begint pas na een geslaagde back-up en validatie.
+
+### `POST /api/db/backup`
+
+Start een back-up op de achtergrond. De body is optioneel:
+
 ```json
 {
   "compression": 9
 }
 ```
 
-**Parameters:**
-- `compression` (optioneel): Laat weg of zet op `0` om `backup.default_compression` te gebruiken; expliciete pg_dump-compressieniveaus zijn `1-9`.
+`compression` accepteert `1` tot en met `9`; weglaten of `0` gebruikt `backup.default_compression`.
 
-**Response:** `202 Accepted`
+`202 Accepted`:
+
 ```json
 {
-  "message": "Backup started in background",
-  "check": "/api/db/backup/status"
-}
-```
-
-De backup wordt asynchroon uitgevoerd. Controleer `GET /api/db/backup/status` voor de voortgang.
-
-> [!WARNING]
-> Er kan slechts één backup tegelijk draaien. Een tweede aanvraag tijdens een lopende backup retourneert een fout.
-
-**Foutresponses:**
-
-`404 Not Found` - Backup niet ingeschakeld:
-```json
-{
-  "error": "backup is not enabled"
-}
-```
-
-`409 Conflict` - Backup al bezig:
-```json
-{
-  "error": "backup already in progress"
-}
-```
-
-### Backup status
-
-Toont de status van de laatste backupbewerking.
-
-**Endpoint:** `GET /api/db/backup/status`
-**Authenticatie:** Vereist
-
-**Foutresponse indien uitgeschakeld:** `404 Not Found`
-```json
-{
-  "error": "backup is not enabled"
-}
-```
-
-**Response tijdens backup:** `200 OK`
-```json
-{
-  "running": true,
-  "started_at": "2024-01-15T03:00:00Z",
-  "filename": "aeron-backup-2024-01-15-030000.dump"
-}
-```
-
-**Response na succesvolle backup:** `200 OK`
-```json
-{
-  "running": false,
-  "started_at": "2024-01-15T03:00:00Z",
-  "ended_at": "2024-01-15T03:00:45Z",
   "success": true,
-  "filename": "aeron-backup-2024-01-15-030000.dump"
-}
-```
-
-**Response na succesvolle backup met S3 sync:** `200 OK`
-```json
-{
-  "running": false,
-  "started_at": "2024-01-15T03:00:00Z",
-  "ended_at": "2024-01-15T03:00:45Z",
-  "success": true,
-  "filename": "aeron-backup-2024-01-15-030000.dump",
-  "s3_sync": {
-    "synced": true
+  "data": {
+    "message": "Backup started in background",
+    "check": "/api/db/backup/status"
   }
 }
 ```
 
-**Response na mislukte backup:** `200 OK`
-```json
-{
-  "running": false,
-  "started_at": "2024-01-15T03:00:00Z",
-  "ended_at": "2024-01-15T03:00:05Z",
-  "success": false,
-  "error": "create backup failed: backup timeout after 30m0s (configure backup.timeout_minutes)",
-  "filename": "aeron-backup-2024-01-15-030000.dump"
-}
-```
+Een ongeldige compressiewaarde retourneert `400`; een tweede gelijktijdige aanvraag `409`.
 
-**Response met S3 sync fout:** `200 OK`
+### `GET /api/db/backup/status`
+
+| Veld | Betekenis |
+|---|---|
+| `running` | Of een back-up draait |
+| `started_at`, `ended_at` | Start- en eventuele eindtijd |
+| `success` | Uitkomst van de back-up; betekenisvol zodra `ended_at` aanwezig is |
+| `error` | Aanwezig na een mislukking |
+| `filename` | Aanwezig zodra een bestandsnaam is toegekend |
+| `s3_sync.synced` | Of de S3-upload voltooid is |
+| `s3_sync.error` | Aanwezig na een mislukte S3-upload |
+
+Tijdens een eerste of lopende run kan `success` `false` zijn zonder `error`. Bij ingeschakelde S3 kan `synced: false` zonder `error` betekenen dat de upload nog loopt.
+
+### `GET /api/db/backups`
+
+Retourneert:
+
+- `backups`: items met `filename`, `size_bytes`, `size` en `created_at`;
+- `total_size_bytes`;
+- `total_count`.
+
+### `GET /api/db/backups/{filename}`
+
+Downloadt een lokaal back-upbestand met `Content-Type: application/octet-stream` en `Content-Disposition: attachment; filename=...`.
+
+Alleen beheerde namen met het patroon `aeron-backup-*.dump` worden geaccepteerd. Een ongeldige naam retourneert `400`; een onbekend bestand `404`.
+
+### `GET /api/db/backups/{filename}/validate`
+
+Controleert het bestand met `pg_restore --list` en retourneert `200 OK` met:
+
 ```json
 {
-  "running": false,
-  "started_at": "2024-01-15T03:00:00Z",
-  "ended_at": "2024-01-15T03:00:45Z",
   "success": true,
-  "filename": "aeron-backup-2024-01-15-030000.dump",
-  "s3_sync": {
-    "synced": false,
-    "error": "S3 upload failed: backups/aeron-backup-2024-01-15-030000.dump: ..."
+  "data": {
+    "filename": "aeron-backup-2026-08-10-030000.dump",
+    "valid": false,
+    "error": "backup validation failed: ..."
   }
 }
 ```
 
-**Velden:**
-- `running`: Of er momenteel een backup draait
-- `started_at`: Starttijd van de laatste backup
-- `ended_at`: Eindtijd (alleen aanwezig na voltooiing)
-- `success`: Of de backup geslaagd is (alleen aanwezig na voltooiing)
-- `error`: Foutmelding (alleen aanwezig bij mislukking)
-- `filename`: Bestandsnaam (kan leeg zijn bij vroege fouten)
-- `s3_sync`: S3 synchronisatiestatus (alleen aanwezig indien S3 is ingeschakeld)
-  - `synced`: Of de backup naar S3 is geüpload
-  - `error`: Foutmelding bij sync-fout
+`error` ontbreekt wanneer `valid` `true` is. Een ongeldig archief is dus een geslaagde API-call met `valid: false`.
 
-### Lijst van backups ophalen
+### `DELETE /api/db/backups/{filename}`
 
-Bekijk een overzicht van alle beschikbare backups.
+Vereist een bevestigingsheader met exact dezelfde bestandsnaam:
 
-**Endpoint:** `GET /api/db/backups`
-**Authenticatie:** Vereist
-
-**Foutresponse indien uitgeschakeld:** `404 Not Found`
-```json
-{
-  "error": "backup is not enabled"
-}
+```http
+X-Confirm-Delete: aeron-backup-2026-08-10-030000.dump
 ```
 
-**Response:** `200 OK`
-```json
-{
-  "backups": [
-    {
-      "filename": "aeron-backup-2025-12-22-143000.dump",
-      "size_bytes": 52428800,
-      "size": "50.0 MB",
-      "created_at": "2025-12-22T14:30:00Z"
-    },
-    {
-      "filename": "aeron-backup-2025-12-21-143000.dump",
-      "size_bytes": 125829120,
-      "size": "120.0 MB",
-      "created_at": "2025-12-21T14:30:00Z"
-    }
-  ],
-  "total_size_bytes": 178257920,
-  "total_count": 2
-}
-```
-
-### Specifieke backup downloaden
-
-Een specifiek backupbestand downloaden.
-
-**Endpoint:** `GET /api/db/backups/{filename}`
-**Authenticatie:** Vereist
-
-**Foutresponse indien uitgeschakeld:** `404 Not Found`
-```json
-{
-  "error": "backup is not enabled"
-}
-```
-
-**Parameters:**
-- `filename` (padparameter, vereist): Naam van het backupbestand
-
-**Response:** `200 OK`
-- Content-Type: `application/octet-stream`
-- Content-Disposition: `attachment; filename=...`
-- Binaire backup data
-
-**Foutresponse:** `404 Not Found`
-```json
-{
-  "error": "backup with ID 'aeron-backup-2025-12-22-143000.dump' not found"
-}
-```
-
-### Backup verwijderen
-
-Een specifiek backupbestand verwijderen.
-
-**Endpoint:** `DELETE /api/db/backups/{filename}`
-**Authenticatie:** Vereist
-
-**Foutresponse indien uitgeschakeld:** `404 Not Found`
-```json
-{
-  "error": "backup is not enabled"
-}
-```
-
-**Parameters:**
-- `filename` (padparameter, vereist): Naam van het backupbestand
-
-**Vereiste header:**
-- `X-Confirm-Delete: {filename}` (bestandsnaam moet overeenkomen)
-
-**Response:** `200 OK`
-```json
-{
-  "message": "Backup deleted successfully",
-  "filename": "aeron-backup-2025-12-21T14-30-00.dump"
-}
-```
-
-**Foutresponse:** `400 Bad Request`
-```json
-{
-  "error": "Confirmation header missing: X-Confirm-Delete must contain the filename"
-}
-```
-
-### Backup valideren
-
-De integriteit van een bestaand backupbestand valideren. Handig voor het controleren van backups na download of herstel van S3.
-
-**Endpoint:** `GET /api/db/backups/{filename}/validate`
-**Authenticatie:** Vereist
-
-**Foutresponse indien uitgeschakeld:** `404 Not Found`
-```json
-{
-  "error": "backup is not enabled"
-}
-```
-
-**Parameters:**
-- `filename` (padparameter, vereist): Naam van het backupbestand
-
-**Response:** `200 OK`
-```json
-{
-  "filename": "aeron-backup-2025-12-22-143000.dump",
-  "valid": true
-}
-```
-
-**Response bij ongeldige backup:** `200 OK`
-```json
-{
-  "filename": "aeron-backup-2025-12-22-143000.dump",
-  "valid": false,
-  "error": "backup validation failed: file is corrupt or unreadable: pg_restore: error: ..."
-}
-```
-
-**Foutresponse:** `404 Not Found`
-```json
-{
-  "error": "backup with ID 'aeron-backup-2025-12-22-143000.dump' not found"
-}
-```
-
-Validatie gebeurt via `pg_restore --list` die de TOC en interne checksums controleert.
-
----
+De response bevat `message` en `filename`. Zonder juiste bevestiging volgt `400`. Bij ingeschakelde S3 wordt de verwijdering van de externe kopie op de achtergrond gestart.
 
 ## Bestandsbewaking
 
-De bestandsbewaking houdt bestanden op schijf in de gaten en signaleert wanneer ze ouder zijn dan een geconfigureerde maximale leeftijd. Dit is handig om mislukte downloads of updates vanuit externe processen te detecteren, zoals nieuwsbulletins of weerberichten.
+Deze endpoints bestaan alleen als `file_monitor.enabled` aanstaat; anders volgt `404`.
 
-Controles draaien automatisch met een vast interval. Standaard is dat 60 seconden; dit is aan te passen via `file_monitor.interval_seconds`. Na een herstart geldt de eerste controle als een "grace run": de resultaten worden wel gemeten, maar er worden nog geen notificaties verstuurd. Zo voorkom je valse alarmen.
+### `POST /api/file-monitor/check`
 
-> [!IMPORTANT]
-> **Breaking change:** het veld `interval_minutes` in de statusresponse is vervangen door `interval_seconds`. Externe afnemers moeten de nieuwe veldnaam gebruiken.
-
-### Status van de bestandsbewaking
-
-Toont de resultaten van de meest recente controle, plus de huidige runstatus.
-
-**Endpoint:** `GET /api/file-monitor/status`
-**Authenticatie:** Vereist
-
-**Foutresponse indien uitgeschakeld:** `404 Not Found`
-```json
-{
-  "error": "file monitor is not enabled"
-}
-```
-
-**Response:** `200 OK`
-```json
-{
-  "running": false,
-  "run_id": 42,
-  "completed_run_id": 42,
-  "started_at": "2024-01-15T10:29:55Z",
-  "last_check_at": "2024-01-15T10:30:00Z",
-  "interval_seconds": 60,
-  "checks": [
-    {
-      "name": "Nieuws bulletin",
-      "path": "/data/news.mp3",
-      "max_age_minutes": 10,
-      "file_exists": true,
-      "file_age_minutes": 7.5,
-      "last_modified": "2024-01-15T10:22:30Z",
-      "is_stale": false,
-      "in_alert": false
-    },
-    {
-      "name": "Weer",
-      "path": "/data/weather.mp3",
-      "max_age_minutes": 60,
-      "file_exists": true,
-      "file_age_minutes": 75.2,
-      "last_modified": "2024-01-15T09:15:00Z",
-      "is_stale": true,
-      "in_alert": true
-    }
-  ]
-}
-```
-
-De volgende voorbeelden tonen losse items uit de `checks`-array voor specifieke situaties:
-
-**Check-item voor een ontbrekend bestand:**
-```json
-{
-  "name": "Nieuws bulletin",
-  "path": "/data/news.mp3",
-  "max_age_minutes": 10,
-  "file_exists": false,
-  "is_stale": true,
-  "in_alert": true,
-  "error_kind": "not_found"
-}
-```
-
-**Check-item bij een stat-fout (bijvoorbeeld geen rechten):**
-```json
-{
-  "name": "Nieuws bulletin",
-  "path": "/data/news.mp3",
-  "max_age_minutes": 10,
-  "file_exists": null,
-  "is_stale": true,
-  "in_alert": true,
-  "error": "stat /data/news.mp3: permission denied",
-  "error_kind": "permission_denied"
-}
-```
-
-**Check-item bij een algemene stat-fout (bijvoorbeeld een I/O-fout):**
-```json
-{
-  "name": "Nieuws bulletin",
-  "path": "/data/news.mp3",
-  "max_age_minutes": 10,
-  "file_exists": null,
-  "is_stale": true,
-  "in_alert": true,
-  "error": "stat /data/news.mp3: input/output error",
-  "error_kind": "stat_error"
-}
-```
-
-**Check-item bij een stat-time-out (bijvoorbeeld een vastgelopen NFS-mount):**
-```json
-{
-  "name": "Nieuws bulletin",
-  "path": "/data/news.mp3",
-  "max_age_minutes": 10,
-  "is_stale": true,
-  "in_alert": true,
-  "error": "stat timeout after 5s",
-  "error_kind": "stat_timeout"
-}
-```
-
-**Velden op topniveau:**
-- `running`: Of er op dit moment een run bezig is.
-- `run_id`: Monotone server-side identifier van de huidige of meest recent gestarte run (`0` als de service nog nooit heeft gedraaid).
-- `completed_run_id`: Identifier van de run waarvan de resultaten zichtbaar zijn in `checks` en `last_check_at`. Zie het pollingrecept hieronder.
-- `started_at`: Starttijd van de huidige of meest recente run.
-- `last_check_at`: Eindtijd van de meest recente run.
-- `interval_seconds`: Geconfigureerd pollinginterval in seconden (standaard 60).
-- `checks`: Array met resultaten per bestand.
-
-**Velden per check:**
-- `name`: Optionele weergavenaam uit de configuratie.
-- `path`: Bestandspad op schijf.
-- `max_age_minutes`: Maximaal toegestane leeftijd.
-- `file_exists`: Of het bestand bestaat (`true`, `false`, of `null` bij fouten).
-- `file_age_minutes`: Leeftijd in minuten (ontbreekt als het bestand niet bestaat of niet bereikbaar is).
-- `last_modified`: Laatste wijzigingstijd (ontbreekt als het bestand niet bestaat of niet bereikbaar is).
-- `is_stale`: Of het bestand te oud is of niet bereikbaar is.
-- `in_alert`: Of voor dit bestand momenteel een alert actief is. Buiten de geconfigureerde `active_window` is dit altijd `false`, ook als `is_stale` `true` is.
-- `error`: Leesbare foutmelding bij toegangsproblemen (ontbreekt bij normaal gebruik).
-- `error_kind`: Classificatie van het fouttype: `""` (succes), `not_found`, `permission_denied`, `stat_timeout` of `stat_error`.
-
-> [!NOTE]
-> Het veld `file_exists` is nullable: `true` = bestand bestaat, `false` = bestand niet gevonden, `null` = onbekend (bijvoorbeeld bij een permissiefout). Gebruik het veld `error` voor details als `file_exists` `null` is.
-
-### Handmatig een controle starten
-
-Start een controle op de achtergrond. Handig tijdens configuratie of storingsonderzoek, zodat operators niet hoeven te wachten op de volgende geplande controle.
-
-**Endpoint:** `POST /api/file-monitor/check`
-**Authenticatie:** Vereist
-
-**Foutresponse indien uitgeschakeld:** `404 Not Found`
-```json
-{
-  "error": "file monitor is not enabled"
-}
-```
-
-**Response:** `202 Accepted`
-```json
-{
-  "message": "File monitor check started",
-  "run_id": 43,
-  "check": "/api/file-monitor/status"
-}
-```
-
-**Error response:** `409 Conflict`
-```json
-{
-  "error": "file monitor check already running"
-}
-```
-
-De handmatige trigger en de cronjob gebruiken dezelfde single-flight gate. Daardoor geeft een handmatige call `409` terug zolang een geplande run nog bezig is, en andersom. Dubbele alert- of herstelmails kunnen dus niet ontstaan.
-
-**Pollingrecept (server-side correlatie, zonder afhankelijkheid van systeemtijd):**
-
-1. Lees `run_id` uit de response van `POST /check` en noem die waarde `myRunID`.
-2. Poll `GET /api/file-monitor/status`.
-3. De run is klaar **en de zichtbare checks zijn door jouw run geproduceerd** zodra `completed_run_id >= myRunID && running == false`.
-
-Strikte gelijkheid (`completed_run_id == myRunID`) bevestigt dat de zichtbare `checks` exact door jouw run zijn geproduceerd. Een hogere waarde betekent dat een latere run, bijvoorbeeld via cron, jouw run heeft ingehaald. Dat is prima voor de vraag "is het systeem nu gezond?", maar verliest de exacte correlatie. Gebruik voor nauwkeurige troubleshooting daarom de strikte vergelijking en houd rekening met een mogelijke race.
-
-### Integratie met het gedetailleerde health-endpoint (bestandsbewaking)
-
-Als de bestandsbewaking is ingeschakeld, geeft het gedetailleerde health-endpoint (`GET /api/health`) een extra `file_monitor`-blok terug. De publieke `GET /health` blijft bewust minimaal en bevat dit blok niet:
+Start een controle van alle geconfigureerde bestanden. Handmatige en geplande controles kunnen niet tegelijk draaien.
 
 ```json
 {
-  "status": "degraded",
-  "version": "1.0.0",
-  "database": "aeron",
-  "database_status": "connected",
-  "file_monitor": {
-    "enabled": true,
-    "checks_total": 2,
-    "checks_stale": 1,
-    "checks_alerting": 1
+  "success": true,
+  "data": {
+    "message": "File monitor check started",
+    "run_id": 43,
+    "check": "/api/file-monitor/status"
   }
 }
 ```
 
-- `checks_stale`: ruwe telling van bestanden die te oud zijn of niet bereikbaar zijn, inclusief bestanden buiten hun `active_window`.
-- `checks_alerting`: window-aware telling; bestanden buiten hun `active_window` tellen hier niet mee. Wanneer de database verbonden is en `checks_alerting > 0`, wordt de algemene status van `GET /api/health` `"degraded"` (`"unhealthy"` heeft altijd prioriteit). Een bestand dat 's nachts verouderd raakt maar alleen overdag wordt ververst, telt hier dus niet mee.
+Status `202` betekent gestart; `409` betekent dat al een controle draait.
 
----
-
-## Aanwezigheidscontrole
-
-Waar de [bestandsbewaking](#bestandsbewaking) een vaste lijst configuratiebestanden in de gaten houdt, werkt de aanwezigheidscontrole **op basis van de database**: hij leest de playlist uit de Aeron-database en controleert of de bijbehorende audiobestanden daadwerkelijk op schijf staan. Zo signaleer je ontbrekende of verplaatste tracks voordat ze worden uitgezonden.
-
-De controle draait asynchroon: een `POST` start een run op de achtergrond en geeft direct een `run_id` terug; het resultaat lees je op met `GET .../status`.
-
-### Hoe een databasereferentie wordt gematcht
-
-In de Aeron-database staan audiopaden als **Windows-paden** (bijv. `O:\Audio\85\Artist - Title.wav`), terwijl de Toolbox doorgaans op Linux draait. De controle vertaalt een referentie in deze volgorde:
-
-1. **Drive-mount (exact pad).** Met `drive_mounts` wordt een Windows-driveletter vertaald naar een hostmap (bijv. `O:` → `/mnt/aeron-o`). De volledige mapstructuur blijft behouden en het exacte pad wordt direct gecontroleerd. Dit is de snelste en meest eenduidige strategie.
-2. **Bestandsnaam-index (fallback).** De mappen in `search_dirs` worden recursief geïndexeerd. Lukt het exacte pad niet, dan wordt gematcht op bestandsnaam — eerst inclusief extensie, daarna extensie-onafhankelijk (een `.wav` in de database matcht dan ook een `.flac` op schijf). Er wordt uitsluitend op de bestandsnaam (`audio.name`) gematcht, niet op losse `artist`/`title`-metadata.
-
-> **Kort:** `drive_mounts` controleert of het bestand op de **exacte plek** uit de database staat (volledig pad, alleen de driveletter wordt vertaald); `search_dirs` controleert of een bestand met die **naam** überhaupt ergens onder de opgegeven mappen bestaat (de map uit de database wordt genegeerd).
-
-Matchen gebeurt standaard hoofdletter-ongevoelig (`case_insensitive`), omdat de bron Windows is. Voicetracks worden standaard overgeslagen (`include_voicetracks`). Er wordt **geen** vaste `.wav`-aanname gedaan.
-
-**Statussen per item:**
-- `present` — er is precies één bestand gevonden.
-- `missing` — geen bestand gevonden.
-- `ambiguous` — meerdere bestanden matchen de referentie (bijv. dezelfde bestandsnaam in verschillende mappen).
-- `no_reference` — het playlistitem heeft geen bruikbare referentie (bijv. de track bestaat niet meer in de database).
-- `stat_error` — het bestand kon niet gecontroleerd worden (time-out, geen rechten, mount onbereikbaar).
-
-### Aanwezigheidscontrole starten
-
-Start een controle op de achtergrond voor de opgegeven scope.
-
-**Endpoint:** `POST /api/media/files/check`
-**Authenticatie:** Vereist
-
-**Queryparameters (optioneel):**
-- `date=YYYY-MM-DD` — controleer één dag. Zonder datumparameters wordt **vandaag** gecontroleerd (zoals bij `/api/playlist`).
-- `from=YYYY-MM-DD&to=YYYY-MM-DD` — controleer een datumbereik. Het bereik is begrensd tot `media_file_check.max_range_days` (standaard 31) om enorme scans te voorkomen.
-- `block_id={uuid}` — controleer één playlistblok (heeft voorrang op datumfilters).
-- `limit={n}` — beperk het aantal te controleren items.
-- `include_voicetracks=true` — neem voicetracks mee (standaard uitgesloten).
-
-**Foutresponse indien uitgeschakeld:** `404 Not Found`
-```json
-{
-  "error": "media file check is not enabled"
-}
-```
-
-**Response:** `202 Accepted`
-```json
-{
-  "message": "Media file check started",
-  "run_id": 1,
-  "check": "/api/media/files/check/status"
-}
-```
-
-**Error response:** `409 Conflict`
-```json
-{
-  "error": "media file check already running"
-}
-```
-
-**Validatiefout (bijv. ongeldige datum of te groot bereik):** `400 Bad Request`
-```json
-{
-  "error": "range: date range exceeds the maximum of 31 days"
-}
-```
-
-De handmatige trigger en de geplande cronrun delen dezelfde single-flight gate; ze kunnen elkaar dus niet overlappen.
-
-### Resultaat van de aanwezigheidscontrole
-
-Toont de runstatus plus het resultaat van de meest recente run.
-
-**Endpoint:** `GET /api/media/files/check/status`
-**Authenticatie:** Vereist
-
-**Response:** `200 OK`
-```json
-{
-  "running": false,
-  "run_id": 1,
-  "completed_run_id": 1,
-  "started_at": "2026-06-29T06:00:00Z",
-  "result": {
-    "checked_at": "2026-06-29T06:00:01Z",
-    "scope": {
-      "date": "2026-06-29",
-      "exclude_voicetracks": true
-    },
-    "summary": {
-      "total": 713,
-      "present": 709,
-      "missing": 2,
-      "ambiguous": 1,
-      "no_reference": 0,
-      "errors": 1
-    },
-    "items": [
-      {
-        "trackid": "af042d85-55b2-4d26-9093-d1bb7278c607",
-        "artist": "Robin S",
-        "tracktitle": "Luv 4 Luv",
-        "start_time": "2026-06-29T00:09:05",
-        "block_id": "c087211a-b4ac-47c8-af26-3aa6ef40b870",
-        "block": "",
-        "status": "missing",
-        "db_reference": "O:\\Audio\\93\\Robin S - 1993 Luv 4 Luv.wav",
-        "checked_paths": [
-          "/mnt/aeron-o/Audio/93/Robin S - 1993 Luv 4 Luv.wav",
-          "search_dirs (by name): Robin S - 1993 Luv 4 Luv.wav"
-        ],
-        "matches": []
-      }
-    ]
-  }
-}
-```
-
-**Velden op topniveau:**
-- `running`: Of er op dit moment een run bezig is.
-- `run_id`: Monotone identifier van de huidige of meest recent gestarte run (`0` als de service nog nooit heeft gedraaid).
-- `completed_run_id`: Identifier van de run waarvan het resultaat zichtbaar is in `result`.
-- `started_at`: Starttijd van de huidige of meest recente run.
-- `result`: Het resultaat van de meest recente voltooide run (`null` tot de eerste run klaar is).
-
-**Velden in `result`:**
-- `checked_at`: Tijdstip waarop de run de items verwerkte.
-- `scope`: De toegepaste scope (`date`, `from`, `to`, `block_id`, `lookahead_days`, `limit`, `exclude_voicetracks`).
-- `summary`: Tellingen per status (`total`, `present`, `missing`, `ambiguous`, `no_reference`, `errors`).
-- `items`: Resultaat per playlistitem.
-- `error`: Aanwezig wanneer de run zelf mislukte (bijvoorbeeld een databasefout).
-
-**Velden per item:**
-- `trackid`, `artist`, `tracktitle`, `start_time`, `block_id`, `block`: Playlist- en trackgegevens.
-- `status`: Een van `present`, `missing`, `ambiguous`, `no_reference`, `stat_error`.
-- `db_reference`: De referentie uit de database die gebruikt is.
-- `checked_paths`: De concrete paden en zoekacties die zijn geprobeerd.
-- `matches`: De gevonden bestanden op schijf (één bij `present`, meerdere bij `ambiguous`).
-- `match_type`: Hoe gematcht is: `exact_path`, `filename` of `filename_noext` (ontbreekt bij geen match).
-- `error`: Foutmelding bij `stat_error` (ontbreekt in andere gevallen).
-
-**Pollingrecept:** lees `run_id` uit de `POST`-response (`myRunID`), poll daarna `GET .../status` tot `completed_run_id >= myRunID && running == false`.
-
-### Geplande controle en e-mailnotificaties
-
-Met `media_file_check.scheduler` draait de controle automatisch op een cron-schema. De geplande run controleert standaard **vandaag**; met `media_file_check.lookahead_days` kun je vooruitkijken — bij `lookahead_days: 2` controleert de run vandaag t/m overmorgen (inclusief), zodat ontbrekende bestanden opvallen vóórdat ze worden uitgezonden. `0` (standaard) is alleen vandaag. Handmatige API-runs gebruiken hun eigen `from`/`to`-bereik en negeren deze instelling. Als e-mailnotificaties zijn geconfigureerd, stuurt een geplande run een alert wanneer er problemen (`missing`, `ambiguous` of `stat_error`) worden gevonden, en een herstelmelding zodra een volgende run weer schoon is. Handmatige API-runs versturen geen e-mail, zodat ad-hoc scopes de alert-status niet verstoren.
-
-### Integratie met het gedetailleerde health-endpoint (aanwezigheidscontrole)
-
-Als de aanwezigheidscontrole is ingeschakeld, geeft `GET /api/health` een extra `media_file_check`-blok terug. De publieke `GET /health` blijft bewust minimaal en bevat dit blok niet:
+### `GET /api/file-monitor/status`
 
 ```json
 {
-  "status": "degraded",
-  "version": "1.0.0",
-  "database": "aeron",
-  "database_status": "connected",
-  "media_file_check": {
-    "enabled": true,
-    "problems": 3
-  }
-}
-```
-
-- `problems`: aantal `missing`-, `ambiguous`- en `stat_error`-items in de meest recente **geplande** run. Dit telt alleen mee voor de algemene status `"degraded"` wanneer de geplande controle (`scheduler.enabled`) aanstaat, zodat ad-hoc API-runs met een afwijkende scope die status niet beïnvloeden.
-
----
-
-## Notificaties
-
-### Test e-mail versturen
-
-Verstuurt een test e-mail om de notificatieconfiguratie te valideren. Controleert achtereenvolgens of de configuratie geldig is, of authenticatie bij Microsoft Graph slaagt, en verstuurt vervolgens een testbericht.
-
-**Endpoint:** `POST /api/notifications/test-email`
-**Authenticatie:** Vereist
-
-**Response:** `200 OK`
-```json
-{
-  "message": "Test email sent successfully"
-}
-```
-
-**Foutresponses:**
-
-`400 Bad Request` - Configuratie ongeldig:
-```json
-{
-  "error": "Notification configuration invalid: ..."
-}
-```
-
-`502 Bad Gateway` - Authenticatie mislukt:
-```json
-{
-  "error": "Authentication failed: ..."
-}
-```
-
-`502 Bad Gateway` - Verzenden mislukt:
-```json
-{
-  "error": "Failed to send test email: ..."
-}
-```
-
----
-
-## Afbeeldingsverwerking
-
-### Afbeeldingsoptimalisatie
-
-Alle geüploade afbeeldingen worden automatisch:
-1. Gevalideerd op formaat (JPEG, PNG)
-2. Gecontroleerd op minimumafmetingen (optioneel, configureerbaar)
-3. Geschaald naar maximumafmetingen (configureerbaar, standaard: 640×640)
-4. Geconverteerd naar geoptimaliseerde JPEG
-5. Alleen opgeslagen als de geoptimaliseerde versie kleiner is dan het origineel
-
-### Ondersteunde afbeeldingsbronnen
-
-1. **URL-download**: Geef een URL op om de afbeelding te downloaden
-   - Ondersteunt HTTPS-URL's
-   - Valideert URL-veiligheid
-   - Download met time-out van 30 seconden
-
-2. **Base64-upload**: Verstuur base64-gecodeerde afbeeldingsdata
-   - Ondersteunt standaard base64-codering
-   - Maximumgrootte beperkt door verzoeklimieten
-
-### Afbeeldingsvalidatieregels
-
-- **Minimumafmetingen**: Optioneel configureerbaar via `reject_smaller`
-- **Maximumafmetingen**: Configureerbaar (standaard: 640×640)
-- **Toegestane formaten**: JPEG, PNG
-- **Beeldverhouding**: Wordt behouden tijdens schalen
-- **Kwaliteit**: Configureerbare JPEG-kwaliteit (standaard: 85)
-
----
-
-## Bedrijfsregels
-
-### Afbeeldingsverwerking
-- Afbeeldingen worden automatisch geoptimaliseerd voor gebruik in Aeron
-- PNG-afbeeldingen worden geconverteerd naar JPEG
-- Alleen de geoptimaliseerde versie wordt opgeslagen als deze kleiner is dan het origineel
-
-### UUID-validatie
-- Alle artiest- en track-ID's moeten geldige UUID's zijn (versie 4-formaat)
-- Ongeldige UUID's resulteren in 400 Bad Request met Engelse foutmelding
-- Voorbeeld geldig UUID: `123e4567-e89b-12d3-a456-426614174000`
-
-### Afbeeldingsopslag
-- Afbeeldingen worden opgeslagen als BYTEA in PostgreSQL
-- Originele afbeeldingen worden niet bewaard
-- Uitsluitend geoptimaliseerde versies worden opgeslagen
-
----
-
-## Frequentiebeperking
-
-Geen ingebouwde frequentiebeperking. Implementeer deze indien nodig op proxy- of load-balancerniveau.
-
----
-
-## Gebruiksvoorbeelden
-
-### cURL-voorbeelden
-
-**Artiestafbeelding uploaden via URL:**
-```bash
-curl -X POST "http://localhost:8080/api/artists/123e4567-e89b-12d3-a456-426614174000/image" \
-  -H "X-API-Key: jouw-api-sleutel" \
-  -H "Content-Type: application/json" \
-  -d '{"url":"https://voorbeeld.nl/artiest.jpg"}'
-```
-
-**Trackafbeelding ophalen:**
-```bash
-curl -X GET "http://localhost:8080/api/tracks/456e7890-e89b-12d3-a456-426614174000/image" \
-  -H "X-API-Key: jouw-api-sleutel" \
-  --output track-afbeelding.jpg
-```
-
-**Alle artiestafbeeldingen verwijderen (let op: onomkeerbaar!):**
-```bash
-curl -X DELETE "http://localhost:8080/api/artists/bulk-delete" \
-  -H "X-API-Key: jouw-api-sleutel" \
-  -H "X-Confirm-Bulk-Delete: DELETE ALL"
-```
-
-**Playlist voor vandaag ophalen:**
-```bash
-curl -X GET "http://localhost:8080/api/playlist" \
-  -H "X-API-Key: jouw-api-sleutel"
-```
-
-### Python-voorbeeld
-
-```python
-import requests
-import base64
-
-API_KEY = "jouw-api-sleutel"
-BASE_URL = "http://localhost:8080/api"
-
-headers = {"X-API-Key": API_KEY}
-
-# Afbeelding uploaden vanuit bestand
-with open("albumhoes.jpg", "rb") as f:
-    image_data = base64.b64encode(f.read()).decode()
-
-response = requests.post(
-    f"{BASE_URL}/tracks/456e7890-e89b-12d3-a456-426614174000/image",
-    headers=headers,
-    json={"image": image_data}
-)
-
-if response.status_code == 200:
-    result = response.json()
-    print(f"Afbeelding geoptimaliseerd: {result['savings_percent']}% ruimtebesparing")
-```
-
-### JavaScript/Node.js-voorbeeld
-
-```javascript
-const axios = require('axios');
-const fs = require('fs');
-
-const API_KEY = 'jouw-api-sleutel';
-const BASE_URL = 'http://localhost:8080/api';
-
-// Artiestafbeelding uploaden via URL
-async function uploadArtiestAfbeelding(artistId, imageUrl) {
-    try {
-        const response = await axios.post(
-            `${BASE_URL}/artists/${artistId}/image`,
-            { url: imageUrl },
-            { headers: { 'X-API-Key': API_KEY } }
-        );
-        console.log('Upload succesvol:', response.data);
-    } catch (error) {
-        console.error('Upload mislukt:', error.response.data);
-    }
-}
-
-// Playlisttracks ophalen met filters
-async function haalPlaylistTracksOp(blockId) {
-    try {
-        const response = await axios.get(
-            `${BASE_URL}/playlist`,
-            {
-                params: {
-                    block_id: blockId,
-                    track_image: 'false',
-                    limit: 50
-                },
-                headers: { 'X-API-Key': API_KEY }
-            }
-        );
-        console.log(`${response.data.length} tracks zonder afbeeldingen gevonden`);
-    } catch (error) {
-        console.error('Verzoek mislukt:', error.response.data);
-    }
-}
-```
-
----
-
-## Configuratie
-
-Het gedrag van de API kan worden geconfigureerd via `config.json`:
-
-```json
-{
-  "database": {
-    "host": "localhost",
-    "port": "5432",
-    "user": "aeron",
-    "password": "",
-    "name": "aeron",
-    "schema": "aeron",
-    "sslmode": "disable",
-    "max_open_conns": 25,
-    "max_idle_conns": 5,
-    "conn_max_lifetime_minutes": 5
-  },
-  "image": {
-    "target_width": 640,
-    "target_height": 640,
-    "quality": 85,
-    "reject_smaller": false,
-    "max_image_download_size_bytes": 52428800,
-    "max_pixels": 25000000
-  },
-  "api": {
-    "enabled": true,
-    "keys": ["jouw-veilige-api-sleutel-hier"],
-    "request_timeout_seconds": 30,
-    "upload_read_timeout_seconds": 180,
-    "read_timeout_seconds": 30,
-    "write_timeout_seconds": 60,
-    "idle_timeout_seconds": 120,
-    "max_upload_body_bytes": 73400320,
-    "rate_limit_enabled": false,
-    "rate_limit_requests": 120,
-    "rate_limit_window_seconds": 60
-  },
-  "maintenance": {
-    "bloat_threshold": 10.0,
-    "dead_tuple_threshold": 10000,
-    "scheduler": {
-      "enabled": false,
-      "schedule": "0 4 * * 0"
-    }
-  },
-  "backup": {
-    "enabled": false,
-    "path": "./backups",
-    "retention_days": 30,
-    "max_backups": 10,
-    "default_compression": 9,
-    "timeout_minutes": 30,
-    "pg_dump_path": "",
-    "pg_restore_path": "",
-    "scheduler": {
-      "enabled": false,
-      "schedule": "0 3 * * *"
-    },
-    "s3": {
-      "enabled": false,
-      "bucket": "mijn-backups",
-      "region": "eu-west-1",
-      "endpoint": "",
-      "access_key_id": "",
-      "secret_access_key": "",
-      "path_prefix": "backups/",
-      "force_path_style": false
-    }
-  },
-  "file_monitor": {
-    "enabled": false,
+  "success": true,
+  "data": {
+    "running": false,
+    "run_id": 43,
+    "completed_run_id": 43,
+    "started_at": "2026-08-10T10:29:55Z",
+    "last_check_at": "2026-08-10T10:30:00Z",
     "interval_seconds": 60,
     "checks": [
       {
-        "name": "Nieuws bulletin",
+        "name": "Nieuwsbulletin",
         "path": "/data/news.mp3",
         "max_age_minutes": 30,
-        "stat_timeout_seconds": 5,
-        "active_window": "06:00-22:00"
-      },
-      {
-        "name": "Weer",
-        "path": "/data/weather.mp3",
-        "max_age_minutes": 60,
-        "stat_timeout_seconds": 5
+        "file_exists": true,
+        "file_age_minutes": 7.5,
+        "last_modified": "2026-08-10T10:22:30Z",
+        "is_stale": false,
+        "in_alert": false
       }
     ]
-  },
-  "notifications": {
-    "email": {
-      "tenant_id": "",
-      "client_id": "",
-      "client_secret": "",
-      "from_address": "",
-      "recipients": ""
-    }
-  },
-  "log": {
-    "level": "info",
-    "format": "text"
   }
 }
 ```
 
-**Instellingen voor afbeeldingen:**
-- `image.max_image_download_size_bytes`: Maximale downloadgrootte voor externe image-URL's (standaard 52428800, 50 MiB).
-- `image.max_pixels`: Maximale gedecodeerde afbeeldingsgrootte in pixels vóór optimalisatie (standaard 25000000). Grotere afbeeldingen worden na `DecodeConfig` afgewezen voordat de volledige pixelbuffer wordt gedecodeerd.
+| Veld | Betekenis |
+|---|---|
+| `running` | Of nu een run draait |
+| `run_id` | Laatst gestarte run; `0` vóór de eerste run |
+| `completed_run_id` | Run die de zichtbare `checks` heeft geproduceerd |
+| `started_at`, `last_check_at` | Starttijd van de laatste run en referentietijd van de laatste controle; ontbreken vóór de eerste run |
+| `interval_seconds` | Geconfigureerd automatisch controle-interval |
+| `checks` | Resultaat per bestand |
 
-**Instellingen voor API-server en uploads:**
-- `api.enabled`: Schakel API-key-authenticatie in.
-- `api.keys`: Toegestane API-sleutels wanneer authenticatie is ingeschakeld.
-- `api.request_timeout_seconds`: Maximale duur voor een normale afgehandelde API-request binnen de router
-  (standaard 30).
-- `api.upload_read_timeout_seconds`: Maximale tijd voor het lezen van image upload request bodies
-  (standaard 180). Uploadroutes krijgen daarna nog de normale `request_timeout_seconds` voor verwerking.
-- `api.read_timeout_seconds`: Maximale tijd voor het lezen van request headers en body (standaard 30).
-- `api.write_timeout_seconds`: Maximale tijd voor het schrijven van de response (standaard 60).
-- `api.idle_timeout_seconds`: Maximale idle tijd voor keep-alive verbindingen (standaard 120).
-- `api.max_upload_body_bytes`: Maximale JSON request-body voor image upload endpoints
-  (standaard 73400320, ongeveer 70 MiB).
-- `api.rate_limit_enabled`: Schakel fixed-window rate limiting in voor API-endpoints behalve de publieke health-route.
-- `api.rate_limit_requests`: Aantal toegestane requests per bucket per window (standaard 120).
-- `api.rate_limit_window_seconds`: Lengte van het rate-limitwindow in seconden (standaard 60).
+Checkvelden:
 
-Voor deze API-instellingen betekent `0` of weglaten: gebruik de applicatiestandaard. Het betekent dus niet "onbeperkt".
+| Veld | Betekenis |
+|---|---|
+| `name` | Optionele naam uit de configuratie |
+| `path`, `max_age_minutes` | Gecontroleerd pad en leeftijdsgrens |
+| `file_exists` | `true`, `false`, of `null` wanneer bestaan niet kon worden vastgesteld |
+| `file_age_minutes`, `last_modified` | Alleen aanwezig bij een bereikbaar bestand |
+| `is_stale` | Bestand is te oud, ontbreekt of kon niet worden gecontroleerd |
+| `in_alert` | Alert is actief; buiten `active_window` altijd `false` |
+| `error` | Technische bestandsfout, indien van toepassing |
+| `error_kind` | `not_found`, `permission_denied`, `stat_timeout` of `stat_error`; ontbreekt bij succes |
 
-**Instellingen voor bestandsbewaking:**
-- `file_monitor.enabled`: Schakel de bestandsbewaking in.
-- `file_monitor.interval_seconds`: Pollinginterval in seconden (standaard 60; `0` of weglaten = standaard).
-- `file_monitor.checks`: Array met te bewaken bestanden (minimaal 1 item vereist wanneer ingeschakeld).
-  - `name`: Optionele weergavenaam voor notificaties.
-  - `path`: Absoluut pad naar het bestand.
-  - `max_age_minutes`: Maximaal toegestane leeftijd in minuten (minimaal 1).
-  - `stat_timeout_seconds`: Maximale tijd in seconden voor `os.Stat` (standaard 5; `0` of weglaten = standaard). Beschermt tegen vastgelopen NFS- of SMB-mounts.
-  - `active_window`: Optioneel tijdvenster `"HH:MM-HH:MM"` waarin alerts en de degradatie in `GET /api/health` actief zijn. Buiten dit venster blijft `is_stale` zichtbaar in `GET /api/file-monitor/status`, maar wordt er geen alert- of herstelmail verstuurd en telt dit bestand niet mee als degraded-signaal voor `GET /api/health`. Een eindtijd vóór de starttijd betekent dat het venster over middernacht heen loopt, bijvoorbeeld `"22:00-06:00"`. Gelijke start- en eindtijd zijn ongeldig; laat het veld weg voor altijd actief.
+De eerste controle na een herstart meet wel, maar verstuurt nog geen meldingen. `is_stale` blijft buiten een `active_window` zichtbaar; alleen `in_alert`, e-mail en de algemene healthstatus worden daar onderdrukt.
 
-Het controle-interval staat los van `max_age_minutes` en wordt geconfigureerd via `interval_seconds` (standaard 60 s).
+## Aanwezigheidscontrole van playlist-audio
 
-> [!IMPORTANT]
-> `active_window` wordt geïnterpreteerd in de lokale tijdzone die wordt bepaald door de `TZ`-omgevingsvariabele. Stel `TZ` in productie consequent in, zodat het venster werkt zoals de operator verwacht.
+Deze endpoints bestaan alleen als `media_file_check.enabled` aanstaat; anders volgt `404`.
 
-Zie [config.example.json](config.example.json) voor alle beschikbare opties.
+De controle leest audioreferenties uit de playlist. `drive_mounts` vertaalt eerst een Windows-driveletter naar een exact hostpad. Als dat pad niet bestaat, doorzoekt `search_dirs` een bestandsnaamindex, eerst met en daarna zonder extensie. Een fout bij het controleren van het exacte pad levert `stat_error` op zonder fallback. Matching is standaard hoofdletterongevoelig.
 
----
+### `POST /api/media/files/check`
 
-## Databaseschema
+Start een controle op de achtergrond. Scopeprioriteit: `block_id`, daarna `date`, daarna `from`/`to`, anders vandaag.
 
-De API werkt met de volgende Aeron PostgreSQL-tabellen:
+| Parameter | Gedrag |
+|---|---|
+| `block_id` | Eén playlistblok; moet een UUID zijn |
+| `date` | Eén datum als `YYYY-MM-DD` |
+| `from`, `to` | Inclusief datumbereik; één open grens is toegestaan |
+| `limit` | Niet-negatief maximum; `0` of weglaten betekent geen limiet |
+| `include_voicetracks` | Alleen `true` neemt voicetracks mee |
 
-```sql
-CREATE TABLE {schema}.artist (
-    artistid UUID PRIMARY KEY,
-    artist VARCHAR NOT NULL,
-    picture BYTEA
-);
+Als beide bereikgrenzen staan, mag het inclusieve bereik niet groter zijn dan `media_file_check.max_range_days`.
 
-CREATE TABLE {schema}.track (
-    titleid UUID PRIMARY KEY,
-    tracktitle VARCHAR NOT NULL,
-    artist VARCHAR,
-    artistid UUID,
-    picture BYTEA,
-    exporttype INTEGER
-);
-
-CREATE TABLE {schema}.playlistitem (
-    id SERIAL PRIMARY KEY,
-    titleid UUID,
-    startdatetime TIMESTAMP,
-    blockid UUID
-);
-
-CREATE TABLE {schema}.playlistblock (
-    blockid UUID PRIMARY KEY,
-    name VARCHAR,
-    startdatetime TIMESTAMP,
-    enddatetime TIMESTAMP
-);
+```json
+{
+  "success": true,
+  "data": {
+    "message": "Media file check started",
+    "run_id": 12,
+    "check": "/api/media/files/check/status"
+  }
+}
 ```
 
-## Belangrijke opmerkingen
+Status `202` betekent gestart; ongeldige parameters geven `400` en een al lopende controle `409`.
 
-- UUID's zijn hoofdletterongevoelig
-- Het contenttype van afbeeldingen wordt automatisch gedetecteerd
-- De API maakt gebruik van connection pooling voor optimale databaseprestaties
-- Runtime user-facing messages, including API responses and email notifications, are in English.
+### `GET /api/media/files/check/status`
+
+| Veld | Betekenis |
+|---|---|
+| `running` | Of nu een run draait |
+| `run_id` | Laatst gestarte run; `0` vóór de eerste run |
+| `completed_run_id` | Run die `result` heeft geproduceerd |
+| `started_at` | Starttijd; ontbreekt vóór de eerste run |
+| `result` | Laatste voltooide resultaat; `null` vóór de eerste voltooide run |
+
+`result` bevat:
+
+| Veld | Betekenis |
+|---|---|
+| `checked_at` | Verwerkingstijdstip |
+| `scope` | Kan de effectieve `date`, `from`, `to`, `block_id`, `lookahead_days`, `limit` en `exclude_voicetracks` bevatten |
+| `summary` | `total`, `present`, `missing`, `ambiguous`, `no_reference` en `errors` |
+| `items` | Resultaat per playlistitem |
+| `error` | Fout van de hele run, bijvoorbeeld bij ophalen of indexeren |
+
+Itemvelden:
+
+| Veld | Betekenis |
+|---|---|
+| `trackid`, `artist`, `tracktitle` | Trackgegevens |
+| `start_time`, `block_id`, `block` | Playlistgegevens |
+| `status` | `present`, `missing`, `ambiguous`, `no_reference` of `stat_error` |
+| `db_reference` | Gebruikte Aeron-referentie |
+| `checked_paths` | Geprobeerde paden en zoekacties |
+| `matches` | Gevonden bestanden |
+| `match_type` | `exact_path`, `filename` of `filename_noext`; ontbreekt zonder match |
+| `error` | Aanwezig bij `stat_error` |
+
+| Status | Betekenis |
+|---|---|
+| `present` | Precies één bestand gevonden |
+| `missing` | Geen bestand gevonden |
+| `ambiguous` | Meerdere bestanden gevonden |
+| `no_reference` | Geen bruikbare audioreferentie in Aeron |
+| `stat_error` | Pad of zoekindex kon niet betrouwbaar worden gecontroleerd |
+
+Geplande runs kunnen met `lookahead_days` vooruitkijken en meldingen versturen. Handmatige runs versturen geen e-mail en beïnvloeden `GET /api/health` niet.
+
+## Notificaties
+
+### `POST /api/notifications/test-email`
+
+Valideert de Microsoft Graph-configuratie en verstuurt een testmail.
+
+`200 OK`:
+
+```json
+{
+  "success": true,
+  "data": {
+    "message": "Test email sent successfully"
+  }
+}
+```
+
+Mogelijke fouten:
+
+| Code | `error` |
+|---|---|
+| `400` | `Notification configuration invalid: ...` |
+| `502` | `Authentication with mail provider failed` |
+| `502` | `Failed to send test email` |
+
+## Configuratie
+
+[`config.example.json`](config.example.json) bevat alle opties. API-relevant zijn vooral:
+
+| Sectie | Bepaalt |
+|---|---|
+| `api` | Authenticatie, rate limiting, time-outs en uploadlimiet |
+| `image` | Afmetingen, JPEG-kwaliteit, minimumgrootte en download-/pixellimieten |
+| `maintenance` | Drempels, querytekst en geplande databasecontrole |
+| `backup` | Beschikbaarheid, opslag, retentie, compressie, planning en S3 |
+| `file_monitor` | Bestanden, leeftijdsgrenzen, actieve tijdvensters en interval |
+| `media_file_check` | Mounts, zoekmappen, matching, bereik en planning |
+| `notifications` | Microsoft Graph-afzender en ontvangers |
+
+Cron-schema's en `active_window` gebruiken de lokale tijdzone van het proces. Stel in Docker daarom `TZ`, bijvoorbeeld `TZ=Europe/Amsterdam`.
