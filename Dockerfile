@@ -36,9 +36,9 @@ LABEL org.opencontainers.image.source="https://github.com/oszuidwest/zwfm-aeront
 LABEL org.opencontainers.image.description="Headless REST API toolbox for the Aeron radio automation system"
 LABEL org.opencontainers.image.licenses="MIT"
 
-# Install runtime dependencies (postgresql16-client for pg_dump backup functionality)
+# pg_dump must be at least as new as the PostgreSQL server it backs up.
 RUN apk --no-cache upgrade && \
-    apk --no-cache add ca-certificates tzdata postgresql16-client
+    apk --no-cache add ca-certificates tzdata postgresql18-client
 
 # Create non-root user
 RUN addgroup -g 1000 aeron && \

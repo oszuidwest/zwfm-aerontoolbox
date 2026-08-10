@@ -656,7 +656,7 @@ Bekijk gedetailleerde databasestatistieken inclusief tabelgroottes, bloat-percen
 ```json
 {
   "database_name": "aeron",
-  "database_version": "PostgreSQL 16.1",
+  "database_version": "PostgreSQL 18.1",
   "database_size": "2.45 GB",
   "database_size_bytes": 2630451200,
   "schema_name": "aeron",
@@ -737,7 +737,7 @@ Bij detectie van problemen (hoge bloat, veel connecties, langlopende queries) wo
 > Backup-endpoints zijn alleen beschikbaar indien `backup.enabled: true` in de configuratie.
 
 > [!IMPORTANT]
-> **Systeemvereisten:** Bij het opstarten valideert de applicatie of `pg_dump` en `pg_restore` beschikbaar zijn. Zonder deze tools weigert de applicatie te starten. Zie de README voor installatie-instructies.
+> **Systeemvereisten:** Wanneer `backup.enabled: true`, controleert de applicatie bij het opstarten of `pg_dump` en `pg_restore` beschikbaar zijn. Zonder deze tools weigert de applicatie te starten. Zie de README voor installatie-instructies en versievereisten.
 
 ### Backup workflow
 

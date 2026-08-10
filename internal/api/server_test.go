@@ -367,7 +367,7 @@ func writeExistingToolFile(t *testing.T, name string) string {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), name)
-	if err := os.WriteFile(path, []byte("stub"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("stub"), 0o700); err != nil { //nolint:gosec // G306: test tools must be executable.
 		t.Fatalf("write %s stub: %v", name, err)
 	}
 	return path
