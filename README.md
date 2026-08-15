@@ -44,7 +44,7 @@ go build -o zwfm-aerontoolbox .
 ./zwfm-aerontoolbox -config=config.json -port=8080
 ```
 
-Voor back-ups buiten Docker zijn `pg_dump` en `pg_restore` nodig van dezelfde of een nieuwere majorversie dan de server; bij het opstarten worden ze gecontroleerd. De Docker-image bevat PostgreSQL-client 18. Andere binaries stel je in met `backup.pg_dump_path` en `backup.pg_restore_path`.
+Voor back-ups buiten Docker zijn `pg_dump` en `pg_restore` nodig van dezelfde of een nieuwere majorversie dan de server; bij het opstarten worden ze gecontroleerd. De Docker-image bevat PostgreSQL-client 17. Andere binaries stel je in met `backup.pg_dump_path` en `backup.pg_restore_path`.
 
 ## Configuratie
 

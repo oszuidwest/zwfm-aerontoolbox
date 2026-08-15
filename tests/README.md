@@ -67,7 +67,7 @@ GitHub Actions automatically:
 ## Test Configuration
 
 The test configuration uses:
-- **Database**: PostgreSQL 18
+- **Database**: PostgreSQL 17
 - **Port**: 5432 (CI) or 5433 (local)
 - **API Keys**: test-api-key-12345, another-test-key-67890
 

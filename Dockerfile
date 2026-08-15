@@ -38,7 +38,7 @@ LABEL org.opencontainers.image.licenses="MIT"
 
 # pg_dump must be at least as new as the PostgreSQL server it backs up.
 RUN apk --no-cache upgrade && \
-    apk --no-cache add ca-certificates tzdata postgresql18-client
+    apk --no-cache add ca-certificates tzdata postgresql17-client
 
 # Create non-root user
 RUN addgroup -g 1000 aeron && \
