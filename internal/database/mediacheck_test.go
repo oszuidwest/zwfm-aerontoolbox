@@ -86,7 +86,7 @@ func TestBuildMediaCheckQuery(t *testing.T) {
 		{
 			name:         "limit is bound last",
 			opts:         MediaCheckOptions{Limit: 50},
-			wantContains: []string{"LIMIT"},
+			wantContains: []string{"LIMIT $2"},
 			wantParams:   []any{types.VoicetrackUserID, 50},
 		},
 	}
@@ -109,8 +109,9 @@ func TestBuildMediaCheckQuery(t *testing.T) {
 				t.Fatalf("BuildMediaCheckQuery: %v", err)
 			}
 
+			lowerQuery := strings.ToLower(query)
 			for _, alias := range mediaCheckSelectAliases {
-				if !strings.Contains(query, alias) {
+				if !strings.Contains(lowerQuery, alias) {
 					t.Errorf("query missing scanned column %q:\n%s", alias, query)
 				}
 			}

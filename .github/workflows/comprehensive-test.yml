@@ -1008,54 +1008,17 @@ jobs:
             exit 1
           fi
 
-      - name: "Backup: Concurrent backup rejected"
-        if: matrix.suite == 'backup'
-        run: |
-          echo "POST /api/db/backup (tweede backup direct na de eerste)"
-          # BackupService.Start claimt het runner-slot synchroon voordat de 202
-          # terugkomt, dus een tweede POST direct erna moet altijd 409 geven.
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
-            -H "X-API-Key: ${{ env.API_KEY }}" \
-            -H 'Content-Type: application/json' \
-            http://localhost:${{ env.API_PORT }}/api/db/backup \
-            -d '{}')
-          if [ "$HTTP_CODE" != "202" ]; then
-            echo "::error::Eerste backup zou 202 moeten geven, kreeg $HTTP_CODE"
-            exit 1
-          fi
-
-          HTTP_CODE=$(curl -s -o /tmp/concurrent_backup.json -w "%{http_code}" -X POST \
-            -H "X-API-Key: ${{ env.API_KEY }}" \
-            -H 'Content-Type: application/json' \
-            http://localhost:${{ env.API_PORT }}/api/db/backup \
-            -d '{}')
-          if [ "$HTTP_CODE" = "409" ] && jq -e '.success == false' /tmp/concurrent_backup.json > /dev/null; then
-            echo "Correct: concurrent backup afgewezen (HTTP 409)"
-          else
-            echo "::error::Verwachtte HTTP 409 met success=false, kreeg HTTP $HTTP_CODE"
-            cat /tmp/concurrent_backup.json
-            exit 1
-          fi
-
-          # Wacht tot backup klaar is
-          for i in {1..60}; do
-            RUNNING=$(curl -s -H "X-API-Key: ${{ env.API_KEY }}" \
-              http://localhost:${{ env.API_PORT }}/api/db/backup/status | jq -r '.data.running')
-            [ "$RUNNING" = "false" ] && break
-            sleep 1
-          done
-
-      - name: "Backup: List backups (2 files)"
+      - name: "Backup: List backups (1 file)"
         if: matrix.suite == 'backup'
         run: |
           echo "GET /api/db/backups"
           RESPONSE=$(curl -s -H "X-API-Key: ${{ env.API_KEY }}" http://localhost:${{ env.API_PORT }}/api/db/backups)
           SUCCESS=$(echo "$RESPONSE" | jq -r '.success')
           COUNT=$(echo "$RESPONSE" | jq -r '.data.total_count')
-          if [ "$SUCCESS" = "true" ] && [ "$COUNT" = "2" ]; then
+          if [ "$SUCCESS" = "true" ] && [ "$COUNT" = "1" ]; then
             echo "Correct: $COUNT backups aanwezig"
           else
-            echo "::error::Verwachtte 2 backups, kreeg $COUNT"
+            echo "::error::Verwachtte 1 backup, kreeg $COUNT"
             echo "Response: $RESPONSE"
             exit 1
           fi
@@ -1613,7 +1576,7 @@ jobs:
             -d "{\"url\":\"${{ env.TEST_IMAGE_URL }}\"}" -m 30 > /tmp/r3.json &
 
           wait
-          if jq -es 'map(.success) | all' /tmp/r1.json /tmp/r2.json /tmp/r3.json > /dev/null; then
+          if jq -es 'length == 3 and (map(.success) | all)' /tmp/r1.json /tmp/r2.json /tmp/r3.json > /dev/null; then
             echo "Alle 3 gelijktijdige uploads succesvol"
           else
             echo "::error::Een of meer gelijktijdige uploads gefaald"

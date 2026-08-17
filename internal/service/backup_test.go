@@ -126,6 +126,19 @@ func createBackupFile(t *testing.T, svc *BackupService, filename, content string
 	}
 }
 
+func TestBackupServiceStartRejectsConcurrentRun(t *testing.T) {
+	svc := newTestBackupService(t)
+	if !svc.runner.TryStart() {
+		t.Fatal("TryStart returned false")
+	}
+	defer svc.runner.Done()
+
+	err := svc.Start(BackupRequest{})
+	if _, ok := errors.AsType[*types.ConflictError](err); !ok {
+		t.Fatalf("Start error = %T %[1]v, want *types.ConflictError", err)
+	}
+}
+
 func TestDeleteTracksS3DeleteAsBackgroundWork(t *testing.T) {
 	store, started, release := newBlockingStore()
 	svc := newTestBackupService(t, withStore(store))

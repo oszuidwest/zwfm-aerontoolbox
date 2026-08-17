@@ -385,20 +385,33 @@ func TestMatch_StatSingleFlightSuccessPath(t *testing.T) {
 
 	flights := new(statFlightGroup)
 	m := buildTestMatcher(t, map[string]string{"O:": dir}, nil, true, withStatFlights(flights))
+	joined := make(chan struct{})
+	m.startStatFlight = func(
+		key string,
+		now time.Time,
+		statFn func() (os.FileInfo, error),
+	) (*statInFlight, bool) {
+		flight, isNew := flights.startOrJoin(key, now, statFn)
+		if !isNew {
+			close(joined)
+		}
+		return flight, isNew
+	}
 
 	input := &matchInput{FilePath: `O:\Audio\hit.wav`}
 	first := make(chan matchOutcome, 1)
 	go func() { first <- m.match(input) }()
 	mustReceive(t, started, "first stat start")
 
-	go func() {
-		time.Sleep(10 * time.Millisecond)
-		release()
-	}()
-	second := m.match(input)
-	firstOut := mustReceive(t, first, "first match outcome")
+	second := make(chan matchOutcome, 1)
+	go func() { second <- m.match(input) }()
+	mustReceive(t, joined, "second match joining stat flight")
+	release()
 
-	for _, out := range []matchOutcome{firstOut, second} {
+	firstOut := mustReceive(t, first, "first match outcome")
+	secondOut := mustReceive(t, second, "second match outcome")
+
+	for _, out := range []matchOutcome{firstOut, secondOut} {
 		if out.Status != MediaStatusPresent || out.MatchType != matchTypeExactPath {
 			t.Fatalf("status=%q matchType=%q, want present/exact_path", out.Status, out.MatchType)
 		}
