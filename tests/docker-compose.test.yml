@@ -19,6 +19,7 @@ services:
   minio-test:
     image: minio/minio:latest
     container_name: aeron-test-minio
+    profiles: ["s3"]  # Only started with --profile s3 (used by the s3 test suite)
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin123

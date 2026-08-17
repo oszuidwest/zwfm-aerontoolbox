@@ -6,7 +6,10 @@ import (
 	"time"
 )
 
-func TestAPIRateLimiterAllowResetsAfterWindow(t *testing.T) {
+// TestAPIRateLimiterWindowLifecycle drives one limiter through a full window
+// lifecycle: fill, deny (with the once-per-window log signal and a shrinking
+// retry-after), an isolated second bucket, and the reset at window end.
+func TestAPIRateLimiterWindowLifecycle(t *testing.T) {
 	t.Parallel()
 
 	now := time.Unix(1_700_000_000, 0)
@@ -14,124 +17,80 @@ func TestAPIRateLimiterAllowResetsAfterWindow(t *testing.T) {
 		return now
 	})
 
-	allowed, retryAfter, logDenied := limiter.allow("client-a")
-	if !allowed {
-		t.Fatal("first request allowed = false, want true")
-	}
-	if retryAfter != 0 {
-		t.Fatalf("first retryAfter = %s, want 0", retryAfter)
-	}
-	if logDenied {
-		t.Fatal("first logDenied = true, want false")
+	steps := []struct {
+		name           string
+		advance        time.Duration
+		key            string
+		wantAllowed    bool
+		wantRetryAfter time.Duration
+		wantLogDenied  bool
+	}{
+		{
+			name:        "first request is allowed",
+			key:         "client-a",
+			wantAllowed: true,
+		},
+		{
+			name:           "first denial returns full window and log signal",
+			key:            "client-a",
+			wantRetryAfter: time.Minute,
+			wantLogDenied:  true,
+		},
+		{
+			name:           "second denial in same window is silent",
+			key:            "client-a",
+			wantRetryAfter: time.Minute,
+		},
+		{
+			name:        "other bucket is unaffected",
+			key:         "client-b",
+			wantAllowed: true,
+		},
+		{
+			name:           "retry-after shrinks as the window elapses",
+			advance:        12*time.Second + 100*time.Millisecond,
+			key:            "client-a",
+			wantRetryAfter: 47*time.Second + 900*time.Millisecond,
+		},
+		{
+			name:        "window reset allows again",
+			advance:     47*time.Second + 900*time.Millisecond,
+			key:         "client-a",
+			wantAllowed: true,
+		},
+		{
+			name:           "denial in new window logs again",
+			key:            "client-a",
+			wantRetryAfter: time.Minute,
+			wantLogDenied:  true,
+		},
 	}
 
-	allowed, retryAfter, logDenied = limiter.allow("client-a")
-	if allowed {
-		t.Fatal("second request allowed = true, want false")
-	}
-	if retryAfter != time.Minute {
-		t.Fatalf("second retryAfter = %s, want 1m0s", retryAfter)
-	}
-	if !logDenied {
-		t.Fatal("second logDenied = false, want true")
-	}
-
-	now = now.Add(time.Minute)
-	allowed, retryAfter, logDenied = limiter.allow("client-a")
-	if !allowed {
-		t.Fatal("request after window reset allowed = false, want true")
-	}
-	if retryAfter != 0 {
-		t.Fatalf("request after window reset retryAfter = %s, want 0", retryAfter)
-	}
-	if logDenied {
-		t.Fatal("request after window reset logDenied = true, want false")
+	for _, step := range steps {
+		now = now.Add(step.advance)
+		allowed, retryAfter, logDenied := limiter.allow(step.key)
+		if allowed != step.wantAllowed || retryAfter != step.wantRetryAfter || logDenied != step.wantLogDenied {
+			t.Fatalf("%s: allow(%q) = (%v, %s, %v), want (%v, %s, %v)",
+				step.name, step.key, allowed, retryAfter, logDenied,
+				step.wantAllowed, step.wantRetryAfter, step.wantLogDenied)
+		}
 	}
 }
 
-func TestAPIRateLimiterRetryAfterSeconds(t *testing.T) {
+func TestAPIRateLimiterRetryAfterSecondsRoundsUp(t *testing.T) {
 	t.Parallel()
 
-	now := time.Unix(1_700_000_000, 0)
-	limiter := newTestRateLimiter(1, func() time.Time {
-		return now
-	})
-
-	allowed, _, _ := limiter.allow("client-a")
-	if !allowed {
-		t.Fatal("first request allowed = false, want true")
+	if got, want := retryAfterSeconds(47*time.Second+900*time.Millisecond), "48"; got != want {
+		t.Fatalf("retryAfterSeconds(47.9s) = %q, want %q", got, want)
 	}
-
-	now = now.Add(12*time.Second + 100*time.Millisecond)
-	allowed, retryAfter, _ := limiter.allow("client-a")
-	if allowed {
-		t.Fatal("second request allowed = true, want false")
-	}
-	if got, want := retryAfterSeconds(retryAfter), "48"; got != want {
-		t.Fatalf("Retry-After = %q, want %q", got, want)
-	}
-}
-
-func TestAPIRateLimiterBucketsAreIsolated(t *testing.T) {
-	t.Parallel()
-
-	now := time.Unix(1_700_000_000, 0)
-	limiter := newTestRateLimiter(1, func() time.Time {
-		return now
-	})
-
-	allowed, _, _ := limiter.allow("client-a")
-	if !allowed {
-		t.Fatal("first client-a request allowed = false, want true")
-	}
-
-	allowed, _, _ = limiter.allow("client-a")
-	if allowed {
-		t.Fatal("second client-a request allowed = true, want false")
-	}
-
-	allowed, _, _ = limiter.allow("client-b")
-	if !allowed {
-		t.Fatal("first client-b request allowed = false, want true")
-	}
-}
-
-func TestAPIRateLimiterDenialLogSignalIsOncePerWindow(t *testing.T) {
-	t.Parallel()
-
-	now := time.Unix(1_700_000_000, 0)
-	limiter := newTestRateLimiter(1, func() time.Time {
-		return now
-	})
-
-	allowed, _, logDenied := limiter.allow("client-a")
-	if !allowed || logDenied {
-		t.Fatalf("first request = allowed %v logDenied %v, want allowed true logDenied false", allowed, logDenied)
-	}
-
-	allowed, _, logDenied = limiter.allow("client-a")
-	if allowed || !logDenied {
-		t.Fatalf("first denial = allowed %v logDenied %v, want allowed false logDenied true", allowed, logDenied)
-	}
-
-	allowed, _, logDenied = limiter.allow("client-a")
-	if allowed || logDenied {
-		t.Fatalf("second denial = allowed %v logDenied %v, want allowed false logDenied false", allowed, logDenied)
-	}
-
-	now = now.Add(time.Minute)
-	allowed, _, logDenied = limiter.allow("client-a")
-	if !allowed || logDenied {
-		t.Fatalf("new window request = allowed %v logDenied %v, want allowed true logDenied false", allowed, logDenied)
-	}
-
-	allowed, _, logDenied = limiter.allow("client-a")
-	if allowed || !logDenied {
-		t.Fatalf("new window denial = allowed %v logDenied %v, want allowed false logDenied true", allowed, logDenied)
+	if got, want := retryAfterSeconds(0), "1"; got != want {
+		t.Fatalf("retryAfterSeconds(0) = %q, want %q", got, want)
 	}
 }
 
 func TestAPIRateLimiterAllowConcurrent(t *testing.T) {
+	t.Parallel()
+
 	const goroutines = 64
 
 	now := time.Unix(1_700_000_000, 0)
@@ -163,11 +122,10 @@ func TestAPIRateLimiterAllowConcurrent(t *testing.T) {
 		t.Fatalf("allowed count = %d, want %d", allowedCount, goroutines)
 	}
 
-	limiter.mu.Lock()
-	count := limiter.clients["client-a"].count
-	limiter.mu.Unlock()
-	if count != goroutines {
-		t.Fatalf("stored count = %d, want %d", count, goroutines)
+	// The limit equals the number of goroutines, so a denial here proves every
+	// concurrent increment landed.
+	if allowed, _, _ := limiter.allow("client-a"); allowed {
+		t.Fatal("request beyond the limit allowed = true, want false")
 	}
 }
 

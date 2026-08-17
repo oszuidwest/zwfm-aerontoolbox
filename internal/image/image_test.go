@@ -13,23 +13,32 @@ import (
 )
 
 func TestProcessRejectsInvalidImageData(t *testing.T) {
-	_, err := Process([]byte("not an image"), Config{TargetWidth: 10, TargetHeight: 10, Quality: 85})
-	if err == nil {
-		t.Fatal("Process accepted invalid image data")
+	tests := []struct {
+		name string
+		data []byte
+	}{
+		{
+			name: "not an image",
+			data: []byte("not an image"),
+		},
+		{
+			// GIF is unsupported because the decoder is intentionally not registered.
+			name: "unsupported gif",
+			data: []byte("GIF89a\x01\x00\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x00;"),
+		},
 	}
-	if !strings.Contains(err.Error(), "failed to get image information") {
-		t.Fatalf("error = %q, want image information failure", err)
-	}
-}
 
-func TestProcessRejectsUnsupportedGIF(t *testing.T) {
-	data := []byte("GIF89a\x01\x00\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x00;")
-
-	_, err := Process(data, Config{TargetWidth: 10, TargetHeight: 10, Quality: 85})
-	if err == nil {
-		t.Fatal("Process accepted unsupported GIF")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Process(tt.data, Config{TargetWidth: 10, TargetHeight: 10, Quality: 85})
+			if err == nil {
+				t.Fatal("Process accepted invalid image data")
+			}
+			if !strings.Contains(err.Error(), "failed to get image information") {
+				t.Fatalf("error = %q, want image information failure", err)
+			}
+		})
 	}
-	// GIF is unsupported here because the decoder is intentionally not registered.
 }
 
 func TestProcessRejectsSmallerImageWhenConfigured(t *testing.T) {

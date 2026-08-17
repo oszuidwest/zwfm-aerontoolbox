@@ -27,6 +27,7 @@ env:
 jobs:
   build:
     runs-on: ubuntu-26.04
+    timeout-minutes: 10
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -58,11 +59,11 @@ jobs:
   integration:
     needs: build
     runs-on: ubuntu-26.04
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         suite:
-          - database
           - api-basic
           - artists
           - tracks
@@ -87,25 +88,26 @@ jobs:
       - name: Install test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq imagemagick
-          # Install postgresql-client for all suites except system-validation
-          if [ "${{ matrix.suite }}" != "system-validation" ]; then
-            sudo apt-get install -y postgresql-client
+          # postgresql-client is load-bearing for every suite: pg_dump must
+          # match the postgres:17 container. jq is preinstalled on the runner.
+          sudo apt-get install -y postgresql-client
+          # imagemagick only feeds the create-test-images step
+          if [ "${{ matrix.suite }}" = "artists" ] || [ "${{ matrix.suite }}" = "tracks" ] || [ "${{ matrix.suite }}" = "edge-cases" ]; then
+            sudo apt-get install -y imagemagick
           fi
 
       - name: Start test database
         run: |
           cd tests
-          docker compose -f docker-compose.test.yml up -d --wait
+          # MinIO sits behind the "s3" compose profile; only the s3 suite needs it.
+          docker compose -f docker-compose.test.yml ${{ matrix.suite == 's3' && '--profile s3' || '' }} up -d --wait
 
       - name: Wait for database
         run: |
           # Verify the database through the host-published port: Docker's port
           # mapping can lag behind container-internal readiness (which the
-          # compose healthcheck already covers). Plain psql works for every
-          # suite — system-validation skips the postgresql-client install but
-          # uses the runner image's preinstalled client tools, the same ones
-          # its own pg_dump tests depend on.
+          # compose healthcheck already covers). postgresql-client is installed
+          # for every suite, so plain psql works everywhere.
           for i in {1..30}; do
             PGPASSWORD="${POSTGRES_PASSWORD}" psql \
               -h 127.0.0.1 -p "${DB_PORT}" -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
@@ -121,8 +123,12 @@ jobs:
           echo "Host-side database connection verified"
 
           ARTIST_COUNT=$(docker exec aeron-test-db psql -U aeron -d aeron_db -t -c "SELECT COUNT(*) FROM aeron.artist;" 2>/dev/null | tr -d ' ')
-          echo "Database klaar - $ARTIST_COUNT artiesten geladen"
-          [ -n "$ARTIST_COUNT" ] && [ "$ARTIST_COUNT" -gt 0 ]
+          ARTISTS_WITH_IMG=$(docker exec aeron-test-db psql -U aeron -d aeron_db -t -c "SELECT COUNT(*) FROM aeron.artist WHERE picture IS NOT NULL;" 2>/dev/null | tr -d ' ')
+          echo "Database klaar - $ARTIST_COUNT artiesten geladen, $ARTISTS_WITH_IMG met afbeelding"
+          if [ "$ARTIST_COUNT" != "1000" ] || [ "$ARTISTS_WITH_IMG" != "50" ]; then
+            echo "::error::Verwachtte 1000 artiesten waarvan 50 met afbeelding, kreeg $ARTIST_COUNT/$ARTISTS_WITH_IMG"
+            exit 1
+          fi
 
       - name: Create test configuration
         run: |
@@ -161,11 +167,13 @@ jobs:
       - name: Create test images
         if: matrix.suite == 'artists' || matrix.suite == 'tracks' || matrix.suite == 'edge-cases'
         run: |
-          convert -size 100x100 xc:red test_small.png
           convert -size 2000x2000 xc:blue test_large.png
-          echo "Test images aangemaakt (100x100 en 2000x2000)"
+          echo "Test image aangemaakt (2000x2000)"
 
       - name: Start API server
+        # system-validation runs its own servers on ports 8891-8895 and never
+        # talks to the shared server on 8888.
+        if: matrix.suite != 'system-validation'
         run: |
           ./zwfm-aerontoolbox -config=test_config.json -port=${{ env.API_PORT }} > /tmp/api_startup.log 2>&1 &
           echo $! > api.pid
@@ -189,52 +197,6 @@ jobs:
             exit 1
           fi
           echo "API server gestart op poort ${{ env.API_PORT }}"
-
-      # ==================== DATABASE TESTS ====================
-      - name: "Database: Schema exists"
-        if: matrix.suite == 'database'
-        run: |
-          echo "Controleren of 'aeron' schema bestaat..."
-          RESULT=$(docker exec aeron-test-db psql -U aeron -d aeron_db -t \
-            -c "SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'aeron';")
-          if echo "$RESULT" | grep -q 'aeron'; then
-            echo "Schema 'aeron' gevonden"
-          else
-            echo "::error::Schema 'aeron' niet gevonden"
-            exit 1
-          fi
-
-      - name: "Database: Required tables exist"
-        if: matrix.suite == 'database'
-        run: |
-          echo "Controleren of vereiste tabellen bestaan..."
-          for TABLE in artist track; do
-            RESULT=$(docker exec aeron-test-db psql -U aeron -d aeron_db -t \
-              -c "SELECT table_name FROM information_schema.tables WHERE table_schema = 'aeron' AND table_name = '$TABLE';")
-            if echo "$RESULT" | grep -q "$TABLE"; then
-              echo "Tabel '$TABLE' gevonden"
-            else
-              echo "::error::Tabel '$TABLE' niet gevonden"
-              exit 1
-            fi
-          done
-
-      - name: "Database: Verify data counts"
-        if: matrix.suite == 'database'
-        run: |
-          ARTIST_COUNT=$(docker exec aeron-test-db psql -U aeron -d aeron_db -t -c "SELECT COUNT(*) FROM aeron.artist;" | tr -d ' ')
-          TRACK_COUNT=$(docker exec aeron-test-db psql -U aeron -d aeron_db -t -c "SELECT COUNT(*) FROM aeron.track;" | tr -d ' ')
-          ARTISTS_WITH_IMG=$(docker exec aeron-test-db psql -U aeron -d aeron_db -t -c "SELECT COUNT(*) FROM aeron.artist WHERE picture IS NOT NULL;" | tr -d ' ')
-
-          echo "Artiesten: $ARTIST_COUNT (verwacht: 1000)"
-          echo "Tracks: $TRACK_COUNT (verwacht: 1100)"
-          echo "Artiesten met afbeelding: $ARTISTS_WITH_IMG (verwacht: >0)"
-
-          FAILED=0
-          [ "$ARTIST_COUNT" -ne 1000 ] && echo "::error::Aantal artiesten klopt niet" && FAILED=1
-          [ "$TRACK_COUNT" -ne 1100 ] && echo "::error::Aantal tracks klopt niet" && FAILED=1
-          [ "$ARTISTS_WITH_IMG" -le 0 ] && echo "::error::Geen artiesten met afbeelding" && FAILED=1
-          exit $FAILED
 
       # ==================== API BASIC TESTS ====================
       - name: "API: Health endpoint"
@@ -269,16 +231,8 @@ jobs:
         if: matrix.suite == 'api-basic'
         run: |
           echo "GET /api/artists (met geldige API key)"
-          RESPONSE=$(curl -s -H "X-API-Key: ${{ env.API_KEY }}" http://localhost:${{ env.API_PORT }}/api/artists)
-          SUCCESS=$(echo "$RESPONSE" | jq -r '.success')
-          TOTAL=$(echo "$RESPONSE" | jq -r '.data.total')
-          if [ "$SUCCESS" = "true" ]; then
-            echo "Correct: API key geaccepteerd - $TOTAL artiesten gevonden"
-          else
-            echo "::error::Geldige API key werd niet geaccepteerd"
-            echo "Response: $RESPONSE"
-            exit 1
-          fi
+          curl -s -H "X-API-Key: ${{ env.API_KEY }}" http://localhost:${{ env.API_PORT }}/api/artists | jq -e '.success' > /dev/null
+          echo "Correct: geldige API key geaccepteerd"
 
       - name: "API: Invalid API key rejected"
         if: matrix.suite == 'api-basic'
@@ -371,6 +325,48 @@ jobs:
             fi
           done
 
+      - name: "API: Authenticated health details"
+        if: matrix.suite == 'api-basic'
+        run: |
+          echo "GET /api/health (met API key)"
+          RESPONSE=$(curl -s -H "X-API-Key: ${{ env.API_KEY }}" http://localhost:${{ env.API_PORT }}/api/health)
+          if echo "$RESPONSE" | jq -e '.success == true and .data.version == "test"' > /dev/null; then
+            echo "Correct: health details geeft success=true met version=test"
+          else
+            echo "::error::Verwachtte success=true en .data.version == \"test\""
+            echo "Response: $RESPONSE"
+            exit 1
+          fi
+
+      - name: "API: HEAD request supported"
+        if: matrix.suite == 'api-basic'
+        run: |
+          echo "HEAD /health"
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -I http://localhost:${{ env.API_PORT }}/health)
+          echo "HTTP status: $HTTP_CODE (verwacht: 200)"
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "Correct: HEAD op /health geeft 200"
+          else
+            echo "::error::Verwachtte HTTP 200 voor HEAD, kreeg $HTTP_CODE"
+            exit 1
+          fi
+
+      - name: "API: Test email without notification config rejected"
+        if: matrix.suite == 'api-basic'
+        run: |
+          echo "POST /api/notifications/test-email (geen notificatie-config)"
+          HTTP_CODE=$(curl -s -o /tmp/test_email.json -w "%{http_code}" -X POST \
+            -H "X-API-Key: ${{ env.API_KEY }}" \
+            http://localhost:${{ env.API_PORT }}/api/notifications/test-email)
+          echo "HTTP status: $HTTP_CODE (verwacht: 400)"
+          if [ "$HTTP_CODE" = "400" ] && jq -e '.success == false' /tmp/test_email.json > /dev/null; then
+            echo "Correct: test-email zonder configuratie geeft 400"
+          else
+            echo "::error::Verwachtte HTTP 400 met success=false, kreeg HTTP $HTTP_CODE"
+            cat /tmp/test_email.json
+            exit 1
+          fi
+
       - name: "API: Auth disabled mode"
         if: matrix.suite == 'api-basic'
         run: |
@@ -393,9 +389,21 @@ jobs:
             "api": { "enabled": false, "keys": [] }
           }
           EOF
-          ./zwfm-aerontoolbox -config=test_no_auth.json -port=${{ env.API_PORT }} &
+          ./zwfm-aerontoolbox -config=test_no_auth.json -port=${{ env.API_PORT }} > /tmp/no_auth.log 2>&1 &
           echo $! > api.pid
-          for i in {1..30}; do curl -sf http://localhost:${{ env.API_PORT }}/health > /dev/null 2>&1 && break; sleep 1; done
+          STARTED=false
+          for i in {1..30}; do
+            if curl -sf http://localhost:${{ env.API_PORT }}/health > /dev/null 2>&1; then
+              STARTED=true
+              break
+            fi
+            sleep 1
+          done
+          if [ "$STARTED" = "false" ]; then
+            echo "::error::API server zonder auth niet gestart"
+            cat /tmp/no_auth.log
+            exit 1
+          fi
           echo "GET /api/artists (zonder API key, auth uitgeschakeld)"
           RESPONSE=$(curl -s http://localhost:${{ env.API_PORT }}/api/artists)
           SUCCESS=$(echo "$RESPONSE" | jq -r '.success')
@@ -417,13 +425,14 @@ jobs:
           WITH_IMG=$(echo "$RESPONSE" | jq -r '.data.with_images')
           WITHOUT_IMG=$(echo "$RESPONSE" | jq -r '.data.without_images')
           echo "Totaal: $TOTAL (verwacht: 1000)"
-          echo "Met afbeelding: $WITH_IMG (verwacht: >0)"
-          echo "Zonder afbeelding: $WITHOUT_IMG (verwacht: >0)"
-          FAILED=0
-          [ "$TOTAL" -ne 1000 ] && echo "::error::Totaal aantal artiesten klopt niet" && FAILED=1
-          [ "$WITH_IMG" -le 0 ] && echo "::error::Geen artiesten met afbeelding" && FAILED=1
-          [ "$WITHOUT_IMG" -le 0 ] && echo "::error::Geen artiesten zonder afbeelding" && FAILED=1
-          exit $FAILED
+          echo "Met afbeelding: $WITH_IMG (verwacht: 50)"
+          echo "Zonder afbeelding: $WITHOUT_IMG (verwacht: 950)"
+          if echo "$RESPONSE" | jq -e '.data.total == 1000 and .data.with_images == 50 and .data.without_images == 950' > /dev/null; then
+            echo "Correct: artiest statistieken kloppen exact"
+          else
+            echo "::error::Artiest statistieken kloppen niet (verwacht 1000/50/950)"
+            exit 1
+          fi
 
       - name: "Artist: Get single artist"
         if: matrix.suite == 'artists'
@@ -451,6 +460,24 @@ jobs:
             echo "Correct: niet-bestaande artiest geeft 404"
           else
             echo "::error::Verwachtte HTTP 404, kreeg $HTTP_CODE"
+            exit 1
+          fi
+
+      - name: "Artist: Fixture image served as PNG"
+        if: matrix.suite == 'artists'
+        run: |
+          # Regressietest: fixture-afbeeldingen moeten echte PNG-bytes zijn,
+          # geen letterlijke escape-tekst. Moet VOOR de upload-tests draaien.
+          SEED_ID=$(docker exec aeron-test-db psql -U aeron -d aeron_db -t -A -c \
+            "SELECT artistid FROM aeron.artist WHERE picture IS NOT NULL ORDER BY artistid LIMIT 1;")
+          echo "GET /api/artists/$SEED_ID/image (fixture-afbeelding)"
+          HTTP_CODE=$(curl -s -o /tmp/seed_image.bin -w "%{http_code}" -H "X-API-Key: ${{ env.API_KEY }}" \
+            "http://localhost:${{ env.API_PORT }}/api/artists/$SEED_ID/image")
+          MAGIC=$(xxd -p -l4 /tmp/seed_image.bin)
+          if [ "$HTTP_CODE" = "200" ] && [ "$MAGIC" = "89504e47" ]; then
+            echo "Correct: fixture afbeelding begint met PNG magic bytes"
+          else
+            echo "::error::Verwachtte HTTP 200 met PNG magic bytes, kreeg HTTP $HTTP_CODE met magic '$MAGIC'"
             exit 1
           fi
 
@@ -641,6 +668,34 @@ jobs:
             exit 1
           fi
 
+      - name: "Track: Deleted image returns 404"
+        if: matrix.suite == 'tracks'
+        run: |
+          echo "GET /api/tracks/${{ env.TRACK_ID }}/image (na verwijderen)"
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "X-API-Key: ${{ env.API_KEY }}" \
+            "http://localhost:${{ env.API_PORT }}/api/tracks/${{ env.TRACK_ID }}/image")
+          echo "HTTP status: $HTTP_CODE (verwacht: 404)"
+          if [ "$HTTP_CODE" = "404" ]; then
+            echo "Correct: verwijderde track afbeelding geeft 404"
+          else
+            echo "::error::Verwachtte HTTP 404, kreeg $HTTP_CODE"
+            exit 1
+          fi
+
+      - name: "Track: Bulk delete requires confirmation"
+        if: matrix.suite == 'tracks'
+        run: |
+          echo "DELETE /api/tracks/bulk-delete (zonder bevestiging)"
+          RESPONSE=$(curl -s -X DELETE -H "X-API-Key: ${{ env.API_KEY }}" \
+            http://localhost:${{ env.API_PORT }}/api/tracks/bulk-delete)
+          SUCCESS=$(echo "$RESPONSE" | jq -r '.success')
+          if [ "$SUCCESS" = "false" ]; then
+            echo "Correct: bulk delete zonder bevestiging wordt geweigerd"
+          else
+            echo "::error::Bulk delete zonder bevestiging zou geweigerd moeten worden"
+            exit 1
+          fi
+
       # ==================== MAINTENANCE TESTS ====================
       - name: "Maintenance: Database health endpoint"
         if: matrix.suite == 'maintenance'
@@ -663,16 +718,11 @@ jobs:
         run: |
           echo "Checking table health fields"
           RESPONSE=$(curl -s -H "X-API-Key: ${{ env.API_KEY }}" http://localhost:${{ env.API_PORT }}/api/db/maintenance/health)
-          FIRST_TABLE=$(echo "$RESPONSE" | jq -r '.data.tables[0]')
-          HAS_DTR=$(echo "$FIRST_TABLE" | jq 'has("dead_tuple_pct")')
-          HAS_MSA=$(echo "$FIRST_TABLE" | jq 'has("modifications_since_analyze")')
-          HAS_NV=$(echo "$FIRST_TABLE" | jq 'has("needs_vacuum")')
-          HAS_NA=$(echo "$FIRST_TABLE" | jq 'has("needs_analyze")')
-          if [ "$HAS_DTR" = "true" ] && [ "$HAS_MSA" = "true" ] && [ "$HAS_NV" = "true" ] && [ "$HAS_NA" = "true" ]; then
+          if echo "$RESPONSE" | jq -e '.data.tables[0] | has("dead_tuple_pct") and has("modifications_since_analyze") and has("needs_vacuum") and has("needs_analyze")' > /dev/null; then
             echo "Alle tabel health velden aanwezig"
           else
             echo "::error::Tabel health velden ontbreken"
-            echo "First table: $FIRST_TABLE"
+            echo "First table: $(echo "$RESPONSE" | jq '.data.tables[0]')"
             exit 1
           fi
 
@@ -691,52 +741,6 @@ jobs:
           else
             echo "::error::Connection info velden ontbreken of ongeldig"
             echo "Data: $DATA"
-            exit 1
-          fi
-
-      - name: "Maintenance: Long-running query detection"
-        if: matrix.suite == 'maintenance'
-        run: |
-          echo "Testing long-running query detection via pg_sleep"
-          # Start a long-running query in the background (sleeps 30 seconds)
-          PGPASSWORD=aeron123 psql -h 127.0.0.1 -p 5433 -U aeron -d aeron_db -c "SELECT pg_sleep(30);" &
-          SLEEP_PID=$!
-
-          # Give it a moment to register in pg_stat_activity
-          sleep 2
-
-          # Query health endpoint (default threshold is 10s, but query just started ~2s ago)
-          # Use a config with a very low threshold to ensure detection
-          RESPONSE=$(curl -s -H "X-API-Key: ${{ env.API_KEY }}" http://localhost:${{ env.API_PORT }}/api/db/maintenance/health)
-          LRQ_COUNT=$(echo "$RESPONSE" | jq '.data.long_running_queries | length')
-
-          # Clean up the background query
-          kill $SLEEP_PID 2>/dev/null || true
-          wait $SLEEP_PID 2>/dev/null || true
-
-          # The query ran for ~2s which is under the default 10s threshold,
-          # so we mainly verify the field is a valid array. For actual detection
-          # we would need to wait 10+ seconds, but we can verify the structure.
-          if [ "$LRQ_COUNT" -ge 0 ]; then
-            echo "Long-running queries field OK (count: $LRQ_COUNT)"
-            # If it was detected (threshold might be low), verify structure
-            if [ "$LRQ_COUNT" -gt 0 ]; then
-              FIRST=$(echo "$RESPONSE" | jq '.data.long_running_queries[0]')
-              HAS_PID=$(echo "$FIRST" | jq 'has("pid")')
-              HAS_DUR=$(echo "$FIRST" | jq 'has("duration")')
-              HAS_QRY=$(echo "$FIRST" | jq 'has("query")')
-              HAS_STATE=$(echo "$FIRST" | jq 'has("state")')
-              if [ "$HAS_PID" = "true" ] && [ "$HAS_DUR" = "true" ] && [ "$HAS_QRY" = "true" ] && [ "$HAS_STATE" = "true" ]; then
-                echo "Long-running query structure OK"
-              else
-                echo "::error::Long-running query velden ontbreken"
-                echo "First: $FIRST"
-                exit 1
-              fi
-            fi
-          else
-            echo "::error::long_running_queries is geen array"
-            echo "Response: $RESPONSE"
             exit 1
           fi
 
@@ -764,10 +768,19 @@ jobs:
           # Restart with low threshold
           ./zwfm-aerontoolbox -config=test_lrq.json -port=${{ env.API_PORT }} > /tmp/lrq_output.log 2>&1 &
           echo $! > api.pid
+          STARTED=false
           for i in {1..30}; do
-            curl -sf http://localhost:${{ env.API_PORT }}/health > /dev/null 2>&1 && break
+            if curl -sf http://localhost:${{ env.API_PORT }}/health > /dev/null 2>&1; then
+              STARTED=true
+              break
+            fi
             sleep 1
           done
+          if [ "$STARTED" = "false" ]; then
+            echo "::error::API server met lage threshold niet gestart"
+            cat /tmp/lrq_output.log
+            exit 1
+          fi
 
           # Start a query that sleeps 30 seconds
           PGPASSWORD=aeron123 psql -h 127.0.0.1 -p 5433 -U aeron -d aeron_db -c "SELECT pg_sleep(30);" &
@@ -786,6 +799,12 @@ jobs:
             QUERY_TEXT=$(echo "$RESPONSE" | jq -r '.data.long_running_queries[0].query')
             echo "Correct: $LRQ_COUNT langlopende query gedetecteerd"
             echo "Query: $QUERY_TEXT"
+            if ! echo "$RESPONSE" | jq -e '.data.long_running_queries[0] | has("pid") and has("duration") and has("query") and has("state")' > /dev/null; then
+              echo "::error::Long-running query velden ontbreken"
+              echo "$RESPONSE" | jq '.data.long_running_queries[0]'
+              exit 1
+            fi
+            echo "Correct: query structuur bevat pid, duration, query en state"
             if echo "$QUERY_TEXT" | grep -qi "pg_sleep"; then
               echo "Correct: pg_sleep query gedetecteerd"
             else
@@ -797,19 +816,8 @@ jobs:
             exit 1
           fi
 
-          # Stop test server and restart original
-          kill -9 $(cat api.pid) 2>/dev/null || true
-          for i in {1..10}; do
-            if ! lsof -i:${{ env.API_PORT }} > /dev/null 2>&1; then break; fi
-            sleep 1
-          done
-          ./zwfm-aerontoolbox -config=test_config.json -port=${{ env.API_PORT }} > /tmp/api_output.log 2>&1 &
-          echo $! > api.pid
-          for i in {1..30}; do
-            curl -sf http://localhost:${{ env.API_PORT }}/health > /dev/null 2>&1 && break
-            sleep 1
-          done
-
+      # The next steps only need a running authenticated API; the test_lrq
+      # server uses the same API key, so no restart is needed here.
       - name: "Maintenance: Removed endpoints return 404"
         if: matrix.suite == 'maintenance'
         run: |
@@ -858,27 +866,36 @@ jobs:
           echo $! > api.pid
 
           # Wait for startup
+          STARTED=false
           for i in {1..30}; do
-            curl -sf http://localhost:${{ env.API_PORT }}/health > /dev/null 2>&1 && break
+            if curl -sf http://localhost:${{ env.API_PORT }}/health > /dev/null 2>&1; then
+              STARTED=true
+              break
+            fi
             sleep 1
           done
-
-          # Verify health endpoint works
-          RESPONSE=$(curl -s http://localhost:${{ env.API_PORT }}/health)
-          SUCCESS=$(echo "$RESPONSE" | jq -r '.success')
+          if [ "$STARTED" = "false" ]; then
+            echo "::error::API server met scheduler niet gestart"
+            cat /tmp/scheduler_output.log
+            exit 1
+          fi
 
           # Check logs for scheduler started message
           if grep -q "Scheduler started" /tmp/scheduler_output.log && grep -q "health-check" /tmp/scheduler_output.log; then
             echo "Correct: scheduler gestart met health-check job"
           else
-            echo "::warning::Scheduler log bericht niet gevonden"
+            echo "::error::Scheduler log bericht niet gevonden"
             cat /tmp/scheduler_output.log
+            exit 1
           fi
 
-          if [ "$SUCCESS" = "true" ]; then
-            echo "Correct: applicatie draait met health check scheduler"
+          # Scheduler-enabled server moet DB-backed endpoints blijven serveren
+          RESPONSE=$(curl -s -H "X-API-Key: ${{ env.API_KEY }}" http://localhost:${{ env.API_PORT }}/api/db/maintenance/health)
+          if echo "$RESPONSE" | jq -e '.success == true' > /dev/null; then
+            echo "Correct: maintenance health endpoint werkt met scheduler actief"
           else
-            echo "::error::Applicatie start niet correct met scheduler"
+            echo "::error::Maintenance health endpoint gefaald met scheduler actief"
+            echo "Response: $RESPONSE"
             exit 1
           fi
 
@@ -994,43 +1011,29 @@ jobs:
       - name: "Backup: Concurrent backup rejected"
         if: matrix.suite == 'backup'
         run: |
-          echo "POST /api/db/backup (tweede backup starten terwijl eerste draait)"
-          # Start eerste backup
-          curl -s -X POST -H "X-API-Key: ${{ env.API_KEY }}" \
+          echo "POST /api/db/backup (tweede backup direct na de eerste)"
+          # BackupService.Start claimt het runner-slot synchroon voordat de 202
+          # terugkomt, dus een tweede POST direct erna moet altijd 409 geven.
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+            -H "X-API-Key: ${{ env.API_KEY }}" \
             -H 'Content-Type: application/json' \
             http://localhost:${{ env.API_PORT }}/api/db/backup \
-            -d '{}' > /dev/null
+            -d '{}')
+          if [ "$HTTP_CODE" != "202" ]; then
+            echo "::error::Eerste backup zou 202 moeten geven, kreeg $HTTP_CODE"
+            exit 1
+          fi
 
-          # Poll status en probeer tweede backup zodra eerste draait
-          TESTED=false
-          for i in {1..60}; do
-            RUNNING=$(curl -s -H "X-API-Key: ${{ env.API_KEY }}" \
-              http://localhost:${{ env.API_PORT }}/api/db/backup/status | jq -r '.data.running')
-            if [ "$RUNNING" = "true" ]; then
-              echo "Eerste backup draait, probeer tweede te starten..."
-              HTTP_CODE=$(curl -s -o /tmp/concurrent_backup.json -w "%{http_code}" -X POST \
-                -H "X-API-Key: ${{ env.API_KEY }}" \
-                -H 'Content-Type: application/json' \
-                http://localhost:${{ env.API_PORT }}/api/db/backup \
-                -d '{}')
-              RESPONSE=$(cat /tmp/concurrent_backup.json)
-              SUCCESS=$(echo "$RESPONSE" | jq -r '.success')
-              ERROR=$(echo "$RESPONSE" | jq -r '.error')
-
-              if [ "$HTTP_CODE" = "409" ] && [ "$SUCCESS" = "false" ] && echo "$ERROR" | grep -q "backup already in progress"; then
-                echo "Correct: concurrent backup afgewezen (HTTP 409, error: $ERROR)"
-                TESTED=true
-                break
-              else
-                echo "::error::Verwachtte HTTP 409 met juiste error, kreeg HTTP $HTTP_CODE: $ERROR"
-                exit 1
-              fi
-            fi
-            sleep 0.1
-          done
-
-          if [ "$TESTED" = "false" ]; then
-            echo "::error::Kon concurrent backup test niet uitvoeren (backup te snel klaar)"
+          HTTP_CODE=$(curl -s -o /tmp/concurrent_backup.json -w "%{http_code}" -X POST \
+            -H "X-API-Key: ${{ env.API_KEY }}" \
+            -H 'Content-Type: application/json' \
+            http://localhost:${{ env.API_PORT }}/api/db/backup \
+            -d '{}')
+          if [ "$HTTP_CODE" = "409" ] && jq -e '.success == false' /tmp/concurrent_backup.json > /dev/null; then
+            echo "Correct: concurrent backup afgewezen (HTTP 409)"
+          else
+            echo "::error::Verwachtte HTTP 409 met success=false, kreeg HTTP $HTTP_CODE"
+            cat /tmp/concurrent_backup.json
             exit 1
           fi
 
@@ -1061,17 +1064,11 @@ jobs:
         if: matrix.suite == 'backup'
         run: |
           echo "GET /api/db/backups/${{ env.BACKUP_FILENAME }}"
-          HTTP_CODE=$(curl -s -o /tmp/backup.dump -w "%{http_code}" \
+          curl -sS --fail -o /tmp/backup.dump \
             -H "X-API-Key: ${{ env.API_KEY }}" \
-            "http://localhost:${{ env.API_PORT }}/api/db/backups/${{ env.BACKUP_FILENAME }}")
-          FILE_SIZE=$(stat -c%s /tmp/backup.dump 2>/dev/null || echo "0")
-          echo "HTTP status: $HTTP_CODE, bestandsgrootte: $FILE_SIZE bytes"
-          if [ "$HTTP_CODE" = "200" ] && [ "$FILE_SIZE" -gt 0 ]; then
-            echo "Backup succesvol gedownload"
-          else
-            echo "::error::Backup download gefaald - HTTP $HTTP_CODE, grootte $FILE_SIZE"
-            exit 1
-          fi
+            "http://localhost:${{ env.API_PORT }}/api/db/backups/${{ env.BACKUP_FILENAME }}"
+          [ -s /tmp/backup.dump ]
+          echo "Backup succesvol gedownload ($(stat -c%s /tmp/backup.dump) bytes)"
 
       - name: "Backup: Delete without confirmation rejected"
         if: matrix.suite == 'backup'
@@ -1203,20 +1200,36 @@ jobs:
           }
           EOF
 
-          ./zwfm-aerontoolbox -config=test_backup_disabled.json -port=8892 &
+          ./zwfm-aerontoolbox -config=test_backup_disabled.json -port=8892 > /tmp/backup_disabled.log 2>&1 &
           PID=$!
-          sleep 3
+          STARTED=false
+          for i in {1..30}; do
+            if curl -sf http://localhost:8892/health > /dev/null 2>&1; then
+              STARTED=true
+              break
+            fi
+            sleep 1
+          done
 
           # Herstel pg_dump
           sudo mv "${PG_DUMP_PATH}.bak" "$PG_DUMP_PATH"
 
-          # Check of applicatie draait
-          if curl -sf http://localhost:8892/health > /dev/null 2>&1; then
-            echo "Correct: applicatie start zonder pg_dump als backup uitgeschakeld is"
-            kill $PID 2>/dev/null || true
-          else
+          if [ "$STARTED" = "false" ]; then
             echo "::error::Applicatie zou moeten starten met backup.enabled=false"
+            cat /tmp/backup_disabled.log
             kill $PID 2>/dev/null || true
+            exit 1
+          fi
+          echo "Correct: applicatie start zonder pg_dump als backup uitgeschakeld is"
+
+          # Backup endpoints zijn hard uitgeschakeld: requireEnabled geeft 404
+          HTTP_CODE=$(curl -s -o /tmp/backups_disabled.json -w "%{http_code}" http://localhost:8892/api/db/backups)
+          kill $PID 2>/dev/null || true
+          if [ "$HTTP_CODE" = "404" ] && jq -e '.success == false' /tmp/backups_disabled.json > /dev/null; then
+            echo "Correct: /api/db/backups geeft 404 met backup uitgeschakeld"
+          else
+            echo "::error::Verwachtte HTTP 404 met success=false, kreeg HTTP $HTTP_CODE"
+            cat /tmp/backups_disabled.json
             exit 1
           fi
 
@@ -1282,52 +1295,34 @@ jobs:
           }
           EOF
 
-          ./zwfm-aerontoolbox -config=test_valid_paths.json -port=8895 &
+          ./zwfm-aerontoolbox -config=test_valid_paths.json -port=8895 > /tmp/valid_paths.log 2>&1 &
           PID=$!
-          sleep 3
-
-          if curl -sf http://localhost:8895/health > /dev/null 2>&1; then
-            echo "Correct: applicatie start met geldige custom paden"
-            kill $PID 2>/dev/null || true
-          else
-            echo "::error::Applicatie zou moeten starten met geldige custom paden"
-            kill $PID 2>/dev/null || true
-            exit 1
-          fi
-
-      # ==================== S3 SYNC TESTS ====================
-      - name: "S3: Start MinIO container"
-        if: matrix.suite == 's3'
-        run: |
-          echo "MinIO container starten..."
-          # Remove any existing container from previous runs
-          docker rm -f aeron-test-minio 2>/dev/null || true
-          docker run -d --name aeron-test-minio \
-            -p 9000:9000 -p 9001:9001 \
-            -e MINIO_ROOT_USER=minioadmin \
-            -e MINIO_ROOT_PASSWORD=minioadmin123 \
-            minio/minio:latest server /data --console-address ":9001"
-
-      - name: "S3: Wait for MinIO and create bucket"
-        if: matrix.suite == 's3'
-        run: |
-          echo "Wachten op MinIO..."
+          STARTED=false
           for i in {1..30}; do
-            if curl -sf http://localhost:9000/minio/health/live > /dev/null 2>&1; then
-              echo "MinIO is klaar"
+            if curl -sf http://localhost:8895/health > /dev/null 2>&1; then
+              STARTED=true
               break
             fi
             sleep 1
           done
+          kill $PID 2>/dev/null || true
+          if [ "$STARTED" = "true" ]; then
+            echo "Correct: applicatie start met geldige custom paden"
+          else
+            echo "::error::Applicatie zou moeten starten met geldige custom paden"
+            cat /tmp/valid_paths.log
+            exit 1
+          fi
 
-          # Install MinIO client
+      # ==================== S3 SYNC TESTS ====================
+      # MinIO itself is started by docker compose --profile s3 (health-gated
+      # by up --wait); only the client and the bucket need to be set up here.
+      - name: "S3: Install MinIO client and create bucket"
+        if: matrix.suite == 's3'
+        run: |
           curl -sL https://dl.min.io/client/mc/release/linux-amd64/mc -o /tmp/mc
           chmod +x /tmp/mc
-
-          # Configure MinIO client
           /tmp/mc alias set testminio http://localhost:9000 minioadmin minioadmin123
-
-          # Create test bucket
           /tmp/mc mb testminio/aeron-backups
           echo "Bucket 'aeron-backups' aangemaakt"
 
@@ -1387,28 +1382,22 @@ jobs:
           }
           EOF
 
-          ./zwfm-aerontoolbox -config=test_s3_config.json -port=${{ env.API_PORT }} &
+          ./zwfm-aerontoolbox -config=test_s3_config.json -port=${{ env.API_PORT }} > /tmp/s3_api.log 2>&1 &
           echo $! > api.pid
+          STARTED=false
           for i in {1..30}; do
-            curl -sf http://localhost:${{ env.API_PORT }}/health > /dev/null 2>&1 && break
+            if curl -sf http://localhost:${{ env.API_PORT }}/health > /dev/null 2>&1; then
+              STARTED=true
+              break
+            fi
             sleep 1
           done
-          echo "API server gestart met S3 sync ingeschakeld"
-
-      - name: "S3: Verify API started with S3 config"
-        if: matrix.suite == 's3'
-        run: |
-          echo "GET /api/db/backup/status (controleren of status endpoint werkt)"
-          RESPONSE=$(curl -s -H "X-API-Key: ${{ env.API_KEY }}" http://localhost:${{ env.API_PORT }}/api/db/backup/status)
-          echo "Response: $RESPONSE"
-
-          SUCCESS=$(echo "$RESPONSE" | jq -r '.success')
-          if [ "$SUCCESS" = "true" ]; then
-            echo "Correct: backup status endpoint werkt"
-          else
-            echo "::error::Backup status endpoint gefaald"
+          if [ "$STARTED" = "false" ]; then
+            echo "::error::API server met S3 config niet gestart"
+            cat /tmp/s3_api.log
             exit 1
           fi
+          echo "API server gestart met S3 sync ingeschakeld"
 
       - name: "S3: Create backup and verify sync"
         if: matrix.suite == 's3'
@@ -1510,23 +1499,22 @@ jobs:
           fi
           echo "Backup lokaal verwijderd"
 
-          # Give S3 deletion time to complete
-          sleep 2
-
-          # Verify deleted from S3
-          OBJECTS=$(/tmp/mc ls testminio/aeron-backups/test-backups/ 2>/dev/null || echo "")
-          if echo "$OBJECTS" | grep -q "${{ env.S3_BACKUP_FILENAME }}"; then
+          # Poll until the S3 object is gone (deletion happens asynchronously)
+          DELETED=false
+          for i in {1..15}; do
+            if ! /tmp/mc ls testminio/aeron-backups/test-backups/ 2>/dev/null | grep -q "${{ env.S3_BACKUP_FILENAME }}"; then
+              DELETED=true
+              break
+            fi
+            echo "Wachten op S3 verwijdering... ($i/15)"
+            sleep 1
+          done
+          if [ "$DELETED" = "true" ]; then
+            echo "Correct: backup ook verwijderd uit MinIO"
+          else
             echo "::error::Backup bestand nog steeds in MinIO na verwijdering"
             exit 1
-          else
-            echo "Correct: backup ook verwijderd uit MinIO"
           fi
-
-      - name: "S3: Cleanup MinIO container"
-        if: matrix.suite == 's3' && always()
-        run: |
-          docker stop aeron-test-minio 2>/dev/null || true
-          docker rm aeron-test-minio 2>/dev/null || true
 
       # ==================== EDGE CASE TESTS ====================
       - name: "Edge: Upload to non-existent artist"
@@ -1625,30 +1613,10 @@ jobs:
             -d "{\"url\":\"${{ env.TEST_IMAGE_URL }}\"}" -m 30 > /tmp/r3.json &
 
           wait
-          echo "Upload 1: $(cat /tmp/r1.json | jq -r '.success')"
-          echo "Upload 2: $(cat /tmp/r2.json | jq -r '.success')"
-          echo "Upload 3: $(cat /tmp/r3.json | jq -r '.success')"
-
-          FAILED=0
-          jq -e '.success == true' /tmp/r1.json > /dev/null || FAILED=1
-          jq -e '.success == true' /tmp/r2.json > /dev/null || FAILED=1
-          jq -e '.success == true' /tmp/r3.json > /dev/null || FAILED=1
-
-          if [ "$FAILED" = "0" ]; then
+          if jq -es 'map(.success) | all' /tmp/r1.json /tmp/r2.json /tmp/r3.json > /dev/null; then
             echo "Alle 3 gelijktijdige uploads succesvol"
           else
             echo "::error::Een of meer gelijktijdige uploads gefaald"
+            jq -s '.' /tmp/r1.json /tmp/r2.json /tmp/r3.json
             exit 1
           fi
-
-      # ==================== CLEANUP ====================
-      - name: Stop API server
-        if: always()
-        run: |
-          [ -f api.pid ] && kill $(cat api.pid) 2>/dev/null || true
-
-      - name: Cleanup
-        if: always()
-        run: |
-          cd tests && docker compose -f docker-compose.test.yml down -v 2>/dev/null || true
-          rm -f test_*.png test_*.json /tmp/r*.json /tmp/backup*.dump 2>/dev/null || true

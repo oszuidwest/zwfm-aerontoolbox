@@ -68,6 +68,14 @@ func (r *Runner) IsRunning() bool {
 	return r.running.Load()
 }
 
+// Closing reports whether Close() has started. Once true, TryStart and
+// TryGoBackground refuse new work.
+func (r *Runner) Closing() bool {
+	r.closeMu.Lock()
+	defer r.closeMu.Unlock()
+	return r.closed
+}
+
 // tryReserve atomically checks the closed flag and, if not closed, increments
 // the WaitGroup. Returns false without touching the WaitGroup if closed.
 // This is the shared building block for TryStart and TryGoBackground.
