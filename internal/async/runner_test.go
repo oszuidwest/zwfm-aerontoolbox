@@ -91,6 +91,7 @@ func TestClose_WaitsForTrackedGoroutines(t *testing.T) {
 				r.Close()
 				close(closeDone)
 			}()
+			mustReceiveWithin(t, r.done, 2*time.Second, "Close starting")
 
 			// The worker is still blocked on release, so Close must not have
 			// returned yet - that is the blocking behavior under test.
@@ -148,29 +149,37 @@ func TestClose_Idempotent(t *testing.T) {
 // running. This catches the race where TryStart succeeds but Go has not yet
 // added to the WaitGroup before wg.Wait() is called.
 func TestTryStart_AtomicWithClose(t *testing.T) {
-	for range 100 {
-		r := New()
+	r := New()
+	if !r.TryStart() {
+		t.Fatal("TryStart failed")
+	}
 
-		closeDone := make(chan struct{})
-		go func() {
-			r.Close()
-			close(closeDone)
-		}()
+	closeDone := make(chan struct{})
+	go func() {
+		r.Close()
+		close(closeDone)
+	}()
+	mustReceiveWithin(t, r.done, 2*time.Second, "Close starting with reserved work")
 
-		var fin chan struct{}
-		if r.TryStart() {
-			fin = make(chan struct{})
-			r.Go(func() { close(fin) })
-		}
+	release := make(chan struct{})
+	finished := make(chan struct{})
+	r.Go(func() {
+		<-release
+		close(finished)
+	})
 
-		mustReceiveWithin(t, closeDone, 2*time.Second, "Close racing TryStart")
-		if fin != nil {
-			select {
-			case <-fin:
-				// Go body finished before Close returned, as guaranteed.
-			default:
-				t.Fatal("goroutine still running after Close returned")
-			}
-		}
+	select {
+	case <-closeDone:
+		t.Fatal("Close returned before reserved work started after shutdown")
+	default:
+	}
+
+	close(release)
+	mustReceiveWithin(t, closeDone, 2*time.Second, "Close waiting for reserved work")
+	select {
+	case <-finished:
+		// Reserved work completed before Close returned.
+	default:
+		t.Fatal("reserved goroutine still running after Close returned")
 	}
 }

@@ -231,7 +231,7 @@ jobs:
         if: matrix.suite == 'api-basic'
         run: |
           echo "GET /api/artists (met geldige API key)"
-          curl -s -H "X-API-Key: ${{ env.API_KEY }}" http://localhost:${{ env.API_PORT }}/api/artists | jq -e '.success' > /dev/null
+          curl -s -H "X-API-Key: ${{ env.API_KEY }}" http://localhost:${{ env.API_PORT }}/api/artists | jq -e '.success == true' > /dev/null
           echo "Correct: geldige API key geaccepteerd"
 
       - name: "API: Invalid API key rejected"
@@ -473,11 +473,11 @@ jobs:
           echo "GET /api/artists/$SEED_ID/image (fixture-afbeelding)"
           HTTP_CODE=$(curl -s -o /tmp/seed_image.bin -w "%{http_code}" -H "X-API-Key: ${{ env.API_KEY }}" \
             "http://localhost:${{ env.API_PORT }}/api/artists/$SEED_ID/image")
-          MAGIC=$(xxd -p -l4 /tmp/seed_image.bin)
-          if [ "$HTTP_CODE" = "200" ] && [ "$MAGIC" = "89504e47" ]; then
-            echo "Correct: fixture afbeelding begint met PNG magic bytes"
+          FORMAT=$(identify -format '%m' /tmp/seed_image.bin 2>/dev/null || true)
+          if [ "$HTTP_CODE" = "200" ] && [ "$FORMAT" = "PNG" ]; then
+            echo "Correct: fixture afbeelding is een geldige PNG"
           else
-            echo "::error::Verwachtte HTTP 200 met PNG magic bytes, kreeg HTTP $HTTP_CODE met magic '$MAGIC'"
+            echo "::error::Verwachtte HTTP 200 met een geldige PNG, kreeg HTTP $HTTP_CODE met formaat '$FORMAT'"
             exit 1
           fi
 

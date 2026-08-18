@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -251,6 +252,7 @@ func TestCheckResult_StateProfiles(t *testing.T) {
 		name       string
 		arrange    func(t *testing.T) string // returns the path to monitor
 		wantExists *bool                     // nil means file_exists must be null
+		wantJSON   string
 		wantStale  bool
 		wantError  bool // whether Error must be non-empty
 		wantKind   FileCheckErrorKind
@@ -263,6 +265,7 @@ func TestCheckResult_StateProfiles(t *testing.T) {
 				return path
 			},
 			wantExists: ptr(true),
+			wantJSON:   "true",
 			wantKind:   FileCheckErrorKindNone,
 		},
 		{
@@ -271,6 +274,7 @@ func TestCheckResult_StateProfiles(t *testing.T) {
 				return "/nonexistent/path/file.mp3"
 			},
 			wantExists: ptr(false),
+			wantJSON:   "false",
 			wantStale:  true,
 			// Error stays empty for ENOENT: FileExists=false already encodes
 			// the absence, and the path identifies the missing file.
@@ -287,6 +291,7 @@ func TestCheckResult_StateProfiles(t *testing.T) {
 				})
 				return "/restricted/news.mp3"
 			},
+			wantJSON:  "null",
 			wantStale: true,
 			wantError: true,
 			wantKind:  FileCheckErrorKindPermission,
@@ -299,6 +304,7 @@ func TestCheckResult_StateProfiles(t *testing.T) {
 				})
 				return "/broken/news.mp3"
 			},
+			wantJSON:  "null",
 			wantStale: true,
 			wantError: true,
 			wantKind:  FileCheckErrorKindStatError,
@@ -311,6 +317,7 @@ func TestCheckResult_StateProfiles(t *testing.T) {
 				hangingStat(t, path)
 				return path
 			},
+			wantJSON:  "null",
 			wantStale: true,
 			wantError: true,
 			wantKind:  FileCheckErrorKindStatTimeout,
@@ -339,6 +346,17 @@ func TestCheckResult_StateProfiles(t *testing.T) {
 				if *result.FileExists != *tt.wantExists {
 					t.Errorf("file_exists = %v, want %v", *result.FileExists, *tt.wantExists)
 				}
+			}
+			encoded, err := json.Marshal(result)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(encoded, &fields); err != nil {
+				t.Fatal(err)
+			}
+			if got := string(fields["file_exists"]); got != tt.wantJSON {
+				t.Errorf("JSON file_exists = %s, want %s", got, tt.wantJSON)
 			}
 			if result.IsStale != tt.wantStale {
 				t.Errorf("IsStale = %v, want %v", result.IsStale, tt.wantStale)
