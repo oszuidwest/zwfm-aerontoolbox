@@ -178,8 +178,7 @@ func TestResolveToolPathRejectsInvalidCustomPaths(t *testing.T) {
 				t.Fatal("resolveToolPath returned nil error")
 			}
 
-			var configErr *types.ConfigError
-			if !errors.As(err, &configErr) {
+			if _, ok := errors.AsType[*types.ConfigError](err); !ok {
 				t.Fatalf("resolveToolPath error = %T, want *types.ConfigError", err)
 			}
 		})
@@ -530,8 +529,7 @@ func TestBackupServiceOpenFileRejectsInvalidFilename(t *testing.T) {
 	if err == nil {
 		t.Fatal("OpenFile accepted path traversal filename")
 	}
-	var validationErr *types.ValidationError
-	if !errors.As(err, &validationErr) {
+	if _, ok := errors.AsType[*types.ValidationError](err); !ok {
 		t.Fatalf("OpenFile error = %T %[1]v, want *types.ValidationError", err)
 	}
 }
@@ -562,8 +560,7 @@ func TestBackupServiceOpenFileRejectsNonBackupNames(t *testing.T) {
 			if err == nil {
 				t.Fatal("OpenFile accepted non-backup filename")
 			}
-			var validationErr *types.ValidationError
-			if !errors.As(err, &validationErr) {
+			if _, ok := errors.AsType[*types.ValidationError](err); !ok {
 				t.Fatalf("OpenFile error = %T %[1]v, want *types.ValidationError", err)
 			}
 		})
@@ -586,8 +583,7 @@ func TestBackupServiceOpenFileRejectsDirectory(t *testing.T) {
 	if err == nil {
 		t.Fatal("OpenFile accepted directory named like a backup")
 	}
-	var validationErr *types.ValidationError
-	if !errors.As(err, &validationErr) {
+	if _, ok := errors.AsType[*types.ValidationError](err); !ok {
 		t.Fatalf("OpenFile error = %T %[1]v, want *types.ValidationError", err)
 	}
 }
@@ -689,8 +685,7 @@ func TestBackupServiceValidateMissingFileReturnsError(t *testing.T) {
 	if result != nil {
 		t.Fatalf("Validate result = %#v, want nil on missing backup", result)
 	}
-	var notFound *types.NotFoundError
-	if !errors.As(err, &notFound) {
+	if _, ok := errors.AsType[*types.NotFoundError](err); !ok {
 		t.Fatalf("Validate error = %T %[1]v, want *types.NotFoundError", err)
 	}
 }

@@ -1,8 +1,8 @@
 # Build stage
-FROM golang:1.26.6-alpine3.24 AS builder
+FROM golang:1.27.0-alpine3.24 AS builder
 
-# Install dependencies
-RUN apk add --no-cache git ca-certificates tzdata
+# Install the CA bundle needed for module downloads.
+RUN apk add --no-cache ca-certificates
 
 # Set working directory
 WORKDIR /app
@@ -21,12 +21,12 @@ ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION=dev
 ARG COMMIT=unknown
-ARG BUILD_TIME
+ARG BUILD_TIME=unknown
 
 # Build the binary
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
-    -ldflags="-w -s -extldflags '-static' -X main.Version=${VERSION} -X main.Commit=${COMMIT} -X main.BuildTime=${BUILD_TIME}" \
-    -a -installsuffix cgo \
+    -trimpath \
+    -ldflags="-s -w -X main.Version=${VERSION} -X main.Commit=${COMMIT} -X main.BuildTime=${BUILD_TIME}" \
     -o zwfm-aerontoolbox .
 
 # Runtime stage
@@ -42,21 +42,18 @@ RUN apk --no-cache upgrade && \
 
 # Create non-root user
 RUN addgroup -g 1000 aeron && \
-    adduser -u 1000 -G aeron -s /bin/sh -D aeron
+    adduser -u 1000 -G aeron -s /sbin/nologin -D -H aeron
 
 # Set working directory
 WORKDIR /app
 
 # Create backup directory
-RUN mkdir -p /backups && chown aeron:aeron /backups
+RUN install -d -o aeron -g aeron -m 0755 /backups
 
 # Copy binary from builder
-COPY --from=builder /app/zwfm-aerontoolbox /app/zwfm-aerontoolbox
+COPY --from=builder --chown=0:0 --chmod=0555 /app/zwfm-aerontoolbox /app/zwfm-aerontoolbox
 
 # Runtime config is mounted at /app/config.json; never bake local config into the image.
-
-# Change ownership
-RUN chown -R aeron:aeron /app
 
 # Switch to non-root user
 USER 1000:1000
@@ -66,7 +63,7 @@ EXPOSE 8080
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD ["wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+    CMD ["wget", "-q", "-T", "3", "--spider", "http://127.0.0.1:8080/health"]
 
 # Start API server by default
 ENTRYPOINT ["/app/zwfm-aerontoolbox"]
