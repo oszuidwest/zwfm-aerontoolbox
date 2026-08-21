@@ -64,7 +64,7 @@ Kopieer [`config.example.json`](config.example.json) naar `config.json` en pas d
 
 ### Authenticatie
 
-Authenticatie staat standaard aan. Vul in `api.keys` minstens één unieke sleutel in, bijvoorbeeld gegenereerd met `openssl rand -base64 32`; met een lege lijst start de applicatie niet. Zet authenticatie alleen uit in een afgeschermde testomgeving en commit `config.json` nooit.
+Authenticatie staat standaard aan. Vul in `api.keys` minstens één unieke sleutel van minimaal 16 tekens in, bijvoorbeeld gegenereerd met `openssl rand -base64 32`; met een lege lijst of een te korte sleutel start de applicatie niet. Zet authenticatie alleen uit in een afgeschermde testomgeving en commit `config.json` nooit.
 
 Zie [API.md](API.md) voor details over instellingen en endpoints.
 
