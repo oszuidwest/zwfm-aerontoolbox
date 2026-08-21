@@ -110,8 +110,7 @@ func (s *Server) rateLimitMiddleware(limiter *apiRateLimiter) func(http.Handler)
 
 // rateLimitKey buckets valid API keys by their SHA-256 digest (the key itself
 // must never end up in logs or memory dumps) and everything else by the direct
-// peer address. See isValidAPIKey for why a fast hash is the right choice for
-// these high-entropy tokens.
+// peer address.
 func (s *Server) rateLimitKey(r *http.Request) string {
 	if apiKey := r.Header.Get("X-API-Key"); apiKey != "" {
 		if sum := sha256.Sum256([]byte(apiKey)); s.isValidAPIKeyHash(sum) {
