@@ -1296,39 +1296,42 @@ jobs:
           fi
 
       # ==================== S3 SYNC TESTS ====================
-      - name: "S3: Start MinIO container"
+      - name: "S3: Start SeaweedFS container"
         if: matrix.suite == 's3'
         run: |
-          echo "MinIO container starten..."
+          echo "SeaweedFS container starten..."
           # Remove any existing container from previous runs
-          docker rm -f aeron-test-minio 2>/dev/null || true
-          docker run -d --name aeron-test-minio \
-            -p 9000:9000 -p 9001:9001 \
-            -e MINIO_ROOT_USER=minioadmin \
-            -e MINIO_ROOT_PASSWORD=minioadmin123 \
-            minio/minio:latest server /data --console-address ":9001"
+          docker rm -f aeron-test-s3 2>/dev/null || true
+          docker run -d --name aeron-test-s3 \
+            -p 8333:8333 \
+            -v "$PWD/tests/fixtures/s3_config.json:/etc/seaweedfs/s3_config.json:ro" \
+            chrislusf/seaweedfs:latest server -ip.bind=0.0.0.0 -s3 -s3.config=/etc/seaweedfs/s3_config.json -dir=/data
 
-      - name: "S3: Wait for MinIO and create bucket"
+      - name: "S3: Wait for SeaweedFS and create bucket"
         if: matrix.suite == 's3'
+        env:
+          AWS_ACCESS_KEY_ID: aerontest
+          AWS_SECRET_ACCESS_KEY: aerontest123
+          AWS_DEFAULT_REGION: us-east-1
         run: |
-          echo "Wachten op MinIO..."
+          echo "Wachten op SeaweedFS..."
           for i in {1..30}; do
-            if curl -sf http://localhost:9000/minio/health/live > /dev/null 2>&1; then
-              echo "MinIO is klaar"
+            if curl -sf http://localhost:8333/healthz > /dev/null 2>&1; then
+              echo "SeaweedFS is klaar"
               break
             fi
             sleep 1
           done
 
-          # Install MinIO client
-          curl -sL https://dl.min.io/client/mc/release/linux-amd64/mc -o /tmp/mc
-          chmod +x /tmp/mc
-
-          # Configure MinIO client
-          /tmp/mc alias set testminio http://localhost:9000 minioadmin minioadmin123
-
-          # Create test bucket
-          /tmp/mc mb testminio/aeron-backups
+          # Create test bucket (retry: volume/filer can lag a moment behind the S3 endpoint)
+          for i in {1..10}; do
+            if aws --endpoint-url http://localhost:8333 s3 mb s3://aeron-backups 2>/dev/null; then
+              break
+            fi
+            echo "Bucket aanmaken opnieuw proberen... ($i/10)"
+            sleep 2
+          done
+          aws --endpoint-url http://localhost:8333 s3 ls s3://aeron-backups
           echo "Bucket 'aeron-backups' aangemaakt"
 
       - name: "S3: Restart API with S3 config"
@@ -1377,9 +1380,9 @@ jobs:
                 "enabled": true,
                 "bucket": "aeron-backups",
                 "region": "us-east-1",
-                "endpoint": "http://localhost:9000",
-                "access_key_id": "minioadmin",
-                "secret_access_key": "minioadmin123",
+                "endpoint": "http://localhost:8333",
+                "access_key_id": "aerontest",
+                "secret_access_key": "aerontest123",
                 "path_prefix": "test-backups/",
                 "force_path_style": true
               }
@@ -1476,26 +1479,34 @@ jobs:
           echo "::error::Backup/S3 sync timeout na 90 seconden"
           exit 1
 
-      - name: "S3: Verify file exists in MinIO"
+      - name: "S3: Verify file exists in object storage"
         if: matrix.suite == 's3'
+        env:
+          AWS_ACCESS_KEY_ID: aerontest
+          AWS_SECRET_ACCESS_KEY: aerontest123
+          AWS_DEFAULT_REGION: us-east-1
         run: |
-          echo "Controleren of backup in MinIO staat..."
+          echo "Controleren of backup in S3 staat..."
           S3_KEY="test-backups/${{ env.S3_BACKUP_FILENAME }}"
           echo "Zoeken naar: $S3_KEY"
 
           # List objects in bucket
-          OBJECTS=$(/tmp/mc ls testminio/aeron-backups/test-backups/)
+          OBJECTS=$(aws --endpoint-url http://localhost:8333 s3 ls s3://aeron-backups/test-backups/)
           echo "Objecten in bucket: $OBJECTS"
 
           if echo "$OBJECTS" | grep -q "${{ env.S3_BACKUP_FILENAME }}"; then
-            echo "Correct: backup bestand gevonden in MinIO"
+            echo "Correct: backup bestand gevonden in S3"
           else
-            echo "::error::Backup bestand niet gevonden in MinIO"
+            echo "::error::Backup bestand niet gevonden in S3"
             exit 1
           fi
 
       - name: "S3: Delete backup and verify S3 deletion"
         if: matrix.suite == 's3'
+        env:
+          AWS_ACCESS_KEY_ID: aerontest
+          AWS_SECRET_ACCESS_KEY: aerontest123
+          AWS_DEFAULT_REGION: us-east-1
         run: |
           echo "DELETE /api/db/backups/${{ env.S3_BACKUP_FILENAME }}"
           RESPONSE=$(curl -s -X DELETE \
@@ -1514,19 +1525,19 @@ jobs:
           sleep 2
 
           # Verify deleted from S3
-          OBJECTS=$(/tmp/mc ls testminio/aeron-backups/test-backups/ 2>/dev/null || echo "")
+          OBJECTS=$(aws --endpoint-url http://localhost:8333 s3 ls s3://aeron-backups/test-backups/ 2>/dev/null || echo "")
           if echo "$OBJECTS" | grep -q "${{ env.S3_BACKUP_FILENAME }}"; then
-            echo "::error::Backup bestand nog steeds in MinIO na verwijdering"
+            echo "::error::Backup bestand nog steeds in S3 na verwijdering"
             exit 1
           else
-            echo "Correct: backup ook verwijderd uit MinIO"
+            echo "Correct: backup ook verwijderd uit S3"
           fi
 
-      - name: "S3: Cleanup MinIO container"
+      - name: "S3: Cleanup SeaweedFS container"
         if: matrix.suite == 's3' && always()
         run: |
-          docker stop aeron-test-minio 2>/dev/null || true
-          docker rm aeron-test-minio 2>/dev/null || true
+          docker stop aeron-test-s3 2>/dev/null || true
+          docker rm aeron-test-s3 2>/dev/null || true
 
       # ==================== EDGE CASE TESTS ====================
       - name: "Edge: Upload to non-existent artist"
