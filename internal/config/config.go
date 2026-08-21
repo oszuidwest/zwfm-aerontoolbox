@@ -43,6 +43,11 @@ type ImageConfig struct {
 	MaxPixels                 int64 `json:"max_pixels" validate:"gte=0"`
 }
 
+// minAPIKeyLength is the minimum length for configured API keys. Keys are
+// stored and compared as fast SHA-256 digests (not a password KDF), so they
+// must be long random tokens rather than short guessable passwords.
+const minAPIKeyLength = 16
+
 // APIConfig controls API authentication and request timeouts.
 type APIConfig struct {
 	Enabled                  bool     `json:"enabled"`
@@ -507,12 +512,18 @@ func newConfigValidator() *validator.Validate {
 }
 
 // validateAPIConfig requires at least one credential whenever authentication
-// is enabled. Slice field validation alone treats [] as present, so enforce the
-// non-empty collection at the struct boundary.
+// is enabled, and a minimum length for every configured key. Slice field
+// validation alone treats [] as present, so enforce the non-empty collection
+// at the struct boundary.
 func validateAPIConfig(sl validator.StructLevel) {
 	api := sl.Current().Interface().(APIConfig)
 	if api.Enabled && len(api.Keys) == 0 {
 		sl.ReportError(api.Keys, "keys", "Keys", "required_when_enabled", "")
+	}
+	for i, key := range api.Keys {
+		if key != "" && len(key) < minAPIKeyLength {
+			sl.ReportError(key, fmt.Sprintf("keys[%d]", i), "Keys", "api_key_min_length", fmt.Sprintf("%d", minAPIKeyLength))
+		}
 	}
 }
 
@@ -664,6 +675,8 @@ func tagMessage(tag, param string) string {
 		return fmt.Sprintf("must be at most %s", param)
 	case "oneof":
 		return fmt.Sprintf("must be one of [%s]", param)
+	case "api_key_min_length":
+		return fmt.Sprintf("must be at least %s characters (generate keys with e.g. \"openssl rand -base64 32\")", param)
 	case "identifier":
 		return "contains invalid characters (only letters, numbers and underscores allowed)"
 	case "guid":

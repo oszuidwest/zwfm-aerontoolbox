@@ -230,6 +230,13 @@ func (s *Server) requireEnabled(message string, enabled func(*config.Config) boo
 	}
 }
 
+// isValidAPIKey reports whether the presented key matches a configured key.
+// Keys are compared as SHA-256 digests in constant time. A fast hash is a
+// deliberate choice over a password KDF such as bcrypt or argon2: API keys are
+// operator-provisioned random tokens (config validation enforces a minimum
+// length and the docs recommend "openssl rand -base64 32"), not user-chosen
+// passwords, and this check runs on every request, where a slow KDF would add
+// a CPU exhaustion vector for unauthenticated traffic.
 func (s *Server) isValidAPIKey(key string) bool {
 	if key == "" {
 		return false
