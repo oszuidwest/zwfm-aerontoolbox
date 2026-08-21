@@ -1,22 +1,19 @@
 module github.com/oszuidwest/zwfm-aerontoolbox
 
-go 1.26.6
-
-require (
-	github.com/doyensec/safeurl v0.2.5
-	github.com/go-chi/chi/v5 v5.3.1
-	github.com/jmoiron/sqlx v1.4.0
-	github.com/lib/pq v1.12.3
-	golang.org/x/image v0.45.0
-)
+go 1.27.0
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.43.5
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.35
 	github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager v0.3.12
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.107.1
+	github.com/doyensec/safeurl v0.2.5
+	github.com/go-chi/chi/v5 v5.3.1
 	github.com/go-playground/validator/v10 v10.30.3
+	github.com/jmoiron/sqlx v1.4.0
+	github.com/lib/pq v1.12.3
 	github.com/netresearch/go-cron v0.15.1
+	golang.org/x/image v0.45.0
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/sync v0.22.0
 )

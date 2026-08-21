@@ -142,12 +142,10 @@ func TestAPIRateLimiterAllowConcurrent(t *testing.T) {
 	var wg sync.WaitGroup
 	results := make(chan bool, goroutines)
 	for range goroutines {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			allowed, _, _ := limiter.allow("client-a")
 			results <- allowed
-		}()
+		})
 	}
 	wg.Wait()
 	close(results)

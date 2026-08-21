@@ -26,6 +26,9 @@ wget https://raw.githubusercontent.com/oszuidwest/zwfm-aerontoolbox/main/docker-
 openssl rand -base64 32
 
 # Stem de overige instellingen af op jouw situatie, dan:
+mkdir -p backups
+# De container draait als UID/GID 1000 en moet naar deze bind mount kunnen schrijven:
+sudo chown 1000:1000 backups
 docker compose up -d
 ```
 
@@ -34,7 +37,7 @@ De meegeleverde Docker-configuratie gebruikt `Europe/Amsterdam` voor geplande ta
 ### Andere installatiemethoden
 
 - Download een Linux- of macOS-binary via [GitHub Releases](https://github.com/oszuidwest/zwfm-aerontoolbox/releases).
-- Zelf bouwen vereist Go 1.26 of nieuwer:
+- Zelf bouwen vereist Go 1.27 of nieuwer:
 
 ```bash
 git clone https://github.com/oszuidwest/zwfm-aerontoolbox.git

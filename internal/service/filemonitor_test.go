@@ -655,8 +655,7 @@ func TestTriggerCheck_ReturnsConflictWhenAlreadyRunning(t *testing.T) {
 	if runID2 != 0 {
 		t.Errorf("conflict runID = %d, want 0", runID2)
 	}
-	var conflict *types.ConflictError
-	if !errors.As(err, &conflict) {
+	if _, ok := errors.AsType[*types.ConflictError](err); !ok {
 		t.Errorf("expected *types.ConflictError, got %T: %v", err, err)
 	}
 
