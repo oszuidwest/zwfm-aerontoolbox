@@ -18,6 +18,11 @@ env:
   API_PORT: 8888
   DB_PORT: 5433
   API_KEY: test-api-key-12345
+  # SeaweedFS S3 test credentials (server side lives in tests/fixtures/s3_config.json)
+  AWS_ACCESS_KEY_ID: aerontest
+  AWS_SECRET_ACCESS_KEY: aerontest123
+  AWS_DEFAULT_REGION: us-east-1
+  AWS_ENDPOINT_URL: http://localhost:8333
   # Known IDs from test fixtures
   ARTIST_ID: "9e37ff1f-7823-43ce-93d0-12fc1c2edb8b"
   BLOF_ID: "add55a6e-2068-4114-b82a-e0729881f0be"
@@ -93,7 +98,7 @@ jobs:
             sudo apt-get install -y postgresql-client
           fi
 
-      - name: Start test database
+      - name: Start test containers
         run: |
           cd tests
           docker compose -f docker-compose.test.yml up -d --wait
@@ -1296,43 +1301,22 @@ jobs:
           fi
 
       # ==================== S3 SYNC TESTS ====================
-      - name: "S3: Start SeaweedFS container"
+      # SeaweedFS (aeron-test-s3) is started health-checked by docker compose in
+      # "Start test containers" and removed by the final Cleanup step.
+      - name: "S3: Create test bucket"
         if: matrix.suite == 's3'
         run: |
-          echo "SeaweedFS container starten..."
-          # Remove any existing container from previous runs
-          docker rm -f aeron-test-s3 2>/dev/null || true
-          docker run -d --name aeron-test-s3 \
-            -p 8333:8333 \
-            -v "$PWD/tests/fixtures/s3_config.json:/etc/seaweedfs/s3_config.json:ro" \
-            chrislusf/seaweedfs:latest server -ip.bind=0.0.0.0 -s3 -s3.config=/etc/seaweedfs/s3_config.json -dir=/data
-
-      - name: "S3: Wait for SeaweedFS and create bucket"
-        if: matrix.suite == 's3'
-        env:
-          AWS_ACCESS_KEY_ID: aerontest
-          AWS_SECRET_ACCESS_KEY: aerontest123
-          AWS_DEFAULT_REGION: us-east-1
-        run: |
-          echo "Wachten op SeaweedFS..."
-          for i in {1..30}; do
-            if curl -sf http://localhost:8333/healthz > /dev/null 2>&1; then
-              echo "SeaweedFS is klaar"
-              break
-            fi
-            sleep 1
-          done
-
-          # Create test bucket (retry: volume/filer can lag a moment behind the S3 endpoint)
+          # Retry: volume/filer can lag a moment behind the healthy S3 endpoint
           for i in {1..10}; do
-            if aws --endpoint-url http://localhost:8333 s3 mb s3://aeron-backups 2>/dev/null; then
-              break
+            if aws s3 mb s3://aeron-backups 2>/dev/null; then
+              echo "Bucket 'aeron-backups' aangemaakt"
+              exit 0
             fi
             echo "Bucket aanmaken opnieuw proberen... ($i/10)"
             sleep 2
           done
-          aws --endpoint-url http://localhost:8333 s3 ls s3://aeron-backups
-          echo "Bucket 'aeron-backups' aangemaakt"
+          echo "::error::Bucket aanmaken gefaald"
+          exit 1
 
       - name: "S3: Restart API with S3 config"
         if: matrix.suite == 's3'
@@ -1379,10 +1363,10 @@ jobs:
               "s3": {
                 "enabled": true,
                 "bucket": "aeron-backups",
-                "region": "us-east-1",
-                "endpoint": "http://localhost:8333",
-                "access_key_id": "aerontest",
-                "secret_access_key": "aerontest123",
+                "region": "${{ env.AWS_DEFAULT_REGION }}",
+                "endpoint": "${{ env.AWS_ENDPOINT_URL }}",
+                "access_key_id": "${{ env.AWS_ACCESS_KEY_ID }}",
+                "secret_access_key": "${{ env.AWS_SECRET_ACCESS_KEY }}",
                 "path_prefix": "test-backups/",
                 "force_path_style": true
               }
@@ -1481,17 +1465,13 @@ jobs:
 
       - name: "S3: Verify file exists in object storage"
         if: matrix.suite == 's3'
-        env:
-          AWS_ACCESS_KEY_ID: aerontest
-          AWS_SECRET_ACCESS_KEY: aerontest123
-          AWS_DEFAULT_REGION: us-east-1
         run: |
           echo "Controleren of backup in S3 staat..."
           S3_KEY="test-backups/${{ env.S3_BACKUP_FILENAME }}"
           echo "Zoeken naar: $S3_KEY"
 
           # List objects in bucket
-          OBJECTS=$(aws --endpoint-url http://localhost:8333 s3 ls s3://aeron-backups/test-backups/)
+          OBJECTS=$(aws s3 ls s3://aeron-backups/test-backups/)
           echo "Objecten in bucket: $OBJECTS"
 
           if echo "$OBJECTS" | grep -q "${{ env.S3_BACKUP_FILENAME }}"; then
@@ -1503,10 +1483,6 @@ jobs:
 
       - name: "S3: Delete backup and verify S3 deletion"
         if: matrix.suite == 's3'
-        env:
-          AWS_ACCESS_KEY_ID: aerontest
-          AWS_SECRET_ACCESS_KEY: aerontest123
-          AWS_DEFAULT_REGION: us-east-1
         run: |
           echo "DELETE /api/db/backups/${{ env.S3_BACKUP_FILENAME }}"
           RESPONSE=$(curl -s -X DELETE \
@@ -1525,19 +1501,13 @@ jobs:
           sleep 2
 
           # Verify deleted from S3
-          OBJECTS=$(aws --endpoint-url http://localhost:8333 s3 ls s3://aeron-backups/test-backups/ 2>/dev/null || echo "")
+          OBJECTS=$(aws s3 ls s3://aeron-backups/test-backups/ 2>/dev/null || echo "")
           if echo "$OBJECTS" | grep -q "${{ env.S3_BACKUP_FILENAME }}"; then
             echo "::error::Backup bestand nog steeds in S3 na verwijdering"
             exit 1
           else
             echo "Correct: backup ook verwijderd uit S3"
           fi
-
-      - name: "S3: Cleanup SeaweedFS container"
-        if: matrix.suite == 's3' && always()
-        run: |
-          docker stop aeron-test-s3 2>/dev/null || true
-          docker rm aeron-test-s3 2>/dev/null || true
 
       # ==================== EDGE CASE TESTS ====================
       - name: "Edge: Upload to non-existent artist"

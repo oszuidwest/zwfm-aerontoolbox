@@ -8,7 +8,7 @@
           "secretKey": "aerontest123"
         }
       ],
-      "actions": ["Admin", "Read", "List", "Tagging", "Write"]
+      "actions": ["Admin"]
     }
   ]
 }
