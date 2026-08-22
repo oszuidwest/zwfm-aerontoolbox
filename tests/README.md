@@ -8,8 +8,7 @@ This directory contains test fixtures and data for the Aeron Toolbox project.
 tests/
 ├── fixtures/              # Test data
 │   └── mock_data.sql      # Mock database data (artists, tracks, playlist)
-├── docker-compose.test.yml # Test database setup
-├── Dockerfile.testdb      # Test database image
+├── docker-compose.test.yml # Test database (and optional SeaweedFS) setup
 └── README.md              # This file
 ```
 
@@ -28,7 +27,9 @@ cd tests
 docker compose -f docker-compose.test.yml up -d
 ```
 
-This starts a PostgreSQL container on port 5433 with mock data.
+This starts a PostgreSQL container on port 5433 with mock data. The SeaweedFS
+container (used by the S3 test suite) is behind a compose profile and only
+starts when you add `--profile s3`.
 
 ### 2. Create a test config and run the application
 
@@ -44,12 +45,13 @@ go build -o zwfm-aerontoolbox .
 ## Test Data
 
 The `fixtures/mock_data.sql` file contains:
-- 80 popular artists (international and Dutch)
-  - 10 artists with dummy JPEG images (Queen, ABBA, Madonna, etc.)
-  - 70 artists without images
-- 130+ tracks with realistic data
-  - 10 tracks with dummy JPEG images (Bohemian Rhapsody, Dancing Queen, etc.)
-  - 120+ tracks without images
+- 1000 artists
+  - 50 artists with a dummy PNG image (deterministic: the 50 lowest artist IDs)
+  - 950 artists without images
+- 1100 tracks with realistic data
+  - 50 tracks with a dummy PNG image (deterministic: the 50 lowest title IDs)
+  - 1050 tracks without images
+- Playlist items covering the mocked broadcast day
 
 ## CI/CD Integration
 
@@ -68,7 +70,7 @@ GitHub Actions automatically:
 
 The test configuration uses:
 - **Database**: PostgreSQL 17
-- **Port**: 5432 (CI) or 5433 (local)
+- **Port**: 5433 (both CI and local; the container maps 5433 -> 5432)
 - **API Keys**: test-api-key-12345, another-test-key-67890
 
 ## System Requirements for Local Testing

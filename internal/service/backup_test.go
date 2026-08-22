@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +15,8 @@ import (
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/notify"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
 )
+
+const testBackupFilename = "aeron-backup-2026-01-02-030405.dump"
 
 type fakeBackupObjectStore struct {
 	deleteFunc func(context.Context, string) error
@@ -52,36 +53,72 @@ func newBlockingStore() (store *fakeBackupObjectStore, started, release chan str
 	return store, started, release
 }
 
-func newTestBackupService(t *testing.T, store backupObjectStore) *BackupService {
+type backupTestSettings struct {
+	store       backupObjectStore
+	maxBackups  int
+	rootCleanup bool
+}
+
+type backupTestOption func(*backupTestSettings)
+
+// withStore installs an S3 object store on the service under test.
+func withStore(store backupObjectStore) backupTestOption {
+	return func(s *backupTestSettings) { s.store = store }
+}
+
+// withMaxBackups overrides the max_backups retention limit (default 10).
+func withMaxBackups(n int) backupTestOption {
+	return func(s *backupTestSettings) { s.maxBackups = n }
+}
+
+// withoutRootCleanup skips the automatic Close cleanup, for tests that close
+// the service themselves and inspect the released backup root afterwards.
+func withoutRootCleanup() backupTestOption {
+	return func(s *backupTestSettings) { s.rootCleanup = false }
+}
+
+// newTestBackupService builds a BackupService over a fresh temp directory and,
+// unless opted out, registers Close as a test cleanup.
+func newTestBackupService(t *testing.T, opts ...backupTestOption) *BackupService {
 	t.Helper()
+
+	settings := backupTestSettings{maxBackups: 10, rootCleanup: true}
+	for _, opt := range opts {
+		opt(&settings)
+	}
 
 	dir := t.TempDir()
 	root, err := os.OpenRoot(dir)
 	if err != nil {
 		t.Fatalf("OpenRoot: %v", err)
 	}
-	t.Cleanup(func() { _ = root.Close() })
 
-	return &BackupService{
+	svc := &BackupService{
 		config: &config.Config{
 			Backup: config.BackupConfig{
 				Enabled:       true,
 				Path:          dir,
 				RetentionDays: 1,
-				MaxBackups:    10,
+				MaxBackups:    settings.maxBackups,
 			},
 		},
 		backupRoot: root,
 		runner:     async.New(),
-		s3:         store,
+		s3:         settings.store,
 	}
+	if settings.rootCleanup {
+		t.Cleanup(svc.Close)
+	}
+	return svc
 }
 
-func createBackupFile(t *testing.T, svc *BackupService, filename string, modTime time.Time) {
+// createBackupFile writes a backup file with the given content and modification
+// time into the service's backup directory.
+func createBackupFile(t *testing.T, svc *BackupService, filename, content string, modTime time.Time) {
 	t.Helper()
 
 	path := filepath.Join(svc.config.Backup.GetPath(), filename)
-	if err := os.WriteFile(path, []byte("backup"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 	if err := os.Chtimes(path, modTime, modTime); err != nil {
@@ -89,34 +126,40 @@ func createBackupFile(t *testing.T, svc *BackupService, filename string, modTime
 	}
 }
 
+func TestBackupServiceStartRejectsConcurrentRun(t *testing.T) {
+	svc := newTestBackupService(t)
+	if !svc.runner.TryStart() {
+		t.Fatal("TryStart returned false")
+	}
+	defer svc.runner.Done()
+
+	err := svc.Start(BackupRequest{})
+	if _, ok := errors.AsType[*types.ConflictError](err); !ok {
+		t.Fatalf("Start error = %T %[1]v, want *types.ConflictError", err)
+	}
+}
+
 func TestDeleteTracksS3DeleteAsBackgroundWork(t *testing.T) {
 	store, started, release := newBlockingStore()
-	svc := newTestBackupService(t, store)
+	svc := newTestBackupService(t, withStore(store))
 
-	createBackupFile(t, svc, "aeron-backup-2026-06-29-120000.dump", time.Now())
-	if err := svc.Delete("aeron-backup-2026-06-29-120000.dump"); err != nil {
+	createBackupFile(t, svc, testBackupFilename, "backup", time.Now())
+	if err := svc.Delete(testBackupFilename); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 
-	<-started
+	mustReceive(t, started, "S3 delete start")
+
 	closeDone := make(chan struct{})
 	go func() {
 		svc.Close()
 		close(closeDone)
 	}()
 
-	select {
-	case <-closeDone:
-		t.Fatal("Close returned before handler-initiated S3 delete completed")
-	case <-time.After(50 * time.Millisecond):
-	}
+	mustNotReceive(t, closeDone, 50*time.Millisecond, "Close return before handler-initiated S3 delete completed")
 
 	close(release)
-	select {
-	case <-closeDone:
-	case <-time.After(time.Second):
-		t.Fatal("Close did not return after S3 delete completed")
-	}
+	mustReceive(t, closeDone, "Close return after S3 delete completed")
 }
 
 func TestNewBackupServiceLeavesObjectStoreNilWhenS3Disabled(t *testing.T) {
@@ -178,126 +221,27 @@ func TestResolveToolPathRejectsInvalidCustomPaths(t *testing.T) {
 				t.Fatal("resolveToolPath returned nil error")
 			}
 
-			var configErr *types.ConfigError
-			if !errors.As(err, &configErr) {
+			if _, ok := errors.AsType[*types.ConfigError](err); !ok {
 				t.Fatalf("resolveToolPath error = %T, want *types.ConfigError", err)
 			}
 		})
 	}
 }
 
-func TestCleanupOldBackupsTracksS3DeleteAsChild(t *testing.T) {
+// TestCleanupS3DeleteViaGoChildSurvivesShutdown covers the single production
+// call site deleteDuringRun -> runner.GoChild(deleteS3Backup): a retention
+// delete scheduled from within the primary run, after shutdown has already
+// started, must still run and be waited on by Close.
+func TestCleanupS3DeleteViaGoChildSurvivesShutdown(t *testing.T) {
 	store, started, release := newBlockingStore()
-	svc := newTestBackupService(t, store)
+	svc := newTestBackupService(t, withStore(store))
 
-	createBackupFile(t, svc, "aeron-backup-2026-06-28-120000.dump", time.Now().Add(-48*time.Hour))
+	createBackupFile(t, svc, "aeron-backup-2026-06-28-120000.dump", "backup", time.Now().Add(-48*time.Hour))
 	if !svc.runner.TryStart() {
 		t.Fatal("TryStart returned false")
 	}
-
-	runDone := make(chan struct{})
-	svc.runner.Go(func() {
-		svc.cleanupOldBackups()
-		close(runDone)
-	})
-
-	<-started
-	<-runDone
-
-	closeDone := make(chan struct{})
-	go func() {
-		svc.Close()
-		close(closeDone)
-	}()
-
-	select {
-	case <-closeDone:
-		t.Fatal("Close returned before retention S3 child delete completed")
-	case <-time.After(50 * time.Millisecond):
-	}
-
-	close(release)
-	select {
-	case <-closeDone:
-	case <-time.After(time.Second):
-		t.Fatal("Close did not return after retention S3 child delete completed")
-	}
-}
-
-func TestCleanupOldBackupsSchedulesS3DeleteAfterShutdownStarts(t *testing.T) {
-	const filename = "aeron-backup-2026-06-28-120000.dump"
-
-	deleted := make(chan string, 1)
-	store := &fakeBackupObjectStore{
-		deleteFunc: func(ctx context.Context, filename string) error {
-			select {
-			case deleted <- filename:
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-			return nil
-		},
-	}
-	svc := newTestBackupService(t, store)
-
-	createBackupFile(t, svc, filename, time.Now().Add(-48*time.Hour))
-	if !svc.runner.TryStart() {
-		t.Fatal("TryStart returned false")
-	}
-
-	closeDone := make(chan struct{})
-	go func() {
-		svc.Close()
-		close(closeDone)
-	}()
-
-	for svc.runner.TryGoBackground(func() {}) {
-		runtime.Gosched()
-	}
-
-	runDone := make(chan struct{})
-	svc.runner.Go(func() {
-		svc.cleanupOldBackups()
-		close(runDone)
-	})
-
-	select {
-	case <-runDone:
-	case <-time.After(time.Second):
-		t.Fatal("cleanupOldBackups did not return")
-	}
-
-	select {
-	case got := <-deleted:
-		if got != filename {
-			t.Fatalf("deleted filename = %q, want %q", got, filename)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("retention S3 delete was not scheduled after shutdown started")
-	}
-
-	select {
-	case <-closeDone:
-	case <-time.After(time.Second):
-		t.Fatal("Close did not return after retention S3 delete completed")
-	}
-}
-
-func TestCleanupMaxBackupsTracksS3DeleteAsChild(t *testing.T) {
-	store, started, release := newBlockingStore()
-	svc := newTestBackupService(t, store)
-	svc.config.Backup.MaxBackups = 1
-
-	const (
-		newest = "aeron-backup-2026-06-29-120000.dump"
-		oldest = "aeron-backup-2026-06-29-110000.dump"
-	)
-	createBackupFile(t, svc, newest, time.Now())
-	createBackupFile(t, svc, oldest, time.Now().Add(-time.Hour))
-
-	if !svc.runner.TryStart() {
-		t.Fatal("TryStart returned false")
-	}
+	shutdownCtx, cancel := svc.runner.Context(time.Hour)
+	defer cancel()
 
 	closeDone := make(chan struct{})
 	go func() {
@@ -307,9 +251,7 @@ func TestCleanupMaxBackupsTracksS3DeleteAsChild(t *testing.T) {
 
 	// Wait until shutdown has started so we exercise the post-Close path:
 	// TryGoBackground would now drop the delete, GoChild must still run it.
-	for svc.runner.TryGoBackground(func() {}) {
-		runtime.Gosched()
-	}
+	mustReceive(t, shutdownCtx.Done(), "runner shutdown signal")
 
 	runDone := make(chan struct{})
 	svc.runner.Go(func() {
@@ -317,17 +259,25 @@ func TestCleanupMaxBackupsTracksS3DeleteAsChild(t *testing.T) {
 		close(runDone)
 	})
 
-	select {
-	case <-runDone:
-	case <-time.After(time.Second):
-		t.Fatal("cleanupOldBackups did not return")
-	}
+	mustReceive(t, runDone, "cleanupOldBackups return")
+	mustReceive(t, started, "retention S3 delete scheduled after shutdown started")
+	mustNotReceive(t, closeDone, 50*time.Millisecond, "Close return before retention S3 child delete completed")
 
-	select {
-	case <-started:
-	case <-time.After(time.Second):
-		t.Fatal("max_backups S3 delete was not scheduled after shutdown started")
-	}
+	close(release)
+	mustReceive(t, closeDone, "Close return after retention S3 child delete completed")
+}
+
+func TestCleanupMaxBackupsDeletesOldestKeepsNewest(t *testing.T) {
+	svc := newTestBackupService(t, withMaxBackups(1))
+
+	const (
+		newest = "aeron-backup-2026-06-29-120000.dump"
+		oldest = "aeron-backup-2026-06-29-110000.dump"
+	)
+	createBackupFile(t, svc, newest, "backup", time.Now())
+	createBackupFile(t, svc, oldest, "backup", time.Now().Add(-time.Hour))
+
+	svc.cleanupOldBackups()
 
 	// max_backups removes the oldest excess backup and keeps the newest.
 	if _, err := os.Stat(filepath.Join(svc.config.Backup.GetPath(), oldest)); !os.IsNotExist(err) {
@@ -335,13 +285,6 @@ func TestCleanupMaxBackupsTracksS3DeleteAsChild(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(svc.config.Backup.GetPath(), newest)); err != nil {
 		t.Fatalf("newest backup should remain: %v", err)
-	}
-
-	close(release)
-	select {
-	case <-closeDone:
-	case <-time.After(time.Second):
-		t.Fatal("Close did not return after max_backups S3 delete completed")
 	}
 }
 
@@ -353,10 +296,9 @@ func TestDeleteSkipsS3DeleteAfterClose(t *testing.T) {
 			return nil
 		},
 	}
-	svc := newTestBackupService(t, store)
+	svc := newTestBackupService(t, withStore(store))
 
-	const filename = "aeron-backup-2026-06-29-120000.dump"
-	createBackupFile(t, svc, filename, time.Now())
+	createBackupFile(t, svc, testBackupFilename, "backup", time.Now())
 
 	// Close the runner only: this reproduces the shutdown window inside
 	// BackupService.Close where the runner is already closed but the backup
@@ -365,19 +307,15 @@ func TestDeleteSkipsS3DeleteAfterClose(t *testing.T) {
 	svc.runner.Close()
 
 	// Local removal must still succeed while the root is open.
-	if err := svc.Delete(filename); err != nil {
+	if err := svc.Delete(testBackupFilename); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(svc.config.Backup.GetPath(), filename)); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(svc.config.Backup.GetPath(), testBackupFilename)); !os.IsNotExist(err) {
 		t.Fatalf("local backup should be deleted, stat err = %v", err)
 	}
 
 	// With the runner closed, TryGoBackground drops the work: S3 delete must not run.
-	select {
-	case <-called:
-		t.Fatal("S3 delete ran after Close; expected it to be dropped")
-	case <-time.After(50 * time.Millisecond):
-	}
+	mustNotReceive(t, called, 50*time.Millisecond, "S3 delete after Close (expected it to be dropped)")
 }
 
 func TestCompressionLevel(t *testing.T) {
@@ -391,7 +329,7 @@ func TestCompressionLevel(t *testing.T) {
 		name      string
 		requested int
 		want      int
-		wantErr   string
+		wantErr   bool
 	}{
 		{
 			name:      "explicit zero uses default",
@@ -411,23 +349,27 @@ func TestCompressionLevel(t *testing.T) {
 		{
 			name:      "negative level",
 			requested: -1,
-			wantErr:   "use 0 for default, or 1-9",
+			wantErr:   true,
 		},
 		{
 			name:      "too high level",
 			requested: 10,
-			wantErr:   "use 0 for default, or 1-9",
+			wantErr:   true,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := svc.compressionLevel(tt.requested)
-			if tt.wantErr != "" {
+			if tt.wantErr {
 				if err == nil {
 					t.Fatal("compressionLevel returned nil error, want error")
 				}
-				if !strings.Contains(err.Error(), tt.wantErr) {
-					t.Fatalf("error = %q, want substring %q", err.Error(), tt.wantErr)
+				validationErr, ok := errors.AsType[*types.ValidationError](err)
+				if !ok {
+					t.Fatalf("compressionLevel error = %T %[1]v, want *types.ValidationError", err)
+				}
+				if validationErr.Field != "compression" {
+					t.Fatalf("ValidationError field = %q, want compression", validationErr.Field)
 				}
 				return
 			}
@@ -438,28 +380,6 @@ func TestCompressionLevel(t *testing.T) {
 				t.Fatalf("compressionLevel = %d, want %d", got, tt.want)
 			}
 		})
-	}
-}
-
-const testBackupFilename = "aeron-backup-2026-01-02-030405.dump"
-
-func newBackupTestService(t *testing.T, backupPath string) *BackupService {
-	t.Helper()
-
-	root, err := os.OpenRoot(backupPath)
-	if err != nil {
-		t.Fatalf("open backup root: %v", err)
-	}
-
-	return &BackupService{
-		config: &config.Config{
-			Backup: config.BackupConfig{
-				Enabled: true,
-				Path:    backupPath,
-			},
-		},
-		backupRoot: root,
-		runner:     async.New(),
 	}
 }
 
@@ -488,13 +408,8 @@ fi
 }
 
 func TestBackupServiceOpenFileReadsManagedBackup(t *testing.T) {
-	backupPath := t.TempDir()
-	if err := os.WriteFile(filepath.Join(backupPath, testBackupFilename), []byte("backup-data"), 0o600); err != nil {
-		t.Fatalf("write backup file: %v", err)
-	}
-
-	svc := newBackupTestService(t, backupPath)
-	t.Cleanup(svc.Close)
+	svc := newTestBackupService(t)
+	createBackupFile(t, svc, testBackupFilename, "backup-data", time.Now())
 
 	file, info, err := svc.OpenFile(testBackupFilename)
 	if err != nil {
@@ -519,102 +434,85 @@ func TestBackupServiceOpenFileReadsManagedBackup(t *testing.T) {
 	}
 }
 
-func TestBackupServiceOpenFileRejectsInvalidFilename(t *testing.T) {
-	svc := newBackupTestService(t, t.TempDir())
-	t.Cleanup(svc.Close)
-
-	file, _, err := svc.OpenFile("../" + testBackupFilename)
-	if file != nil {
-		_ = file.Close()
+func TestBackupServiceOpenFileRejections(t *testing.T) {
+	tests := []struct {
+		name     string
+		arrange  func(t *testing.T, svc *BackupService)
+		filename string
+		// anyError accepts any non-nil error instead of requiring a
+		// ValidationError (os.Root reports symlink escapes with its own error).
+		anyError      bool
+		skipOnWindows string
+	}{
+		{
+			name:     "path traversal filename",
+			filename: "../" + testBackupFilename,
+		},
+		{
+			name: "non-backup prefix",
+			arrange: func(t *testing.T, svc *BackupService) {
+				createBackupFile(t, svc, "notaprefix.dump", "backup-data", time.Now())
+			},
+			filename: "notaprefix.dump",
+		},
+		{
+			name: "non-backup extension",
+			arrange: func(t *testing.T, svc *BackupService) {
+				createBackupFile(t, svc, "aeron-backup-2026-01-02-030405.txt", "backup-data", time.Now())
+			},
+			filename: "aeron-backup-2026-01-02-030405.txt",
+		},
+		{
+			name: "directory named like a backup",
+			arrange: func(t *testing.T, svc *BackupService) {
+				if err := os.Mkdir(filepath.Join(svc.config.Backup.GetPath(), testBackupFilename), 0o700); err != nil {
+					t.Fatalf("create backup directory: %v", err)
+				}
+			},
+			filename: testBackupFilename,
+		},
+		{
+			name: "symlink escape",
+			arrange: func(t *testing.T, svc *BackupService) {
+				outsidePath := filepath.Join(t.TempDir(), "outside.dump")
+				if err := os.WriteFile(outsidePath, []byte("secret"), 0o600); err != nil {
+					t.Fatalf("write outside file: %v", err)
+				}
+				if err := os.Symlink(outsidePath, filepath.Join(svc.config.Backup.GetPath(), testBackupFilename)); err != nil {
+					t.Fatalf("create symlink escape: %v", err)
+				}
+			},
+			filename:      testBackupFilename,
+			anyError:      true,
+			skipOnWindows: "symlink creation requires elevated privileges on many Windows systems",
+		},
 	}
-	if err == nil {
-		t.Fatal("OpenFile accepted path traversal filename")
-	}
-	var validationErr *types.ValidationError
-	if !errors.As(err, &validationErr) {
-		t.Fatalf("OpenFile error = %T %[1]v, want *types.ValidationError", err)
-	}
-}
 
-func TestBackupServiceOpenFileRejectsNonBackupNames(t *testing.T) {
-	backupPath := t.TempDir()
-	for _, filename := range []string{
-		"notaprefix.dump",
-		"aeron-backup-2026-01-02-030405.txt",
-	} {
-		if err := os.WriteFile(filepath.Join(backupPath, filename), []byte("backup-data"), 0o600); err != nil {
-			t.Fatalf("write backup file %q: %v", filename, err)
-		}
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.skipOnWindows != "" && runtime.GOOS == "windows" {
+				t.Skip(tt.skipOnWindows)
+			}
 
-	svc := newBackupTestService(t, backupPath)
-	t.Cleanup(svc.Close)
+			svc := newTestBackupService(t)
+			if tt.arrange != nil {
+				tt.arrange(t, svc)
+			}
 
-	for _, filename := range []string{
-		"notaprefix.dump",
-		"aeron-backup-2026-01-02-030405.txt",
-	} {
-		t.Run(filename, func(t *testing.T) {
-			file, _, err := svc.OpenFile(filename)
+			file, _, err := svc.OpenFile(tt.filename)
 			if file != nil {
 				_ = file.Close()
 			}
 			if err == nil {
-				t.Fatal("OpenFile accepted non-backup filename")
+				t.Fatal("OpenFile accepted an invalid backup target")
 			}
-			var validationErr *types.ValidationError
-			if !errors.As(err, &validationErr) {
+			if tt.anyError {
+				return
+			}
+			if _, ok := errors.AsType[*types.ValidationError](err); !ok {
 				t.Fatalf("OpenFile error = %T %[1]v, want *types.ValidationError", err)
 			}
 		})
-	}
-}
-
-func TestBackupServiceOpenFileRejectsDirectory(t *testing.T) {
-	backupPath := t.TempDir()
-	if err := os.Mkdir(filepath.Join(backupPath, testBackupFilename), 0o700); err != nil {
-		t.Fatalf("create backup directory: %v", err)
-	}
-
-	svc := newBackupTestService(t, backupPath)
-	t.Cleanup(svc.Close)
-
-	file, _, err := svc.OpenFile(testBackupFilename)
-	if file != nil {
-		_ = file.Close()
-	}
-	if err == nil {
-		t.Fatal("OpenFile accepted directory named like a backup")
-	}
-	var validationErr *types.ValidationError
-	if !errors.As(err, &validationErr) {
-		t.Fatalf("OpenFile error = %T %[1]v, want *types.ValidationError", err)
-	}
-}
-
-func TestBackupServiceOpenFileRejectsSymlinkEscape(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("symlink creation requires elevated privileges on many Windows systems")
-	}
-
-	backupPath := t.TempDir()
-	outsidePath := filepath.Join(t.TempDir(), "outside.dump")
-	if err := os.WriteFile(outsidePath, []byte("secret"), 0o600); err != nil {
-		t.Fatalf("write outside file: %v", err)
-	}
-	if err := os.Symlink(outsidePath, filepath.Join(backupPath, testBackupFilename)); err != nil {
-		t.Fatalf("create symlink escape: %v", err)
-	}
-
-	svc := newBackupTestService(t, backupPath)
-	t.Cleanup(svc.Close)
-
-	file, _, err := svc.OpenFile(testBackupFilename)
-	if file != nil {
-		_ = file.Close()
-	}
-	if err == nil {
-		t.Fatal("OpenFile followed symlink outside backup root")
 	}
 }
 
@@ -623,13 +521,8 @@ func TestBackupServiceValidateStreamsRootedFileToPgRestore(t *testing.T) {
 		t.Skip("test uses a POSIX shell helper")
 	}
 
-	backupPath := t.TempDir()
-	if err := os.WriteFile(filepath.Join(backupPath, testBackupFilename), []byte("backup-data"), 0o600); err != nil {
-		t.Fatalf("write backup file: %v", err)
-	}
-
-	svc := newBackupTestService(t, backupPath)
-	t.Cleanup(svc.Close)
+	svc := newTestBackupService(t)
+	createBackupFile(t, svc, testBackupFilename, "backup-data", time.Now())
 	svc.pgRestorePath = writePgRestoreStub(t)
 
 	result, err := svc.Validate(testBackupFilename)
@@ -646,13 +539,8 @@ func TestBackupServiceValidateRewindsFileBeforePgRestore(t *testing.T) {
 		t.Skip("test uses a POSIX shell helper")
 	}
 
-	backupPath := t.TempDir()
-	if err := os.WriteFile(filepath.Join(backupPath, testBackupFilename), []byte("backup-data"), 0o600); err != nil {
-		t.Fatalf("write backup file: %v", err)
-	}
-
-	svc := newBackupTestService(t, backupPath)
-	t.Cleanup(svc.Close)
+	svc := newTestBackupService(t)
+	createBackupFile(t, svc, testBackupFilename, "backup-data", time.Now())
 	svc.pgRestorePath = writePgRestoreStub(t)
 
 	file, _, err := svc.OpenFile(testBackupFilename)
@@ -679,8 +567,7 @@ func TestBackupServiceValidateRewindsFileBeforePgRestore(t *testing.T) {
 }
 
 func TestBackupServiceValidateMissingFileReturnsError(t *testing.T) {
-	svc := newBackupTestService(t, t.TempDir())
-	t.Cleanup(svc.Close)
+	svc := newTestBackupService(t)
 
 	result, err := svc.Validate(testBackupFilename)
 	if err == nil {
@@ -689,19 +576,14 @@ func TestBackupServiceValidateMissingFileReturnsError(t *testing.T) {
 	if result != nil {
 		t.Fatalf("Validate result = %#v, want nil on missing backup", result)
 	}
-	var notFound *types.NotFoundError
-	if !errors.As(err, &notFound) {
+	if _, ok := errors.AsType[*types.NotFoundError](err); !ok {
 		t.Fatalf("Validate error = %T %[1]v, want *types.NotFoundError", err)
 	}
 }
 
 func TestBackupServiceCloseClosesBackupRoot(t *testing.T) {
-	backupPath := t.TempDir()
-	if err := os.WriteFile(filepath.Join(backupPath, testBackupFilename), []byte("backup-data"), 0o600); err != nil {
-		t.Fatalf("write backup file: %v", err)
-	}
-
-	svc := newBackupTestService(t, backupPath)
+	svc := newTestBackupService(t, withoutRootCleanup())
+	createBackupFile(t, svc, testBackupFilename, "backup-data", time.Now())
 	root := svc.backupRoot
 
 	svc.Close()

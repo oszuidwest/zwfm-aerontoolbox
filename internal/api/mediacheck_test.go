@@ -4,6 +4,8 @@ import (
 	"net/url"
 	"testing"
 	"time"
+
+	"github.com/oszuidwest/zwfm-aerontoolbox/internal/database"
 )
 
 func mustValues(t *testing.T, raw string) url.Values {
@@ -15,65 +17,67 @@ func mustValues(t *testing.T, raw string) url.Values {
 	return v
 }
 
-func TestParseMediaCheckOptions_Defaults(t *testing.T) {
-	opts, err := parseMediaCheckOptions(url.Values{}, 31)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if opts.Date != "" || opts.From != "" || opts.To != "" || opts.BlockID != "" {
-		t.Errorf("expected empty scope, got %+v", opts)
-	}
-	if opts.IncludeVoicetracks {
-		t.Error("voicetracks should be excluded by default")
-	}
-}
+func TestParseMediaCheckOptions(t *testing.T) {
+	const blockID = "add55a6e-2068-4114-b82a-e0729881f0be"
 
-func TestParseMediaCheckOptions_ValidDate(t *testing.T) {
-	opts, err := parseMediaCheckOptions(mustValues(t, "date=2026-06-29"), 31)
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name    string
+		query   string
+		wantErr bool
+		want    database.MediaCheckOptions
+	}{
+		{
+			name:  "defaults are empty scope without voicetracks",
+			query: "",
+			want:  database.MediaCheckOptions{},
+		},
+		{
+			name:  "valid date",
+			query: "date=2026-06-29",
+			want:  database.MediaCheckOptions{Date: "2026-06-29"},
+		},
+		{
+			name:    "invalid date",
+			query:   "date=29-06-2026",
+			wantErr: true,
+		},
+		{
+			name:    "invalid block_id",
+			query:   "block_id=not-a-uuid",
+			wantErr: true,
+		},
+		{
+			name:  "valid block_id",
+			query: "block_id=" + blockID,
+			want:  database.MediaCheckOptions{BlockID: blockID},
+		},
+		{
+			name:  "include voicetracks",
+			query: "include_voicetracks=true",
+			want:  database.MediaCheckOptions{IncludeVoicetracks: true},
+		},
+		{
+			name:    "negative limit",
+			query:   "limit=-5",
+			wantErr: true,
+		},
 	}
-	if opts.Date != "2026-06-29" {
-		t.Errorf("date = %q", opts.Date)
-	}
-}
-
-func TestParseMediaCheckOptions_InvalidDate(t *testing.T) {
-	if _, err := parseMediaCheckOptions(mustValues(t, "date=29-06-2026"), 31); err == nil {
-		t.Fatal("expected error for malformed date")
-	}
-}
-
-func TestParseMediaCheckOptions_InvalidBlockID(t *testing.T) {
-	if _, err := parseMediaCheckOptions(mustValues(t, "block_id=not-a-uuid"), 31); err == nil {
-		t.Fatal("expected error for malformed block_id")
-	}
-}
-
-func TestParseMediaCheckOptions_ValidBlockID(t *testing.T) {
-	id := "add55a6e-2068-4114-b82a-e0729881f0be"
-	opts, err := parseMediaCheckOptions(mustValues(t, "block_id="+id), 31)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if opts.BlockID != id {
-		t.Errorf("block_id = %q", opts.BlockID)
-	}
-}
-
-func TestParseMediaCheckOptions_IncludeVoicetracks(t *testing.T) {
-	opts, err := parseMediaCheckOptions(mustValues(t, "include_voicetracks=true"), 31)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !opts.IncludeVoicetracks {
-		t.Error("expected voicetracks included")
-	}
-}
-
-func TestParseMediaCheckOptions_NegativeLimit(t *testing.T) {
-	if _, err := parseMediaCheckOptions(mustValues(t, "limit=-5"), 31); err == nil {
-		t.Fatal("expected error for negative limit")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts, err := parseMediaCheckOptions(mustValues(t, tt.query), 31)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("parseMediaCheckOptions(%q) error = nil, want error", tt.query)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseMediaCheckOptions(%q): %v", tt.query, err)
+			}
+			if *opts != tt.want {
+				t.Errorf("parseMediaCheckOptions(%q) = %+v, want %+v", tt.query, *opts, tt.want)
+			}
+		})
 	}
 }
 

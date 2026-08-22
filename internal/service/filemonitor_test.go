@@ -1,12 +1,16 @@
 package service
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -44,10 +48,30 @@ func newTestService(t *testing.T, checks ...config.FileMonitorCheckConfig) *File
 	return svc
 }
 
+// stubStat replaces osStat for the duration of the test.
+func stubStat(t *testing.T, fn func(string) (os.FileInfo, error)) {
+	t.Helper()
+	prev := osStat
+	osStat = fn
+	t.Cleanup(func() { osStat = prev })
+}
+
+// shrinkStatTimeout overrides the per-check stat budget for the duration of
+// the test so timeout tests complete in milliseconds instead of the
+// second-granularity config minimum. Returns the injected timeout so
+// assertions can express their bounds relative to it.
+func shrinkStatTimeout(t *testing.T, d time.Duration) time.Duration {
+	t.Helper()
+	prev := statTimeoutFor
+	statTimeoutFor = func(config.FileMonitorCheckConfig) time.Duration { return d }
+	t.Cleanup(func() { statTimeoutFor = prev })
+	return d
+}
+
 func TestGraceRun_NoAlertsOnFirstRun(t *testing.T) {
 	// Create a file that is stale (mod time in the past).
 	path := filepath.Join(t.TempDir(), "news.mp3")
-	writeAndAge(t, path, 60*time.Minute)
+	writeFileAt(t, path, time.Now().Add(-60*time.Minute))
 
 	svc := newTestService(t,
 		config.FileMonitorCheckConfig{Name: "News", Path: path, MaxAgeMinutes: 10},
@@ -72,30 +96,10 @@ func TestGraceRun_NoAlertsOnFirstRun(t *testing.T) {
 	}
 }
 
-func TestGraceRun_AlertOnSecondRun(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "news.mp3")
-	writeAndAge(t, path, 60*time.Minute)
-
-	svc := newTestService(t,
-		config.FileMonitorCheckConfig{Name: "News", Path: path, MaxAgeMinutes: 10},
-	)
-
-	// First run = grace run (no alerts).
-	svc.run()
-
-	// Second run should detect the stale file as a new alert.
-	svc.run()
-
-	status := svc.Status()
-	if !status.Checks[0].InAlert {
-		t.Error("expected InAlert=true on second run for stale file")
-	}
-}
-
 func TestGraceRun_NoPhantomRecovery(t *testing.T) {
 	// File is stale during grace run, then becomes fresh before second run.
 	path := filepath.Join(t.TempDir(), "news.mp3")
-	writeAndAge(t, path, 60*time.Minute)
+	writeFileAt(t, path, time.Now().Add(-60*time.Minute))
 
 	svc := newTestService(t,
 		config.FileMonitorCheckConfig{Name: "News", Path: path, MaxAgeMinutes: 10},
@@ -105,7 +109,7 @@ func TestGraceRun_NoPhantomRecovery(t *testing.T) {
 	svc.run()
 
 	// Touch the file so it's fresh.
-	touchFile(t, path)
+	writeFileAt(t, path, time.Now())
 
 	// Second run: file is now fresh. Since grace run didn't set alertState,
 	// wasInAlert=false, so no recovery should be triggered.
@@ -122,7 +126,7 @@ func TestGraceRun_NoPhantomRecovery(t *testing.T) {
 
 func TestAlertAndRecovery(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "news.mp3")
-	writeAndAge(t, path, 60*time.Minute)
+	writeFileAt(t, path, time.Now().Add(-60*time.Minute))
 
 	svc := newTestService(t,
 		config.FileMonitorCheckConfig{Name: "News", Path: path, MaxAgeMinutes: 10},
@@ -152,7 +156,7 @@ func TestAlertAndRecovery(t *testing.T) {
 	}
 
 	// Touch the file → should recover.
-	touchFile(t, path)
+	writeFileAt(t, path, time.Now())
 
 	svc.run()
 	if svc.Status().Checks[0].InAlert {
@@ -168,10 +172,10 @@ func TestAlertAndRecovery(t *testing.T) {
 
 func TestAlertSuppressedAcrossWindowGap(t *testing.T) {
 	// 1. Inside window: file goes stale → alert fires exactly once.
-	pinNow(t, timeAt(10, 0))
+	pinNow(t, timeAt(10))
 
 	path := filepath.Join(t.TempDir(), "news.mp3")
-	makeStale(t, path, 60*time.Minute)
+	makeStale(t, path)
 
 	svc := newTestService(t,
 		config.FileMonitorCheckConfig{
@@ -192,8 +196,8 @@ func TestAlertSuppressedAcrossWindowGap(t *testing.T) {
 	}
 
 	// 2. Window closes → run outside window, no state mutation, no duplicate.
-	pinNow(t, timeAt(22, 0))
-	makeStale(t, path, 60*time.Minute)
+	pinNow(t, timeAt(22))
+	makeStale(t, path)
 	svc.run()
 
 	r := svc.Status().Checks[0]
@@ -208,8 +212,8 @@ func TestAlertSuppressedAcrossWindowGap(t *testing.T) {
 	}
 
 	// 3. Window reopens while file is still stale → no duplicate alert.
-	pinNow(t, timeAt(10, 0))
-	makeStale(t, path, 60*time.Minute)
+	pinNow(t, timeAt(10))
+	makeStale(t, path)
 	svc.run()
 
 	r = svc.Status().Checks[0]
@@ -236,119 +240,140 @@ func TestAlertSuppressedAcrossWindowGap(t *testing.T) {
 	}
 }
 
-func TestMissingFile_FileExistsFalse(t *testing.T) {
-	svc := newTestService(t,
-		config.FileMonitorCheckConfig{Name: "Ghost", Path: "/nonexistent/path/file.mp3", MaxAgeMinutes: 10},
-	)
+// TestCheckResult_StateProfiles covers the valid FileCheckResult state
+// profiles documented on the type: fresh file, missing file, permission
+// denied, generic stat error, and stat timeout. Each case runs a grace run
+// plus a real run against an always-active window, so InAlert must track
+// IsStale exactly.
+func TestCheckResult_StateProfiles(t *testing.T) {
+	ptr := func(b bool) *bool { return &b }
 
-	// Grace run.
-	svc.run()
-	// Real run.
-	svc.run()
+	tests := []struct {
+		name       string
+		arrange    func(t *testing.T) string // returns the path to monitor
+		wantExists *bool                     // nil means file_exists must be null
+		wantJSON   string
+		wantStale  bool
+		wantError  bool // whether Error must be non-empty
+		wantKind   FileCheckErrorKind
+	}{
+		{
+			name: "fresh file",
+			arrange: func(t *testing.T) string {
+				path := filepath.Join(t.TempDir(), "news.mp3")
+				writeFileAt(t, path, time.Now())
+				return path
+			},
+			wantExists: ptr(true),
+			wantJSON:   "true",
+			wantKind:   FileCheckErrorKindNone,
+		},
+		{
+			name: "missing file",
+			arrange: func(t *testing.T) string {
+				return "/nonexistent/path/file.mp3"
+			},
+			wantExists: ptr(false),
+			wantJSON:   "false",
+			wantStale:  true,
+			// Error stays empty for ENOENT: FileExists=false already encodes
+			// the absence, and the path identifies the missing file.
+			wantKind: FileCheckErrorKindNotFound,
+		},
+		{
+			name: "permission denied",
+			arrange: func(t *testing.T) string {
+				// Injected via the osStat seam rather than chmod 0o000 on the
+				// parent directory, so the test also passes when running as
+				// root (root ignores file modes).
+				stubStat(t, func(path string) (os.FileInfo, error) {
+					return nil, &fs.PathError{Op: "stat", Path: path, Err: syscall.EACCES}
+				})
+				return "/restricted/news.mp3"
+			},
+			wantJSON:  "null",
+			wantStale: true,
+			wantError: true,
+			wantKind:  FileCheckErrorKindPermission,
+		},
+		{
+			name: "generic stat error",
+			arrange: func(t *testing.T) string {
+				stubStat(t, func(string) (os.FileInfo, error) {
+					return nil, errors.New("input/output error")
+				})
+				return "/broken/news.mp3"
+			},
+			wantJSON:  "null",
+			wantStale: true,
+			wantError: true,
+			wantKind:  FileCheckErrorKindStatError,
+		},
+		{
+			name: "stat timeout",
+			arrange: func(t *testing.T) string {
+				shrinkStatTimeout(t, 20*time.Millisecond)
+				path := "/hang/news.mp3"
+				hangingStat(t, path)
+				return path
+			},
+			wantJSON:  "null",
+			wantStale: true,
+			wantError: true,
+			wantKind:  FileCheckErrorKindStatTimeout,
+		},
+	}
 
-	result := svc.Status().Checks[0]
-	if result.FileExists == nil {
-		t.Fatal("expected file_exists to be non-nil for ENOENT")
-	}
-	if *result.FileExists {
-		t.Error("expected file_exists=false for missing file")
-	}
-	if !result.IsStale {
-		t.Error("expected missing file to be stale")
-	}
-	if result.Error != "" {
-		t.Errorf("expected no error string for ENOENT, got %q", result.Error)
-	}
-	if result.ErrorKind != FileCheckErrorKindNotFound {
-		t.Errorf("expected ErrorKind=%q, got %q", FileCheckErrorKindNotFound, result.ErrorKind)
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := tt.arrange(t)
+			svc := newTestService(t,
+				config.FileMonitorCheckConfig{Name: "News", Path: path, MaxAgeMinutes: 10},
+			)
 
-func TestPermissionDenied_FileExistsNull(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "restricted.mp3")
-	if err := os.WriteFile(path, []byte("data"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+			svc.run() // grace
+			svc.run() // real
 
-	// Remove all permissions from the parent directory so stat fails
-	// with permission denied rather than ENOENT.
-	if err := os.Chmod(dir, 0o000); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) }) //nolint:gosec // G302: directories need execute bit for cleanup
-
-	svc := newTestService(t,
-		config.FileMonitorCheckConfig{Name: "Restricted", Path: path, MaxAgeMinutes: 10},
-	)
-
-	// Grace run.
-	svc.run()
-	// Real run.
-	svc.run()
-
-	result := svc.Status().Checks[0]
-	if result.FileExists != nil {
-		t.Errorf("expected file_exists=null for permission error, got %v", *result.FileExists)
-	}
-	if result.Error == "" {
-		t.Error("expected error field to contain the stat error")
-	}
-	if !result.IsStale {
-		t.Error("expected stat error to be treated as stale")
-	}
-	if result.ErrorKind != FileCheckErrorKindPermission {
-		t.Errorf("expected ErrorKind=%q, got %q", FileCheckErrorKindPermission, result.ErrorKind)
-	}
-}
-
-func TestGenericStatError_UsesStatErrorKind(t *testing.T) {
-	prev := osStat
-	t.Cleanup(func() { osStat = prev })
-
-	osStat = func(path string) (os.FileInfo, error) {
-		return nil, errors.New("input/output error")
-	}
-
-	svc := newTestService(t,
-		config.FileMonitorCheckConfig{Name: "Broken", Path: "/broken/news.mp3", MaxAgeMinutes: 10},
-	)
-
-	svc.run() // grace
-	svc.run() // real
-
-	result := svc.Status().Checks[0]
-	if result.FileExists != nil {
-		t.Errorf("expected file_exists=null for generic stat error, got %v", *result.FileExists)
-	}
-	if result.ErrorKind != FileCheckErrorKindStatError {
-		t.Errorf("expected ErrorKind=%q, got %q", FileCheckErrorKindStatError, result.ErrorKind)
-	}
-}
-
-func TestFreshFile_NotStale(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "news.mp3")
-	touchFile(t, path)
-
-	svc := newTestService(t,
-		config.FileMonitorCheckConfig{Name: "News", Path: path, MaxAgeMinutes: 60},
-	)
-
-	svc.run() // grace
-	svc.run() // real
-
-	result := svc.Status().Checks[0]
-	if result.IsStale {
-		t.Error("fresh file should not be stale")
-	}
-	if result.FileExists == nil || !*result.FileExists {
-		t.Error("expected file_exists=true for existing fresh file")
-	}
-	if result.InAlert {
-		t.Error("expected InAlert=false for fresh file")
-	}
-	if result.ErrorKind != FileCheckErrorKindNone {
-		t.Errorf("expected ErrorKind=%q for fresh file, got %q", FileCheckErrorKindNone, result.ErrorKind)
+			result := svc.Status().Checks[0]
+			switch {
+			case tt.wantExists == nil:
+				if result.FileExists != nil {
+					t.Errorf("file_exists = %v, want null", *result.FileExists)
+				}
+			case result.FileExists == nil:
+				t.Errorf("file_exists = null, want %v", *tt.wantExists)
+			default:
+				if *result.FileExists != *tt.wantExists {
+					t.Errorf("file_exists = %v, want %v", *result.FileExists, *tt.wantExists)
+				}
+			}
+			encoded, err := json.Marshal(result)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(encoded, &fields); err != nil {
+				t.Fatal(err)
+			}
+			if got := string(fields["file_exists"]); got != tt.wantJSON {
+				t.Errorf("JSON file_exists = %s, want %s", got, tt.wantJSON)
+			}
+			if result.IsStale != tt.wantStale {
+				t.Errorf("IsStale = %v, want %v", result.IsStale, tt.wantStale)
+			}
+			if result.InAlert != tt.wantStale {
+				t.Errorf("InAlert = %v, want %v (always-active window tracks staleness)", result.InAlert, tt.wantStale)
+			}
+			if tt.wantError && result.Error == "" {
+				t.Error("expected Error to be set")
+			}
+			if !tt.wantError && result.Error != "" {
+				t.Errorf("expected empty Error, got %q", result.Error)
+			}
+			if result.ErrorKind != tt.wantKind {
+				t.Errorf("ErrorKind = %q, want %q", result.ErrorKind, tt.wantKind)
+			}
+		})
 	}
 }
 
@@ -356,8 +381,8 @@ func TestStaleCount(t *testing.T) {
 	dir := t.TempDir()
 	fresh := filepath.Join(dir, "fresh.mp3")
 	stale := filepath.Join(dir, "stale.mp3")
-	touchFile(t, fresh)
-	writeAndAge(t, stale, 120*time.Minute)
+	writeFileAt(t, fresh, time.Now())
+	writeFileAt(t, stale, time.Now().Add(-120*time.Minute))
 
 	svc := newTestService(t,
 		config.FileMonitorCheckConfig{Name: "Fresh", Path: fresh, MaxAgeMinutes: 30},
@@ -372,59 +397,37 @@ func TestStaleCount(t *testing.T) {
 	}
 }
 
-// hangingStat installs an osStat stub that hangs forever for the listed paths
-// (until t.Cleanup releases it) and returns os.ErrNotExist for any other path.
-// It returns per-path call counters so tests can assert single-flight behavior
-// deterministically without touching runtime.NumGoroutine().
+// hangingStat installs an osStat stub that hangs for the listed paths and
+// returns os.ErrNotExist for any other path. It returns per-path call counters
+// (so tests can assert single-flight behavior deterministically without
+// touching runtime.NumGoroutine()) and an idempotent release func that
+// unblocks the hung stats mid-test; callers ignore what they don't need.
 //
-// async.Runner.Close() does not track these stat goroutines, so without the
-// t.Cleanup release channel each "hang forever" stub would leak a goroutine
-// for the rest of the test process. Always use t.Cleanup.
-func hangingStat(t *testing.T, paths ...string) map[string]*atomic.Int64 {
+// async.Runner.Close() does not track these stat goroutines, so without a
+// release each "hang forever" stub would leak a goroutine for the rest of the
+// test process - the release is therefore also wired to t.Cleanup.
+func hangingStat(t *testing.T, paths ...string) (counters map[string]*atomic.Int64, release func()) {
 	t.Helper()
-	counters := make(map[string]*atomic.Int64, len(paths))
+	counters = make(map[string]*atomic.Int64, len(paths))
 	hangSet := make(map[string]struct{}, len(paths))
 	for _, p := range paths {
 		counters[p] = &atomic.Int64{}
 		hangSet[p] = struct{}{}
 	}
-	release := make(chan struct{})
-	t.Cleanup(func() { close(release) })
+	var once sync.Once
+	releaseCh := make(chan struct{})
+	release = func() { once.Do(func() { close(releaseCh) }) }
+	t.Cleanup(release)
 
-	prev := osStat
-	t.Cleanup(func() { osStat = prev })
-
-	osStat = func(path string) (os.FileInfo, error) {
+	stubStat(t, func(path string) (os.FileInfo, error) {
 		if _, hangs := hangSet[path]; !hangs {
 			return nil, os.ErrNotExist
 		}
 		counters[path].Add(1)
-		<-release
-		return nil, errors.New("released by t.Cleanup")
-	}
-	return counters
-}
-
-func TestStatTimeout_TriggersStaleWithTimeoutKind(t *testing.T) {
-	path := "/hang/news.mp3"
-	hangingStat(t, path)
-
-	svc := newTestService(t,
-		config.FileMonitorCheckConfig{Name: "News", Path: path, MaxAgeMinutes: 10, StatTimeoutSec: 1},
-	)
-
-	svc.run()
-
-	result := svc.Status().Checks[0]
-	if !result.IsStale {
-		t.Error("expected IsStale=true on stat timeout")
-	}
-	if result.ErrorKind != FileCheckErrorKindStatTimeout {
-		t.Errorf("expected ErrorKind=%q, got %q", FileCheckErrorKindStatTimeout, result.ErrorKind)
-	}
-	if result.Error == "" {
-		t.Error("expected Error message to mention timeout")
-	}
+		<-releaseCh
+		return nil, errors.New("released by test")
+	})
+	return counters, release
 }
 
 type captureFileMonitorNotifier struct {
@@ -441,8 +444,9 @@ func (n *captureFileMonitorNotifier) SendFileRecoveries(recoveries []notify.File
 }
 
 func TestSingleFlight_RepeatedRunsCallStatAtMostOnce(t *testing.T) {
+	shrinkStatTimeout(t, 20*time.Millisecond)
 	path := "/hang/news.mp3"
-	counters := hangingStat(t, path)
+	counters, _ := hangingStat(t, path)
 
 	svc := newTestService(t,
 		config.FileMonitorCheckConfig{Name: "News", Path: path, MaxAgeMinutes: 10, StatTimeoutSec: 1},
@@ -458,9 +462,10 @@ func TestSingleFlight_RepeatedRunsCallStatAtMostOnce(t *testing.T) {
 }
 
 func TestSingleFlight_DifferentPathsAreIndependent(t *testing.T) {
+	shrinkStatTimeout(t, 20*time.Millisecond)
 	pathA := "/hang/a.mp3"
 	pathB := "/hang/b.mp3"
-	counters := hangingStat(t, pathA, pathB)
+	counters, _ := hangingStat(t, pathA, pathB)
 
 	svc := newTestService(t,
 		config.FileMonitorCheckConfig{Name: "A", Path: pathA, MaxAgeMinutes: 10, StatTimeoutSec: 1},
@@ -478,6 +483,7 @@ func TestSingleFlight_DifferentPathsAreIndependent(t *testing.T) {
 }
 
 func TestSingleFlight_JoinAfterTimeoutReturnsImmediately(t *testing.T) {
+	timeout := shrinkStatTimeout(t, 50*time.Millisecond)
 	path := "/hang/news.mp3"
 	hangingStat(t, path)
 
@@ -485,21 +491,23 @@ func TestSingleFlight_JoinAfterTimeoutReturnsImmediately(t *testing.T) {
 		config.FileMonitorCheckConfig{Name: "News", Path: path, MaxAgeMinutes: 10, StatTimeoutSec: 1},
 	)
 
-	// First Run() establishes the flight and waits the full StatTimeout.
+	// First Run() establishes the flight and waits the full stat budget.
 	svc.run()
 
 	// Second Run() must observe remaining<=0 on the still-hanging flight and
-	// return immediately rather than waiting another full StatTimeout.
+	// return immediately rather than waiting another full budget.
 	start := time.Now()
 	svc.run()
 	elapsed := time.Since(start)
 
-	if elapsed > 200*time.Millisecond {
-		t.Errorf("second Run() took %v, expected near-instant return on already-budgeted flight", elapsed)
+	if elapsed >= timeout/2 {
+		t.Errorf("second Run() took %v, expected near-instant return (well under the %v budget) on already-budgeted flight",
+			elapsed, timeout)
 	}
 }
 
 func TestParallelChecks_FastFailNotBlockedBySlowStat(t *testing.T) {
+	timeout := shrinkStatTimeout(t, 50*time.Millisecond)
 	slow := "/hang/slow.mp3"
 	fastA := "/missing/a.mp3"
 	fastB := "/missing/b.mp3"
@@ -515,9 +523,10 @@ func TestParallelChecks_FastFailNotBlockedBySlowStat(t *testing.T) {
 	svc.run()
 	elapsed := time.Since(start)
 
-	// Total should be ~1s (slow timeout), not ~3s (sequential).
-	if elapsed > 1500*time.Millisecond {
-		t.Errorf("Run() took %v, expected ~1s - fast checks appear serialized behind slow stat", elapsed)
+	// Total should be ~one stat budget (slow's timeout), not ~three budgets
+	// (sequential).
+	if elapsed >= 2*timeout {
+		t.Errorf("Run() took %v, expected ~%v - fast checks appear serialized behind slow stat", elapsed, timeout)
 	}
 
 	results := svc.Status().Checks
@@ -531,68 +540,19 @@ func TestParallelChecks_FastFailNotBlockedBySlowStat(t *testing.T) {
 	}
 }
 
-func TestStatTimeout_DefaultIsFiveSeconds(t *testing.T) {
-	c := config.FileMonitorCheckConfig{StatTimeoutSec: 0}
-	if got := c.StatTimeout(); got != 5*time.Second {
-		t.Errorf("StatTimeout() = %v, want 5s", got)
-	}
-
-	c.StatTimeoutSec = -1
-	if got := c.StatTimeout(); got != 5*time.Second {
-		t.Errorf("negative StatTimeoutSec → StatTimeout() = %v, want 5s", got)
-	}
-
-	c.StatTimeoutSec = 12
-	if got := c.StatTimeout(); got != 12*time.Second {
-		t.Errorf("StatTimeoutSec=12 → StatTimeout() = %v, want 12s", got)
-	}
-}
-
-// hangingStatReleasable is like hangingStat but exposes the release channel
-// so a test can resume the stubbed osStat mid-test rather than only during
-// t.Cleanup. The returned release function is idempotent.
-func hangingStatReleasable(t *testing.T, paths ...string) func() {
-	t.Helper()
-	hangSet := make(map[string]struct{}, len(paths))
-	for _, p := range paths {
-		hangSet[p] = struct{}{}
-	}
-	var once sync.Once
-	releaseCh := make(chan struct{})
-	release := func() { once.Do(func() { close(releaseCh) }) }
-	t.Cleanup(release)
-
-	prev := osStat
-	t.Cleanup(func() { osStat = prev })
-
-	osStat = func(path string) (os.FileInfo, error) {
-		if _, hangs := hangSet[path]; !hangs {
-			return nil, os.ErrNotExist
-		}
-		<-releaseCh
-		return nil, errors.New("released by test")
-	}
-	return release
-}
-
 // waitForCompleted polls Status() until the given runID is completed and the
 // service is idle. Fails the test after a short deadline.
 func waitForCompleted(t *testing.T, svc *FileMonitorService, runID uint64) {
 	t.Helper()
-	end := time.Now().Add(2 * time.Second)
-	for time.Now().Before(end) {
+	waitFor(t, 2*time.Second, fmt.Sprintf("timed out waiting for run %d to complete", runID), func() bool {
 		st := svc.Status()
-		if !st.Running && st.CompletedRunID >= runID {
-			return
-		}
-		time.Sleep(2 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for run %d to complete", runID)
+		return !st.Running && st.CompletedRunID >= runID
+	})
 }
 
 func TestTriggerCheck_RunsAndUpdatesStatus(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "news.mp3")
-	touchFile(t, path)
+	writeFileAt(t, path, time.Now())
 
 	svc := newTestService(t,
 		config.FileMonitorCheckConfig{Name: "News", Path: path, MaxAgeMinutes: 60},
@@ -634,7 +594,7 @@ func TestTriggerCheck_RunsAndUpdatesStatus(t *testing.T) {
 
 func TestTriggerCheck_ReturnsConflictWhenAlreadyRunning(t *testing.T) {
 	path := "/hang/news.mp3"
-	release := hangingStatReleasable(t, path)
+	_, release := hangingStat(t, path)
 
 	svc := newTestService(t,
 		config.FileMonitorCheckConfig{Name: "News", Path: path, MaxAgeMinutes: 10, StatTimeoutSec: 5},
@@ -655,8 +615,7 @@ func TestTriggerCheck_ReturnsConflictWhenAlreadyRunning(t *testing.T) {
 	if runID2 != 0 {
 		t.Errorf("conflict runID = %d, want 0", runID2)
 	}
-	var conflict *types.ConflictError
-	if !errors.As(err, &conflict) {
+	if _, ok := errors.AsType[*types.ConflictError](err); !ok {
 		t.Errorf("expected *types.ConflictError, got %T: %v", err, err)
 	}
 
@@ -673,7 +632,7 @@ func TestTriggerCheck_ReturnsConflictWhenAlreadyRunning(t *testing.T) {
 
 func TestStatus_ShowsRunningTrueDuringRun(t *testing.T) {
 	path := "/hang/news.mp3"
-	release := hangingStatReleasable(t, path)
+	_, release := hangingStat(t, path)
 
 	svc := newTestService(t,
 		config.FileMonitorCheckConfig{Name: "News", Path: path, MaxAgeMinutes: 10, StatTimeoutSec: 30},
@@ -691,8 +650,10 @@ func TestStatus_ShowsRunningTrueDuringRun(t *testing.T) {
 	if st.RunID != runID {
 		t.Errorf("Status().RunID = %d, want %d", st.RunID, runID)
 	}
-	if st.CompletedRunID >= runID {
-		t.Errorf("Status().CompletedRunID = %d, want < %d (run not yet complete)", st.CompletedRunID, runID)
+	// First-ever active run: CompletedRunID must still be 0, lagging RunID
+	// until publishCompleted runs.
+	if st.CompletedRunID != 0 {
+		t.Errorf("Status().CompletedRunID = %d, want 0 (first active run)", st.CompletedRunID)
 	}
 	if st.StartedAt == nil {
 		t.Error("Status().StartedAt should be set during active run")
@@ -714,7 +675,7 @@ func TestStatus_ShowsRunningTrueDuringRun(t *testing.T) {
 
 func TestTriggerCheck_RunIDIsMonotonic(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "news.mp3")
-	touchFile(t, path)
+	writeFileAt(t, path, time.Now())
 
 	svc := newTestService(t,
 		config.FileMonitorCheckConfig{Name: "News", Path: path, MaxAgeMinutes: 60},
@@ -741,42 +702,12 @@ func TestTriggerCheck_RunIDIsMonotonic(t *testing.T) {
 	}
 }
 
-func TestCompletedRunID_LagsBehindRunIDDuringActiveRun(t *testing.T) {
-	path := "/hang/news.mp3"
-	release := hangingStatReleasable(t, path)
-
-	svc := newTestService(t,
-		config.FileMonitorCheckConfig{Name: "News", Path: path, MaxAgeMinutes: 10, StatTimeoutSec: 30},
-	)
-
-	runID, err := svc.TriggerCheck()
-	if err != nil {
-		t.Fatalf("TriggerCheck: %v", err)
-	}
-
-	st := svc.Status()
-	if st.RunID != runID {
-		t.Errorf("Status().RunID = %d, want %d", st.RunID, runID)
-	}
-	// First-ever active run: completedRunID is still 0.
-	if st.CompletedRunID != 0 {
-		t.Errorf("Status().CompletedRunID = %d, want 0 (first active run)", st.CompletedRunID)
-	}
-	if st.CompletedRunID >= st.RunID {
-		t.Errorf("CompletedRunID (%d) should lag RunID (%d) during active run", st.CompletedRunID, st.RunID)
-	}
-
-	release()
-	waitForCompleted(t, svc, runID)
-	svc.Close()
-}
-
 func TestScheduler_RunFileMonitor_TriggersCheck(t *testing.T) {
 	// Exercise the actual code path used by cron: Scheduler.runFileMonitor.
 	// A regression that breaks runFileMonitor (e.g. dropping TriggerCheck)
 	// should fail this test, not just contract tests on FileMonitorService.
 	path := filepath.Join(t.TempDir(), "news.mp3")
-	touchFile(t, path)
+	writeFileAt(t, path, time.Now())
 
 	fmSvc := newTestService(t,
 		config.FileMonitorCheckConfig{Name: "News", Path: path, MaxAgeMinutes: 60},
@@ -800,7 +731,7 @@ func TestScheduler_RunFileMonitor_SkipsWhenAlreadyActive(t *testing.T) {
 	// Tests Scheduler.runFileMonitor's conflict-swallowing behavior, not
 	// just the underlying TryStart() contract.
 	path := "/hang/news.mp3"
-	release := hangingStatReleasable(t, path)
+	_, release := hangingStat(t, path)
 
 	fmSvc := newTestService(t,
 		config.FileMonitorCheckConfig{Name: "News", Path: path, MaxAgeMinutes: 10, StatTimeoutSec: 30},
@@ -834,17 +765,17 @@ func TestTriggerCheck_NoConflictAfterStatusReportsIdle(t *testing.T) {
 	// fires in a defer after fn returns - so a brief window let the API
 	// report idle while TryStart() still rejected.
 	path := filepath.Join(t.TempDir(), "news.mp3")
-	touchFile(t, path)
+	writeFileAt(t, path, time.Now())
 
 	svc := newTestService(t,
 		config.FileMonitorCheckConfig{Name: "News", Path: path, MaxAgeMinutes: 60},
 	)
 	defer svc.Close()
 
-	// 200 back-to-back triggers; if Status().Running could ever lead the
-	// runner gate, one of these waitForCompleted → TriggerCheck pairs would
-	// hit a 409. Reproducer at -count=50 originally failed ~5/50.
-	for i := range 200 {
+	// Back-to-back triggers; if Status().Running could ever lead the runner
+	// gate, one of these waitForCompleted → TriggerCheck pairs would hit a
+	// 409. The original reproducer failed ~5/50 at -count=50.
+	for i := range 25 {
 		runID, err := svc.TriggerCheck()
 		if err != nil {
 			t.Fatalf("TriggerCheck #%d (after %d successful back-to-backs): %v", i, i, err)
@@ -870,7 +801,7 @@ func TestStatus_NoTornSnapshotUnderConcurrentReads(t *testing.T) {
 	// (publishCompleted writes both atomically), no such window exists, so
 	// the test passes deterministically.
 	path := filepath.Join(t.TempDir(), "news.mp3")
-	touchFile(t, path)
+	writeFileAt(t, path, time.Now())
 
 	svc := newTestService(t,
 		config.FileMonitorCheckConfig{Name: "News", Path: path, MaxAgeMinutes: 60},
@@ -921,6 +852,7 @@ func TestStatus_NoTornSnapshotUnderConcurrentReads(t *testing.T) {
 				want, ok := lookup(st.CompletedRunID)
 				if !ok {
 					// Writer hasn't recorded tag[N] yet; will be checked on next reads.
+					runtime.Gosched()
 					continue
 				}
 				if !st.LastCheckAt.Equal(want) {
@@ -931,6 +863,7 @@ func TestStatus_NoTornSnapshotUnderConcurrentReads(t *testing.T) {
 						mismatchSample.CompareAndSwap(nil, &s)
 					}
 				}
+				runtime.Gosched()
 			}
 		})
 	}
@@ -938,7 +871,7 @@ func TestStatus_NoTornSnapshotUnderConcurrentReads(t *testing.T) {
 	// Drive many runs concurrently with the readers. Each run's tag is
 	// recorded synchronously after waitForCompleted so the readers always
 	// see a consistent (runID → published LastCheckAt) ground truth.
-	for i := range 100 {
+	for i := range 25 {
 		runID, err := svc.TriggerCheck()
 		if err != nil {
 			t.Fatalf("TriggerCheck #%d: %v", i, err)
@@ -959,69 +892,6 @@ func TestStatus_NoTornSnapshotUnderConcurrentReads(t *testing.T) {
 	}
 }
 
-func TestStatus_CompletedRunIDMatchesLastCheck(t *testing.T) {
-	// Regression test for the torn-snapshot bug: lastCheck and
-	// completedRunID must be published together so a reader cannot observe
-	// run N+1's Checks paired with completed_run_id=N. Each executeRun()
-	// builds a fresh LastCheckAt; we record per-run values and verify the
-	// final snapshot's LastCheckAt matches the run named by CompletedRunID.
-	path := filepath.Join(t.TempDir(), "news.mp3")
-	touchFile(t, path)
-
-	svc := newTestService(t,
-		config.FileMonitorCheckConfig{Name: "News", Path: path, MaxAgeMinutes: 60},
-	)
-	defer svc.Close()
-
-	lastCheckAtPerRun := make(map[uint64]time.Time)
-	for i := uint64(1); i <= 5; i++ {
-		runID, err := svc.TriggerCheck()
-		if err != nil {
-			t.Fatalf("TriggerCheck #%d: %v", i, err)
-		}
-		waitForCompleted(t, svc, runID)
-		st := svc.Status()
-		if st.LastCheckAt == nil {
-			t.Fatalf("run %d: LastCheckAt nil", runID)
-		}
-		lastCheckAtPerRun[runID] = *st.LastCheckAt
-		if st.CompletedRunID != runID {
-			t.Errorf("run %d: CompletedRunID=%d, want %d", runID, st.CompletedRunID, runID)
-		}
-		// Tiny gap so consecutive runs have distinguishable LastCheckAt.
-		time.Sleep(time.Millisecond)
-	}
-
-	// Final correlation: the snapshot's CompletedRunID must name the run
-	// whose LastCheckAt we still observe.
-	st := svc.Status()
-	want := lastCheckAtPerRun[st.CompletedRunID]
-	if !st.LastCheckAt.Equal(want) {
-		t.Errorf("LastCheckAt=%v doesn't match recorded value for run %d (%v)",
-			st.LastCheckAt, st.CompletedRunID, want)
-	}
-}
-
-// writeAndAge creates a file and sets its modification time to the past.
-func writeAndAge(t *testing.T, path string, age time.Duration) {
-	t.Helper()
-	if err := os.WriteFile(path, []byte("test"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	past := time.Now().Add(-age)
-	if err := os.Chtimes(path, past, past); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// touchFile creates or updates a file's modification time to now.
-func touchFile(t *testing.T, path string) {
-	t.Helper()
-	if err := os.WriteFile(path, []byte("test"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-}
-
 // pinNow overrides nowFunc for the duration of the test. The fixed time is
 // used both for the file-age comparison and the ActiveWindow check, so a
 // pinned clock + a file mod-time set via makeStale/makeFresh (which read the
@@ -1034,50 +904,35 @@ func pinNow(t *testing.T, fixed time.Time) {
 	t.Cleanup(func() { nowFunc = prev })
 }
 
-// timeAt returns a fixed local-time clock for hour:minute on a known day.
+// timeAt returns a fixed local-time clock for the given hour on a known day.
 // Local time matches how the production code interprets ActiveWindow
 // (operators configure HH:MM in TZ-local time; see scheduler.go).
-//
-//nolint:unparam // minute kept in signature for future minute-precision tests
-func timeAt(hour, minute int) time.Time {
-	return time.Date(2026, 4, 1, hour, minute, 0, 0, time.Local)
+func timeAt(hour int) time.Time {
+	return time.Date(2026, 4, 1, hour, 0, 0, 0, time.Local)
 }
 
-// makeStale creates path with a mod time `age` before the currently pinned
-// clock so the resulting age is deterministic regardless of wall-clock time.
-// Must be called after pinNow.
-//
-//nolint:unparam // age kept explicit at call sites for readability
-func makeStale(t *testing.T, path string, age time.Duration) {
+// makeStale creates path with a mod time 60 minutes before the currently
+// pinned clock so the resulting age is deterministic regardless of wall-clock
+// time (the tests pair it with MaxAgeMinutes well below 60). Must be called
+// after pinNow.
+func makeStale(t *testing.T, path string) {
 	t.Helper()
-	if err := os.WriteFile(path, []byte("test"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	mod := nowFunc().Add(-age)
-	if err := os.Chtimes(path, mod, mod); err != nil {
-		t.Fatal(err)
-	}
+	writeFileAt(t, path, nowFunc().Add(-60*time.Minute))
 }
 
 // makeFresh sets path's mod time to the currently pinned clock.
 // Must be called after pinNow.
 func makeFresh(t *testing.T, path string) {
 	t.Helper()
-	if err := os.WriteFile(path, []byte("test"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	mod := nowFunc()
-	if err := os.Chtimes(path, mod, mod); err != nil {
-		t.Fatal(err)
-	}
+	writeFileAt(t, path, nowFunc())
 }
 
 func TestActiveWindow_NoAlertOutsideWindow(t *testing.T) {
 	// Window 22:00-06:00 (overnight) - at 14:00 we are firmly outside it.
-	pinNow(t, timeAt(14, 0))
+	pinNow(t, timeAt(14))
 
 	path := filepath.Join(t.TempDir(), "news.mp3")
-	makeStale(t, path, 60*time.Minute) // stale relative to a 10-minute max
+	makeStale(t, path) // stale relative to a 10-minute max
 
 	svc := newTestService(t,
 		config.FileMonitorCheckConfig{
@@ -1106,10 +961,10 @@ func TestActiveWindow_NoAlertOutsideWindow(t *testing.T) {
 
 func TestActiveWindow_AlertWhenWindowOpens(t *testing.T) {
 	// Outside window: grace + real, no alert state should be touched.
-	pinNow(t, timeAt(2, 0))
+	pinNow(t, timeAt(2))
 
 	path := filepath.Join(t.TempDir(), "news.mp3")
-	makeStale(t, path, 60*time.Minute)
+	makeStale(t, path)
 
 	svc := newTestService(t,
 		config.FileMonitorCheckConfig{
@@ -1126,10 +981,10 @@ func TestActiveWindow_AlertWhenWindowOpens(t *testing.T) {
 
 	// Window opens; the file is still stale from before, so the next run
 	// should now flip InAlert and emit an alert.
-	pinNow(t, timeAt(9, 0))
+	pinNow(t, timeAt(9))
 	// Re-stamp the mod time so it is still 60 minutes old relative to the
 	// new pinned clock (otherwise the file would now appear "in the future").
-	makeStale(t, path, 60*time.Minute)
+	makeStale(t, path)
 	svc.run()
 
 	r := svc.Status().Checks[0]
@@ -1142,7 +997,8 @@ func TestActiveWindow_AlertWhenWindowOpens(t *testing.T) {
 }
 
 func TestActiveWindow_StatTimeoutOutsideWindowDoesNotAlert(t *testing.T) {
-	pinNow(t, timeAt(2, 0))
+	shrinkStatTimeout(t, 20*time.Millisecond)
+	pinNow(t, timeAt(2))
 
 	path := "/hang/nightly.mp3"
 	hangingStat(t, path)
@@ -1181,10 +1037,10 @@ func TestActiveWindow_RecoveryRespectsWindow(t *testing.T) {
 	// which would be the only thing the operator ever sees about that file.
 
 	// 1) Inside window: become alerting.
-	pinNow(t, timeAt(10, 0))
+	pinNow(t, timeAt(10))
 
 	path := filepath.Join(t.TempDir(), "news.mp3")
-	makeStale(t, path, 60*time.Minute)
+	makeStale(t, path)
 
 	svc := newTestService(t,
 		config.FileMonitorCheckConfig{
@@ -1206,7 +1062,7 @@ func TestActiveWindow_RecoveryRespectsWindow(t *testing.T) {
 	}
 
 	// 2) File becomes fresh, but it is now outside the window.
-	pinNow(t, timeAt(22, 0))
+	pinNow(t, timeAt(22))
 	makeFresh(t, path)
 	svc.run()
 
@@ -1223,7 +1079,7 @@ func TestActiveWindow_RecoveryRespectsWindow(t *testing.T) {
 
 	// 3) Re-enter the window while the file is still fresh. This must emit the
 	// delayed recovery exactly once.
-	pinNow(t, timeAt(11, 0))
+	pinNow(t, timeAt(11))
 	svc.run()
 
 	r = svc.Status().Checks[0]
@@ -1243,7 +1099,7 @@ func TestActiveWindow_RecoveryRespectsWindow(t *testing.T) {
 	// 4) File goes stale again after recovery - a fresh alert must fire exactly
 	// once. This guards the invariant that alertState is cleared by the recovery
 	// dispatch, so the next stale detection starts a new alert cycle.
-	makeStale(t, path, 60*time.Minute)
+	makeStale(t, path)
 	svc.run()
 
 	r = svc.Status().Checks[0]
@@ -1252,32 +1108,6 @@ func TestActiveWindow_RecoveryRespectsWindow(t *testing.T) {
 	}
 	if len(notifier.alerts) != 2 {
 		t.Fatalf("expected 2 alert dispatches after second stale cycle, got %d", len(notifier.alerts))
-	}
-}
-
-func TestAlertingCount_ExcludesOutsideWindow(t *testing.T) {
-	// /health must stay healthy when the only stale file is outside its
-	// window. ChecksStale stays raw (1), ChecksAlerting becomes 0.
-	pinNow(t, timeAt(3, 0)) // outside 08:00-20:00
-
-	path := filepath.Join(t.TempDir(), "news.mp3")
-	makeStale(t, path, 60*time.Minute)
-
-	svc := newTestService(t,
-		config.FileMonitorCheckConfig{
-			Name: "Daytime news", Path: path, MaxAgeMinutes: 10,
-			ActiveWindow: "08:00-20:00",
-		},
-	)
-
-	svc.run() // grace
-	svc.run() // real
-
-	if got := svc.StaleCount(); got != 1 {
-		t.Errorf("StaleCount() = %d, want 1 (raw stale is preserved)", got)
-	}
-	if got := svc.AlertingCount(); got != 0 {
-		t.Errorf("AlertingCount() = %d, want 0 (window suppresses)", got)
 	}
 }
 

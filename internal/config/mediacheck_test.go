@@ -1,110 +1,112 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+	"time"
+)
 
-func TestMediaFileCheck_DisabledSkipsValidation(t *testing.T) {
-	cfg := minimalConfig()
-	cfg.MediaFileCheck = MediaFileCheckConfig{
-		Enabled:     false,
-		SearchDirs:  []string{"relative/path"}, // would be invalid if enabled
-		DriveMounts: map[string]string{"bad": "also-relative"},
+func TestMediaFileCheckValidation(t *testing.T) {
+	tests := []struct {
+		name string
+		mfc  MediaFileCheckConfig
+		// wantErrContains asserts the field label from formatErrors so the
+		// test fails if a neighboring rule fires instead of the one under
+		// test. Empty means the config must validate cleanly.
+		wantErrContains string
+	}{
+		{
+			name: "disabled skips validation",
+			mfc: MediaFileCheckConfig{
+				Enabled:     false,
+				SearchDirs:  []string{"relative/path"}, // would be invalid if enabled
+				DriveMounts: map[string]string{"bad": "also-relative"},
+			},
+		},
+		{
+			name:            "enabled requires a source",
+			mfc:             MediaFileCheckConfig{Enabled: true},
+			wantErrContains: "mediafilecheck.search_dirs requires at least one search dir or drive mount when enabled",
+		},
+		{
+			name: "enabled with absolute root",
+			mfc: MediaFileCheckConfig{
+				Enabled:    true,
+				SearchDirs: []string{"/mnt/aeron-audio"},
+			},
+		},
+		{
+			name: "relative root rejected",
+			mfc: MediaFileCheckConfig{
+				Enabled:    true,
+				SearchDirs: []string{"relative/audio"},
+			},
+			wantErrContains: "mediafilecheck.search_dirs[0] must be an absolute path",
+		},
+		{
+			name: "drive mapping valid",
+			mfc: MediaFileCheckConfig{
+				Enabled:     true,
+				DriveMounts: map[string]string{"O:": "/mnt/aeron-o", "Y:": "/mnt/aeron-y"},
+			},
+		},
+		{
+			name: "drive mapping bad key",
+			mfc: MediaFileCheckConfig{
+				Enabled:     true,
+				DriveMounts: map[string]string{"audio": "/mnt/aeron-o"},
+			},
+			wantErrContains: `mediafilecheck.drive_mounts has an invalid drive key "audio"`,
+		},
+		{
+			name: "drive mapping relative target",
+			mfc: MediaFileCheckConfig{
+				Enabled:     true,
+				DriveMounts: map[string]string{"O:": "relative/dir"},
+			},
+			wantErrContains: `mediafilecheck.drive_mounts target for drive "O:" must be an absolute path`,
+		},
+		{
+			name: "negative lookahead rejected",
+			mfc: MediaFileCheckConfig{
+				Enabled:       true,
+				SearchDirs:    []string{"/mnt/aeron-audio"},
+				LookaheadDays: -1,
+			},
+			wantErrContains: "mediafilecheck.lookaheaddays must be 0 or greater",
+		},
 	}
 
-	if err := validate(cfg); err != nil {
-		t.Fatalf("disabled media_file_check should skip validation, got: %v", err)
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := minimalConfig()
+			cfg.MediaFileCheck = tt.mfc
 
-func TestMediaFileCheck_EnabledRequiresSource(t *testing.T) {
-	cfg := minimalConfig()
-	cfg.MediaFileCheck = MediaFileCheckConfig{Enabled: true}
-
-	if err := validate(cfg); err == nil {
-		t.Fatal("expected error when enabled with no search dirs or drive mounts, got nil")
-	}
-}
-
-func TestMediaFileCheck_EnabledWithAbsoluteRoot(t *testing.T) {
-	cfg := minimalConfig()
-	cfg.MediaFileCheck = MediaFileCheckConfig{
-		Enabled:    true,
-		SearchDirs: []string{"/mnt/aeron-audio"},
-	}
-
-	if err := validate(cfg); err != nil {
-		t.Fatalf("unexpected validation error: %v", err)
-	}
-}
-
-func TestMediaFileCheck_RelativeRootRejected(t *testing.T) {
-	cfg := minimalConfig()
-	cfg.MediaFileCheck = MediaFileCheckConfig{
-		Enabled:    true,
-		SearchDirs: []string{"relative/audio"},
-	}
-
-	if err := validate(cfg); err == nil {
-		t.Fatal("expected error for relative root, got nil")
-	}
-}
-
-func TestMediaFileCheck_DriveMappingValid(t *testing.T) {
-	cfg := minimalConfig()
-	cfg.MediaFileCheck = MediaFileCheckConfig{
-		Enabled:     true,
-		DriveMounts: map[string]string{"O:": "/mnt/aeron-o", "Y:": "/mnt/aeron-y"},
-	}
-
-	if err := validate(cfg); err != nil {
-		t.Fatalf("unexpected validation error: %v", err)
-	}
-}
-
-func TestMediaFileCheck_DriveMappingBadKey(t *testing.T) {
-	cfg := minimalConfig()
-	cfg.MediaFileCheck = MediaFileCheckConfig{
-		Enabled:     true,
-		DriveMounts: map[string]string{"audio": "/mnt/aeron-o"},
-	}
-
-	if err := validate(cfg); err == nil {
-		t.Fatal("expected error for invalid drive key, got nil")
-	}
-}
-
-func TestMediaFileCheck_DriveMappingRelativeTarget(t *testing.T) {
-	cfg := minimalConfig()
-	cfg.MediaFileCheck = MediaFileCheckConfig{
-		Enabled:     true,
-		DriveMounts: map[string]string{"O:": "relative/dir"},
-	}
-
-	if err := validate(cfg); err == nil {
-		t.Fatal("expected error for relative drive mapping target, got nil")
-	}
-}
-
-func TestMediaFileCheck_NegativeLookaheadRejected(t *testing.T) {
-	cfg := minimalConfig()
-	cfg.MediaFileCheck = MediaFileCheckConfig{
-		Enabled:       true,
-		SearchDirs:    []string{"/mnt/aeron-audio"},
-		LookaheadDays: -1,
-	}
-
-	if err := validate(cfg); err == nil {
-		t.Fatal("expected error for negative lookahead_days, got nil")
+			err := validate(cfg)
+			if tt.wantErrContains == "" {
+				if err != nil {
+					t.Fatalf("validate() error = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("validate() error = nil, want message containing %q", tt.wantErrContains)
+			}
+			if !strings.Contains(err.Error(), tt.wantErrContains) {
+				t.Errorf("validate() error %q missing %q", err.Error(), tt.wantErrContains)
+			}
+		})
 	}
 }
 
 func TestMediaFileCheck_Defaults(t *testing.T) {
 	cfg := MediaFileCheckConfig{}
 
-	if got := cfg.StatTimeout(); got.Seconds() != DefaultMediaFileCheckStatTimeoutSeconds {
-		t.Errorf("StatTimeout default = %v, want %ds", got, DefaultMediaFileCheckStatTimeoutSeconds)
+	if got := cfg.StatTimeout(); got != 5*time.Second {
+		t.Errorf("StatTimeout default = %v, want 5s", got)
 	}
-	if got := cfg.GetMaxRangeDays(); got != DefaultMediaFileCheckMaxRangeDays {
-		t.Errorf("GetMaxRangeDays default = %d, want %d", got, DefaultMediaFileCheckMaxRangeDays)
+	if got := cfg.GetMaxRangeDays(); got != 31 {
+		t.Errorf("GetMaxRangeDays default = %d, want 31", got)
 	}
 	if !cfg.IsCaseInsensitive() {
 		t.Error("IsCaseInsensitive default = false, want true")

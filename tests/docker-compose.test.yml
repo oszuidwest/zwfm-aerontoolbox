@@ -19,6 +19,7 @@ services:
   seaweedfs-test:
     image: chrislusf/seaweedfs:latest
     container_name: aeron-test-s3
+    profiles: ["s3"]  # Only started with --profile s3 (used by the s3 test suite)
     ports:
       - "8333:8333"  # S3 API
     volumes:
