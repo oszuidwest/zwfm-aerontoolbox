@@ -155,19 +155,43 @@ func TestGettersRespectConfiguredValues(t *testing.T) {
 
 func TestAPIAuthenticationValidation(t *testing.T) {
 	tests := []struct {
-		name    string
-		enabled bool
-		keys    []string
-		wantErr bool
+		name            string
+		enabled         bool
+		keys            []string
+		wantErrContains string
 	}{
 		{name: "disabled without keys", enabled: false},
 		{name: "enabled with key", enabled: true, keys: []string{"test-api-key-12345"}},
 		{name: "enabled with minimum-length key", enabled: true, keys: []string{"0123456789abcdef"}},
-		{name: "enabled with nil keys", enabled: true, wantErr: true},
-		{name: "enabled with empty keys", enabled: true, keys: []string{}, wantErr: true},
-		{name: "enabled with empty key", enabled: true, keys: []string{""}, wantErr: true},
-		{name: "enabled with short key", enabled: true, keys: []string{"short-key"}, wantErr: true},
-		{name: "disabled with short key", enabled: false, keys: []string{"short-key"}, wantErr: true},
+		{
+			name:            "enabled with nil keys",
+			enabled:         true,
+			wantErrContains: "api.keys must have at least one entry when enabled",
+		},
+		{
+			name:            "enabled with empty keys",
+			enabled:         true,
+			keys:            []string{},
+			wantErrContains: "api.keys must have at least one entry when enabled",
+		},
+		{
+			name:            "enabled with empty key",
+			enabled:         true,
+			keys:            []string{""},
+			wantErrContains: "api.keys[0] is required",
+		},
+		{
+			name:            "enabled with short key",
+			enabled:         true,
+			keys:            []string{"short-key"},
+			wantErrContains: "api.keys[0] must be at least 16",
+		},
+		{
+			name:            "disabled with short key",
+			enabled:         false,
+			keys:            []string{"short-key"},
+			wantErrContains: "api.keys[0] must be at least 16",
+		},
 	}
 
 	for _, tt := range tests {
@@ -177,11 +201,17 @@ func TestAPIAuthenticationValidation(t *testing.T) {
 			cfg.API.Keys = tt.keys
 
 			err := validate(cfg)
-			if tt.wantErr && err == nil {
-				t.Fatal("validate() error = nil, want an authentication configuration error")
+			if tt.wantErrContains == "" {
+				if err != nil {
+					t.Fatalf("validate() error = %v, want nil", err)
+				}
+				return
 			}
-			if !tt.wantErr && err != nil {
-				t.Fatalf("validate() error = %v, want nil", err)
+			if err == nil {
+				t.Fatalf("validate() error = nil, want message containing %q", tt.wantErrContains)
+			}
+			if !strings.Contains(err.Error(), tt.wantErrContains) {
+				t.Errorf("validate() error %q missing %q", err.Error(), tt.wantErrContains)
 			}
 		})
 	}
