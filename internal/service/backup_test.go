@@ -240,6 +240,8 @@ func TestCleanupS3DeleteViaGoChildSurvivesShutdown(t *testing.T) {
 	if !svc.runner.TryStart() {
 		t.Fatal("TryStart returned false")
 	}
+	shutdownCtx, cancel := svc.runner.Context(time.Hour)
+	defer cancel()
 
 	closeDone := make(chan struct{})
 	go func() {
@@ -249,7 +251,7 @@ func TestCleanupS3DeleteViaGoChildSurvivesShutdown(t *testing.T) {
 
 	// Wait until shutdown has started so we exercise the post-Close path:
 	// TryGoBackground would now drop the delete, GoChild must still run it.
-	waitFor(t, time.Second, "runner did not begin closing", svc.runner.Closing)
+	mustReceive(t, shutdownCtx.Done(), "runner shutdown signal")
 
 	runDone := make(chan struct{})
 	svc.runner.Go(func() {

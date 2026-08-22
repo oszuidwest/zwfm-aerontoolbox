@@ -161,10 +161,13 @@ func TestAPIAuthenticationValidation(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "disabled without keys", enabled: false},
-		{name: "enabled with key", enabled: true, keys: []string{"test-api-key"}},
+		{name: "enabled with key", enabled: true, keys: []string{"test-api-key-12345"}},
+		{name: "enabled with minimum-length key", enabled: true, keys: []string{"0123456789abcdef"}},
 		{name: "enabled with nil keys", enabled: true, wantErr: true},
 		{name: "enabled with empty keys", enabled: true, keys: []string{}, wantErr: true},
 		{name: "enabled with empty key", enabled: true, keys: []string{""}, wantErr: true},
+		{name: "enabled with short key", enabled: true, keys: []string{"short-key"}, wantErr: true},
+		{name: "disabled with short key", enabled: false, keys: []string{"short-key"}, wantErr: true},
 	}
 
 	for _, tt := range tests {

@@ -8,7 +8,7 @@ This directory contains test fixtures and data for the Aeron Toolbox project.
 tests/
 ├── fixtures/              # Test data
 │   └── mock_data.sql      # Mock database data (artists, tracks, playlist)
-├── docker-compose.test.yml # Test database (and optional MinIO) setup
+├── docker-compose.test.yml # Test database (and optional SeaweedFS) setup
 └── README.md              # This file
 ```
 
@@ -27,7 +27,7 @@ cd tests
 docker compose -f docker-compose.test.yml up -d
 ```
 
-This starts a PostgreSQL container on port 5433 with mock data. The MinIO
+This starts a PostgreSQL container on port 5433 with mock data. The SeaweedFS
 container (used by the S3 test suite) is behind a compose profile and only
 starts when you add `--profile s3`.
 

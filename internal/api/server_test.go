@@ -59,7 +59,7 @@ func TestRateLimiterLimitsAuthenticatedProtectedRequests(t *testing.T) {
 
 	cfg := &config.Config{}
 	cfg.API.Enabled = true
-	cfg.API.Keys = []string{"test-api-key"}
+	cfg.API.Keys = []string{"test-api-key-12345"}
 	cfg.API.RateLimitEnabled = true
 	cfg.API.RateLimitRequests = 1
 	cfg.API.RateLimitWindowSeconds = 60
@@ -68,7 +68,7 @@ func TestRateLimiterLimitsAuthenticatedProtectedRequests(t *testing.T) {
 	handler := newTestRouter(t, cfg)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/file-monitor/check", http.NoBody)
-	req.Header.Set("X-API-Key", "test-api-key")
+	req.Header.Set("X-API-Key", "test-api-key-12345")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusAccepted {
@@ -76,7 +76,7 @@ func TestRateLimiterLimitsAuthenticatedProtectedRequests(t *testing.T) {
 	}
 
 	req = httptest.NewRequest(http.MethodPost, "/api/file-monitor/check", http.NoBody)
-	req.Header.Set("X-API-Key", "test-api-key")
+	req.Header.Set("X-API-Key", "test-api-key-12345")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	assertErrorResponse(t, rec, http.StatusTooManyRequests, "Rate limit exceeded")
@@ -90,7 +90,7 @@ func TestRateLimiterLimitsInvalidAPIKeyProbesByRemoteAddress(t *testing.T) {
 
 	cfg := &config.Config{}
 	cfg.API.Enabled = true
-	cfg.API.Keys = []string{"test-api-key"}
+	cfg.API.Keys = []string{"test-api-key-12345"}
 	cfg.API.RateLimitEnabled = true
 	cfg.API.RateLimitRequests = 1
 	cfg.API.RateLimitWindowSeconds = 60
