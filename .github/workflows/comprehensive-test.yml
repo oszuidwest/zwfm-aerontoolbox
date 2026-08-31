@@ -59,7 +59,7 @@ jobs:
           retention-days: 1
 
   lint:
-    uses: oszuidwest/.github-templates/.github/workflows/go-ci.yml@v2
+    uses: oszuidwest/.github-templates/.github/workflows/go-ci.yml@v3
 
   integration:
     needs: build
