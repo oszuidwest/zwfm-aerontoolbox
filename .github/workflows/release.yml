@@ -52,7 +52,7 @@ jobs:
     needs: [pre-release, body]
     # Run when pre-release passed OR was skipped (edge).
     if: ${{ !cancelled() && (needs.pre-release.result == 'success' || needs.pre-release.result == 'skipped') }}
-    uses: oszuidwest/.github-templates/.github/workflows/go-release.yml@v2
+    uses: oszuidwest/.github-templates/.github/workflows/go-release.yml@v3
     with:
       project-name: zwfm-aerontoolbox
       ldflags-target: main
