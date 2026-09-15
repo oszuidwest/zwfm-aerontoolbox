@@ -1,8 +1,8 @@
 package api
 
-// handleHealth itself is not unit-tested here because it requires a live
-// database for Repository().Ping(); it is smoke-tested by CI.
-// The status precedence logic is extracted into overallHealthStatus and tested below.
+// The full handleHealth flow (dbPing seam, response shape, detail redaction)
+// is covered by the health tests in server_test.go; this file tests the
+// extracted status precedence logic on its own.
 
 import "testing"
 

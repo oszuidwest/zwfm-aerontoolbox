@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -11,55 +10,16 @@ import (
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
 )
 
+// TestRespondClientErrorPreservesSafeMessage covers the direct respondClientError
+// path used by handlers that pick a 5xx status with a caller-vetted message
+// (e.g. 502 from the test-email handler). This is not reachable through
+// respondServiceError, which routes every >=500 status to respondInternalError.
 func TestRespondClientErrorPreservesSafeMessage(t *testing.T) {
 	rec := httptest.NewRecorder()
 
 	respondClientError(rec, http.StatusBadGateway, "Authentication with mail provider failed")
 
-	if rec.Code != http.StatusBadGateway {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadGateway)
-	}
-
-	var resp Response
-	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if resp.Success {
-		t.Fatal("success = true, want false")
-	}
-	if resp.Error != "Authentication with mail provider failed" {
-		t.Fatalf("error = %q, want safe client message", resp.Error)
-	}
-}
-
-func TestRespondInternalErrorSanitizesTechnicalDetails(t *testing.T) {
-	rec := httptest.NewRecorder()
-
-	respondInternalError(
-		rec,
-		http.StatusInternalServerError,
-		errors.New("get table statistics failed: pq: relation aeron.artist does not exist at 10.0.0.5"),
-	)
-
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
-	}
-	if strings.Contains(rec.Body.String(), "pq:") ||
-		strings.Contains(rec.Body.String(), "aeron.artist") ||
-		strings.Contains(rec.Body.String(), "10.0.0.5") {
-		t.Fatalf("response leaked internal error: %s", rec.Body.String())
-	}
-
-	var resp Response
-	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if resp.Success {
-		t.Fatal("success = true, want false")
-	}
-	if resp.Error != http.StatusText(http.StatusInternalServerError) {
-		t.Fatalf("error = %q, want %q", resp.Error, http.StatusText(http.StatusInternalServerError))
-	}
+	assertErrorResponse(t, rec, http.StatusBadGateway, "Authentication with mail provider failed")
 }
 
 func TestRespondServiceError(t *testing.T) {
@@ -68,6 +28,9 @@ func TestRespondServiceError(t *testing.T) {
 		err         error
 		wantStatus  int
 		wantMessage string
+		// wantBodyExcludes lists internal fragments that must never reach the
+		// client anywhere in the response body.
+		wantBodyExcludes []string
 	}{
 		{
 			name:        "validation error keeps message",
@@ -88,16 +51,25 @@ func TestRespondServiceError(t *testing.T) {
 			wantMessage: "artist with ID 'abc' not found",
 		},
 		{
-			name:        "operation error hides underlying cause",
-			err:         types.NewOperationError("fetch playlist", errors.New("pq: connection refused host=10.0.0.5")),
-			wantStatus:  500,
-			wantMessage: "fetch playlist failed",
+			name:             "operation error hides underlying cause",
+			err:              types.NewOperationError("fetch playlist", errors.New("pq: connection refused host=10.0.0.5")),
+			wantStatus:       500,
+			wantMessage:      "fetch playlist failed",
+			wantBodyExcludes: []string{"pq:", "10.0.0.5"},
 		},
 		{
-			name:        "untyped error returns generic message",
-			err:         errors.New("dial tcp 10.0.0.5:5432: i/o timeout"),
-			wantStatus:  500,
-			wantMessage: http.StatusText(http.StatusInternalServerError),
+			name:             "untyped error returns generic message",
+			err:              errors.New("dial tcp 10.0.0.5:5432: i/o timeout"),
+			wantStatus:       500,
+			wantMessage:      http.StatusText(http.StatusInternalServerError),
+			wantBodyExcludes: []string{"10.0.0.5"},
+		},
+		{
+			name:             "database error is sanitized",
+			err:              errors.New("get table statistics failed: pq: relation aeron.artist does not exist at 10.0.0.5"),
+			wantStatus:       500,
+			wantMessage:      http.StatusText(http.StatusInternalServerError),
+			wantBodyExcludes: []string{"pq:", "aeron.artist", "10.0.0.5"},
 		},
 	}
 
@@ -106,22 +78,12 @@ func TestRespondServiceError(t *testing.T) {
 			rec := httptest.NewRecorder()
 			respondServiceError(rec, tt.err)
 
-			if rec.Code != tt.wantStatus {
-				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
-			}
-
-			var resp Response
-			if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-				t.Fatalf("decode response: %v", err)
-			}
-			if resp.Success {
-				t.Fatal("success = true, want false")
-			}
-			if resp.Error != tt.wantMessage {
-				t.Fatalf("error = %q, want %q", resp.Error, tt.wantMessage)
-			}
-			if tt.wantStatus >= 500 && strings.Contains(resp.Error, "10.0.0.5") {
-				t.Fatalf("error leaks internal details: %q", resp.Error)
+			body := rec.Body.String()
+			assertErrorResponse(t, rec, tt.wantStatus, tt.wantMessage)
+			for _, fragment := range tt.wantBodyExcludes {
+				if strings.Contains(body, fragment) {
+					t.Fatalf("response leaked internal detail %q: %s", fragment, body)
+				}
 			}
 		})
 	}

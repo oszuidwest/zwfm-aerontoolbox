@@ -1,125 +1,133 @@
 package database
 
 import (
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
 )
 
-func TestBuildMediaCheckQuery_InvalidSchema(t *testing.T) {
-	if _, _, err := BuildMediaCheckQuery("bad schema!", &MediaCheckOptions{}); err == nil {
-		t.Fatal("expected error for invalid schema, got nil")
-	}
+// mediaCheckSelectAliases are the column aliases MediaCheckItem's db tags scan
+// (see GetMediaCheckItems). A SELECT-list change that breaks scanning must
+// fail here.
+var mediaCheckSelectAliases = []string{
+	"as trackid",
+	"as tracktitle",
+	"as artist",
+	"as start_time",
+	"as blockid",
+	"as block",
+	"as filepath",
+	"as filename",
+	"as audioname",
 }
 
-func TestBuildMediaCheckQuery_DefaultsToToday(t *testing.T) {
-	query, params, err := BuildMediaCheckQuery("aeron", &MediaCheckOptions{})
-	if err != nil {
-		t.Fatal(err)
+func TestBuildMediaCheckQuery(t *testing.T) {
+	tests := []struct {
+		name            string
+		schema          string // Defaults to "aeron".
+		opts            MediaCheckOptions
+		wantErr         bool
+		wantContains    []string
+		wantNotContains []string
+		wantParams      []any
+	}{
+		{
+			name:    "invalid schema",
+			schema:  "bad schema!",
+			wantErr: true,
+		},
+		{
+			name:         "defaults to today with voicetrack exclusion",
+			opts:         MediaCheckOptions{},
+			wantContains: []string{"CURRENT_DATE", "t.userid IS NULL OR t.userid <>"},
+			wantParams:   []any{types.VoicetrackUserID},
+		},
+		{
+			name:         "explicit date is bound",
+			opts:         MediaCheckOptions{Date: "2026-06-29"},
+			wantContains: []string{"$1::date"},
+			wantParams:   []any{"2026-06-29", types.VoicetrackUserID},
+		},
+		{
+			name:            "block takes precedence over date",
+			opts:            MediaCheckOptions{BlockID: "abc", Date: "2026-06-29"},
+			wantContains:    []string{"pi.blockid = $1"},
+			wantNotContains: []string{"CURRENT_DATE", "::date"},
+			wantParams:      []any{"abc", types.VoicetrackUserID},
+		},
+		{
+			name:         "from/to range",
+			opts:         MediaCheckOptions{From: "2026-06-01", To: "2026-06-07"},
+			wantContains: []string{">= $1::date", "< $2::date + INTERVAL '1 day'"},
+			wantParams:   []any{"2026-06-01", "2026-06-07", types.VoicetrackUserID},
+		},
+		{
+			// LookaheadDays=2 → today through today+2 inclusive → upper bound
+			// CURRENT_DATE + 3.
+			name:         "lookahead widens today scope",
+			opts:         MediaCheckOptions{LookaheadDays: 2},
+			wantContains: []string{"CURRENT_DATE + $1::int"},
+			wantParams:   []any{3, types.VoicetrackUserID},
+		},
+		{
+			name:            "explicit date ignores lookahead",
+			opts:            MediaCheckOptions{Date: "2026-06-29", LookaheadDays: 5},
+			wantNotContains: []string{"::int"},
+			wantParams:      []any{"2026-06-29", types.VoicetrackUserID},
+		},
+		{
+			name:            "include voicetracks drops exclusion",
+			opts:            MediaCheckOptions{IncludeVoicetracks: true},
+			wantNotContains: []string{"t.userid <>"},
+			wantParams:      nil,
+		},
+		{
+			name:         "limit is bound last",
+			opts:         MediaCheckOptions{Limit: 50},
+			wantContains: []string{"LIMIT $2"},
+			wantParams:   []any{types.VoicetrackUserID, 50},
+		},
 	}
-	if !strings.Contains(query, "CURRENT_DATE") {
-		t.Errorf("expected CURRENT_DATE default scope, got: %s", query)
-	}
-	// Only the voicetrack-exclusion parameter should be bound.
-	if len(params) != 1 {
-		t.Errorf("params = %v, want 1 (voicetrack id)", params)
-	}
-	if !strings.Contains(query, "t.userid IS NULL OR t.userid <>") {
-		t.Errorf("expected voicetrack exclusion, got: %s", query)
-	}
-	for _, removed := range []string{"as track_found", "as audioid", "as is_voicetrack"} {
-		if strings.Contains(query, removed) {
-			t.Errorf("query still selects removed column %q: %s", removed, query)
-		}
-	}
-}
 
-func TestBuildMediaCheckQuery_Date(t *testing.T) {
-	query, params, err := BuildMediaCheckQuery("aeron", &MediaCheckOptions{Date: "2026-06-29"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(query, "$1::date") {
-		t.Errorf("expected bound date param, got: %s", query)
-	}
-	if params[0] != "2026-06-29" {
-		t.Errorf("params[0] = %v, want date", params[0])
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			schema := tt.schema
+			if schema == "" {
+				schema = "aeron"
+			}
 
-func TestBuildMediaCheckQuery_BlockTakesPrecedence(t *testing.T) {
-	query, params, err := BuildMediaCheckQuery("aeron", &MediaCheckOptions{
-		BlockID: "abc", Date: "2026-06-29",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(query, "pi.blockid = $1") {
-		t.Errorf("expected block filter first, got: %s", query)
-	}
-	if params[0] != "abc" {
-		t.Errorf("params[0] = %v, want block id", params[0])
-	}
-	if strings.Contains(query, "CURRENT_DATE") || strings.Contains(query, "::date") {
-		t.Errorf("block scope should not include date filters, got: %s", query)
-	}
-}
+			query, params, err := BuildMediaCheckQuery(schema, &tt.opts)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("BuildMediaCheckQuery: %v", err)
+			}
 
-func TestBuildMediaCheckQuery_Range(t *testing.T) {
-	query, _, err := BuildMediaCheckQuery("aeron", &MediaCheckOptions{From: "2026-06-01", To: "2026-06-07"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(query, ">= $1::date") || !strings.Contains(query, "< $2::date + INTERVAL '1 day'") {
-		t.Errorf("expected from/to range, got: %s", query)
-	}
-}
-
-func TestBuildMediaCheckQuery_Lookahead(t *testing.T) {
-	query, params, err := BuildMediaCheckQuery("aeron", &MediaCheckOptions{LookaheadDays: 2})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(query, "CURRENT_DATE + $1::int") {
-		t.Errorf("expected lookahead upper bound, got: %s", query)
-	}
-	// LookaheadDays=2 → today through today+2 inclusive → upper bound CURRENT_DATE + 3.
-	if params[0] != 3 {
-		t.Errorf("params[0] = %v, want 3 (lookahead+1)", params[0])
-	}
-}
-
-func TestBuildMediaCheckQuery_DateIgnoresLookahead(t *testing.T) {
-	query, _, err := BuildMediaCheckQuery("aeron", &MediaCheckOptions{Date: "2026-06-29", LookaheadDays: 5})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(query, "::int") {
-		t.Errorf("explicit date scope must ignore lookahead, got: %s", query)
-	}
-}
-
-func TestBuildMediaCheckQuery_IncludeVoicetracks(t *testing.T) {
-	query, params, err := BuildMediaCheckQuery("aeron", &MediaCheckOptions{IncludeVoicetracks: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(query, "t.userid <>") {
-		t.Errorf("voicetracks should be included, got: %s", query)
-	}
-	if len(params) != 0 {
-		t.Errorf("params = %v, want none", params)
-	}
-}
-
-func TestBuildMediaCheckQuery_Limit(t *testing.T) {
-	query, params, err := BuildMediaCheckQuery("aeron", &MediaCheckOptions{Limit: 50})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(query, "LIMIT") {
-		t.Errorf("expected LIMIT clause, got: %s", query)
-	}
-	if params[len(params)-1] != 50 {
-		t.Errorf("last param = %v, want 50", params[len(params)-1])
+			lowerQuery := strings.ToLower(query)
+			for _, alias := range mediaCheckSelectAliases {
+				if !strings.Contains(lowerQuery, alias) {
+					t.Errorf("query missing scanned column %q:\n%s", alias, query)
+				}
+			}
+			for _, want := range tt.wantContains {
+				if !strings.Contains(query, want) {
+					t.Errorf("query missing %q:\n%s", want, query)
+				}
+			}
+			for _, notWant := range tt.wantNotContains {
+				if strings.Contains(query, notWant) {
+					t.Errorf("query contains %q:\n%s", notWant, query)
+				}
+			}
+			if !reflect.DeepEqual(params, tt.wantParams) {
+				t.Errorf("params = %v, want %v", params, tt.wantParams)
+			}
+		})
 	}
 }

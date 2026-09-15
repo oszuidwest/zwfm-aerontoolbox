@@ -28,6 +28,10 @@ var osStat = os.Stat
 // how operators configure local-time windows (TZ env, see scheduler.go).
 var nowFunc = time.Now
 
+// statTimeoutFor resolves the per-check stat budget. Wrapped here so timeout
+// tests can shrink the second-granularity config value to milliseconds.
+var statTimeoutFor = func(c config.FileMonitorCheckConfig) time.Duration { return c.StatTimeout() }
+
 // statCheckParallelism caps how many files are stat'd concurrently per Run().
 // A radio config typically lists a handful of files, so 8 is plenty.
 const statCheckParallelism = 8
@@ -390,7 +394,7 @@ func (s *FileMonitorService) checkFileWithTimeout(check config.FileMonitorCheckC
 		return statFn(check.Path)
 	})
 
-	timeout := check.StatTimeout()
+	timeout := statTimeoutFor(check)
 	info, err := waitStatFlight(flight, isNew, timeout, nil)
 	if errors.Is(err, errStatTimeout) {
 		return s.timeoutResult(check, flight, timeout)

@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -50,13 +51,8 @@ func TestDriveOf(t *testing.T) {
 func TestWinPathComponents(t *testing.T) {
 	got := winPathComponents(`O:\Audio\85\Artist - Title.wav`)
 	want := []string{"Audio", "85", "Artist - Title.wav"}
-	if len(got) != len(want) {
+	if !slices.Equal(got, want) {
 		t.Fatalf("components = %v, want %v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("components = %v, want %v", got, want)
-		}
 	}
 
 	if winPathComponents(`O:\Audio\..\..\etc\passwd`) != nil {
@@ -79,9 +75,34 @@ func TestBaseNameAndStem(t *testing.T) {
 	}
 }
 
+type matcherOption func(*mediaMatcher)
+
+// withMatcherContext overrides the matcher context (e.g. with a cancellable one).
+func withMatcherContext(ctx context.Context) matcherOption {
+	return func(m *mediaMatcher) { m.ctx = ctx }
+}
+
+// withStatTimeout overrides the per-stat timeout.
+func withStatTimeout(d time.Duration) matcherOption {
+	return func(m *mediaMatcher) { m.statTimeout = d }
+}
+
+// withIndexTimeout overrides the index-build timeout.
+func withIndexTimeout(d time.Duration) matcherOption {
+	return func(m *mediaMatcher) { m.indexTimeout = d }
+}
+
+// withStatFlights routes stats through the given flight group so tests can
+// observe its in-flight map.
+func withStatFlights(g *statFlightGroup) matcherOption {
+	return func(m *mediaMatcher) { m.startStatFlight = g.startOrJoin }
+}
+
 // buildTestMatcher constructs a matcher for tests, opening an os.Root per drive
-// mount. Missing directories are stored as unopened roots (root == nil).
-func buildTestMatcher(t *testing.T, driveDirs map[string]string, searchDirs []string, caseInsensitive bool) *mediaMatcher {
+// mount (missing directories are stored as unopened roots, root == nil). It
+// mirrors buildMatcher's defaults: a background context, the production stat
+// and index timeouts, and a fresh stat-flight group.
+func buildTestMatcher(t *testing.T, driveDirs map[string]string, searchDirs []string, caseInsensitive bool, opts ...matcherOption) *mediaMatcher {
 	t.Helper()
 	driveRoots := make(map[string]*rootDir)
 	for drive, dir := range driveDirs {
@@ -94,247 +115,243 @@ func buildTestMatcher(t *testing.T, driveDirs map[string]string, searchDirs []st
 		}
 		driveRoots[normalizeDriveKey(drive)] = rd
 	}
-	return &mediaMatcher{
+	m := &mediaMatcher{
 		driveRoots:      driveRoots,
 		searchDirs:      searchDirs,
 		caseInsensitive: caseInsensitive,
 		statTimeout:     config.DefaultMediaFileCheckStatTimeoutSeconds * time.Second,
+		indexTimeout:    mediaCheckRunTimeout,
+		ctx:             context.Background(),
 		startStatFlight: new(statFlightGroup).startOrJoin,
 	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
 }
 
-func writeFile(t *testing.T, path string) {
+// waitForStatInflightEmpty waits for the flight group's in-flight map to drain.
+func waitForStatInflightEmpty(t *testing.T, g *statFlightGroup) {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func waitForTestSignal(t *testing.T, ch <-chan struct{}, label string) {
-	t.Helper()
-	select {
-	case <-ch:
-	case <-time.After(time.Second):
-		t.Fatalf("timed out waiting for %s", label)
-	}
-}
-
-func receiveMatchOutcome(t *testing.T, ch <-chan matchOutcome) matchOutcome {
-	t.Helper()
-	var out matchOutcome
-	select {
-	case out = <-ch:
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for match outcome")
-	}
-	return out
-}
-
-func receiveFileIndex(t *testing.T, ch <-chan *fileIndex) *fileIndex {
-	t.Helper()
-	var idx *fileIndex
-	select {
-	case idx = <-ch:
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for file index")
-	}
-	return idx
-}
-
-func waitForStatInflightEmpty(t *testing.T, svc *MediaFileCheckService) {
-	t.Helper()
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		svc.statFlights.mu.Lock()
-		n := len(svc.statFlights.flights)
-		svc.statFlights.mu.Unlock()
-		if n == 0 {
-			return
-		}
-		time.Sleep(time.Millisecond)
-	}
-	t.Fatal("timed out waiting for stat in-flight cleanup")
-}
-
-func TestMatch_DriveMappingExactPath(t *testing.T) {
-	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "Audio", "85", "Artist - Title.wav"))
-
-	m := buildTestMatcher(t, map[string]string{"O:": dir}, nil, true)
-	out := m.match(&matchInput{FilePath: `O:\Audio\85\Artist - Title.wav`})
-
-	if out.Status != MediaStatusPresent {
-		t.Fatalf("status = %q, want present", out.Status)
-	}
-	if out.MatchType != matchTypeExactPath {
-		t.Errorf("matchType = %q, want %q", out.MatchType, matchTypeExactPath)
-	}
-	if len(out.Matches) != 1 {
-		t.Errorf("matches = %v, want one entry", out.Matches)
-	}
-}
-
-func TestMatch_DriveMappingMissing(t *testing.T) {
-	dir := t.TempDir()
-	m := buildTestMatcher(t, map[string]string{"O:": dir}, nil, true)
-	out := m.match(&matchInput{FilePath: `O:\Audio\nope.wav`})
-
-	if out.Status != MediaStatusMissing {
-		t.Fatalf("status = %q, want missing", out.Status)
-	}
-}
-
-func TestMatch_IndexByFilename(t *testing.T) {
-	root := t.TempDir()
-	writeFile(t, filepath.Join(root, "sub", "unique.wav"))
-
-	m := buildTestMatcher(t, nil, []string{root}, true)
-	// No drive mapping for O: -> falls through to the index.
-	out := m.match(&matchInput{FilePath: `O:\elsewhere\unique.wav`})
-
-	if out.Status != MediaStatusPresent {
-		t.Fatalf("status = %q, want present", out.Status)
-	}
-	if out.MatchType != matchTypeFilename {
-		t.Errorf("matchType = %q, want %q", out.MatchType, matchTypeFilename)
-	}
-}
-
-func TestMatch_IndexAmbiguous(t *testing.T) {
-	root := t.TempDir()
-	writeFile(t, filepath.Join(root, "a", "dup.wav"))
-	writeFile(t, filepath.Join(root, "b", "dup.wav"))
-
-	m := buildTestMatcher(t, nil, []string{root}, true)
-	out := m.match(&matchInput{FileName: `O:\x\dup.wav`})
-
-	if out.Status != MediaStatusAmbiguous {
-		t.Fatalf("status = %q, want ambiguous", out.Status)
-	}
-	if len(out.Matches) != 2 {
-		t.Errorf("matches = %v, want two entries", out.Matches)
-	}
-}
-
-func TestMatch_ExtensionIndependent(t *testing.T) {
-	root := t.TempDir()
-	writeFile(t, filepath.Join(root, "song.flac")) // DB says .wav, disk has .flac
-
-	m := buildTestMatcher(t, nil, []string{root}, true)
-	out := m.match(&matchInput{FilePath: `O:\Audio\song.wav`})
-
-	if out.Status != MediaStatusPresent {
-		t.Fatalf("status = %q, want present", out.Status)
-	}
-	if out.MatchType != matchTypeFilenameNoExt {
-		t.Errorf("matchType = %q, want %q", out.MatchType, matchTypeFilenameNoExt)
-	}
-}
-
-func TestMatch_MetadataOnlyIsNotAFileReference(t *testing.T) {
-	root := t.TempDir()
-	writeFile(t, filepath.Join(root, "Artist - Title.mp3"))
-
-	m := buildTestMatcher(t, nil, []string{root}, true)
-	out := m.match(&matchInput{Artist: "Artist", TrackTitle: "Title"})
-
-	if out.Status != MediaStatusNoReference {
-		t.Fatalf("status = %q, want no_reference", out.Status)
-	}
-}
-
-func TestMatch_NoReference(t *testing.T) {
-	m := buildTestMatcher(t, nil, nil, true)
-	out := m.match(&matchInput{})
-
-	if out.Status != MediaStatusNoReference {
-		t.Fatalf("status = %q, want no_reference", out.Status)
-	}
-}
-
-func TestMatch_ConcretePathIgnoresBareTitleIndexHit(t *testing.T) {
-	driveDir := t.TempDir()
-	root := t.TempDir()
-	writeFile(t, filepath.Join(root, "jingles", "Liefdedealer.mp3"))
-
-	m := buildTestMatcher(t, map[string]string{"O:": driveDir}, []string{root}, true)
-	out := m.match(&matchInput{
-		FilePath:   `O:\Audio\85\Blof - Liefdedealer.wav`,
-		Artist:     "Blof",
-		TrackTitle: "Liefdedealer",
+	waitFor(t, time.Second, "timed out waiting for stat in-flight cleanup", func() bool {
+		g.mu.Lock()
+		defer g.mu.Unlock()
+		return len(g.flights) == 0
 	})
-
-	if out.Status != MediaStatusMissing {
-		t.Fatalf("status = %q, want missing", out.Status)
-	}
-	if len(out.Matches) != 0 {
-		t.Fatalf("matches = %v, want none", out.Matches)
-	}
 }
 
-func TestMatch_CaseSensitivity(t *testing.T) {
-	root := t.TempDir()
-	writeFile(t, filepath.Join(root, "MixedCase.WAV"))
+// stubMediaRootStat replaces mediaRootStat for the test with a stub that counts
+// invocations, signals started on the first call, and blocks every call until
+// release is invoked. release is idempotent and also registered as a cleanup so
+// blocked goroutines always unwind. Released calls return (info, err).
+func stubMediaRootStat(t *testing.T, info os.FileInfo, err error) (started <-chan struct{}, release func(), starts *atomic.Int32) {
+	t.Helper()
+	prev := mediaRootStat
+	t.Cleanup(func() { mediaRootStat = prev })
 
-	ci := buildTestMatcher(t, nil, []string{root}, true)
-	if out := ci.match(&matchInput{FileName: `O:\x\mixedcase.wav`}); out.Status != MediaStatusPresent {
-		t.Errorf("case-insensitive: status = %q, want present", out.Status)
-	}
+	startedCh := make(chan struct{})
+	releaseCh := make(chan struct{})
+	var once sync.Once
+	releaseFn := func() { once.Do(func() { close(releaseCh) }) }
+	t.Cleanup(releaseFn)
 
-	cs := buildTestMatcher(t, nil, []string{root}, false)
-	if out := cs.match(&matchInput{FileName: `O:\x\mixedcase.wav`}); out.Status != MediaStatusMissing {
-		t.Errorf("case-sensitive: status = %q, want missing", out.Status)
+	counter := new(atomic.Int32)
+	mediaRootStat = func(*os.Root, string) (os.FileInfo, error) {
+		if counter.Add(1) == 1 {
+			close(startedCh)
+		}
+		<-releaseCh
+		return info, err
 	}
+	return startedCh, releaseFn, counter
 }
 
-func TestMatch_StatErrorWhenRootUnavailable(t *testing.T) {
-	// Drive mapped to a directory that cannot be opened -> stat error, not missing.
-	m := buildTestMatcher(t, map[string]string{"O:": filepath.Join(t.TempDir(), "does-not-exist")}, nil, true)
-	out := m.match(&matchInput{FilePath: `O:\Audio\x.wav`})
+// stubMediaWalkDir replaces mediaWalkDir for the test with a stub that counts
+// invocations, signals started on the first call, and blocks every call until
+// the test ends (a cleanup releases blocked walkers so they always unwind).
+func stubMediaWalkDir(t *testing.T) (started <-chan struct{}, starts *atomic.Int32) {
+	t.Helper()
+	prev := mediaWalkDir
+	t.Cleanup(func() { mediaWalkDir = prev })
 
-	if out.Status != MediaStatusStatError {
-		t.Fatalf("status = %q, want stat_error", out.Status)
+	startedCh := make(chan struct{})
+	releaseCh := make(chan struct{})
+	t.Cleanup(func() { close(releaseCh) })
+
+	counter := new(atomic.Int32)
+	mediaWalkDir = func(string, fs.WalkDirFunc) error {
+		if counter.Add(1) == 1 {
+			close(startedCh)
+		}
+		<-releaseCh
+		return nil
 	}
-	if out.Error == "" {
-		t.Error("expected non-empty error message")
-	}
+	return startedCh, counter
 }
 
-func TestMatch_StatErrorWinsOverIndexFallback(t *testing.T) {
-	root := t.TempDir()
-	writeFile(t, filepath.Join(root, "x.wav"))
-
-	m := buildTestMatcher(t, map[string]string{"O:": filepath.Join(t.TempDir(), "does-not-exist")}, []string{root}, true)
-	out := m.match(&matchInput{FilePath: `O:\Audio\x.wav`})
-
-	if out.Status != MediaStatusStatError {
-		t.Fatalf("status = %q, want stat_error", out.Status)
+func TestMatch_Outcomes(t *testing.T) {
+	tests := []struct {
+		name          string
+		files         []string          // files created under the case's base dir (slash-separated)
+		driveDirs     map[string]string // drive -> subdir of base, created unless listed in missingDirs
+		searchDirs    []string          // subdirs of base used as index roots
+		missingDirs   []string          // referenced subdirs deliberately left uncreated
+		caseSensitive bool
+		input         matchInput
+		wantStatus    MediaFileStatus
+		wantMatchType string
+		wantMatches   int
+		wantError     bool // non-empty out.Error
+	}{
+		{
+			name:       "drive mapping missing file",
+			driveDirs:  map[string]string{"O:": "drive"},
+			input:      matchInput{FilePath: `O:\Audio\nope.wav`},
+			wantStatus: MediaStatusMissing,
+		},
+		{
+			name:       "index by filename",
+			files:      []string{"idx/sub/unique.wav"},
+			searchDirs: []string{"idx"},
+			// No drive mapping for O: -> falls through to the index.
+			input:         matchInput{FilePath: `O:\elsewhere\unique.wav`},
+			wantStatus:    MediaStatusPresent,
+			wantMatchType: matchTypeFilename,
+			wantMatches:   1,
+		},
+		{
+			name:          "index ambiguous",
+			files:         []string{"idx/a/dup.wav", "idx/b/dup.wav"},
+			searchDirs:    []string{"idx"},
+			input:         matchInput{FileName: `O:\x\dup.wav`},
+			wantStatus:    MediaStatusAmbiguous,
+			wantMatchType: matchTypeFilename,
+			wantMatches:   2,
+		},
+		{
+			name:          "extension independent",
+			files:         []string{"idx/song.flac"}, // DB says .wav, disk has .flac
+			searchDirs:    []string{"idx"},
+			input:         matchInput{FilePath: `O:\Audio\song.wav`},
+			wantStatus:    MediaStatusPresent,
+			wantMatchType: matchTypeFilenameNoExt,
+			wantMatches:   1,
+		},
+		{
+			name:       "metadata only is not a file reference",
+			files:      []string{"idx/Artist - Title.mp3"},
+			searchDirs: []string{"idx"},
+			input:      matchInput{Artist: "Artist", TrackTitle: "Title"},
+			wantStatus: MediaStatusNoReference,
+		},
+		{
+			name:       "no reference",
+			input:      matchInput{},
+			wantStatus: MediaStatusNoReference,
+		},
+		{
+			name:       "concrete path ignores bare title index hit",
+			files:      []string{"idx/jingles/Liefdedealer.mp3"},
+			driveDirs:  map[string]string{"O:": "drive"},
+			searchDirs: []string{"idx"},
+			input: matchInput{
+				FilePath:   `O:\Audio\85\Blof - Liefdedealer.wav`,
+				Artist:     "Blof",
+				TrackTitle: "Liefdedealer",
+			},
+			wantStatus: MediaStatusMissing,
+		},
+		{
+			name:          "case insensitive index hit",
+			files:         []string{"idx/MixedCase.WAV"},
+			searchDirs:    []string{"idx"},
+			input:         matchInput{FileName: `O:\x\mixedcase.wav`},
+			wantStatus:    MediaStatusPresent,
+			wantMatchType: matchTypeFilename,
+			wantMatches:   1,
+		},
+		{
+			name:          "case sensitive index miss",
+			files:         []string{"idx/MixedCase.WAV"},
+			searchDirs:    []string{"idx"},
+			caseSensitive: true,
+			input:         matchInput{FileName: `O:\x\mixedcase.wav`},
+			wantStatus:    MediaStatusMissing,
+		},
+		{
+			// Drive mapped to a directory that cannot be opened -> stat error,
+			// not missing, even when an index root has the basename.
+			name:        "stat error wins over index fallback",
+			files:       []string{"idx/x.wav"},
+			driveDirs:   map[string]string{"O:": "gone"},
+			missingDirs: []string{"gone"},
+			searchDirs:  []string{"idx"},
+			input:       matchInput{FilePath: `O:\Audio\x.wav`},
+			wantStatus:  MediaStatusStatError,
+			wantError:   true,
+		},
+		{
+			// A correct exact path must win even when an index also has the basename.
+			name:          "drive mapping prefers exact path over index",
+			files:         []string{"drive/Audio/hit.wav", "idx/other/hit.wav"},
+			driveDirs:     map[string]string{"O:": "drive"},
+			searchDirs:    []string{"idx"},
+			input:         matchInput{FilePath: `O:\Audio\hit.wav`},
+			wantStatus:    MediaStatusPresent,
+			wantMatchType: matchTypeExactPath,
+			wantMatches:   1,
+		},
 	}
-	if len(out.Matches) != 0 {
-		t.Fatalf("matches = %v, want none", out.Matches)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			base := t.TempDir()
+			mkdir := func(sub string) string {
+				dir := filepath.Join(base, sub)
+				if !slices.Contains(tt.missingDirs, sub) {
+					if err := os.MkdirAll(dir, 0o750); err != nil {
+						t.Fatal(err)
+					}
+				}
+				return dir
+			}
+
+			driveDirs := make(map[string]string, len(tt.driveDirs))
+			for drive, sub := range tt.driveDirs {
+				driveDirs[drive] = mkdir(sub)
+			}
+			var searchDirs []string
+			for _, sub := range tt.searchDirs {
+				searchDirs = append(searchDirs, mkdir(sub))
+			}
+			for _, f := range tt.files {
+				writeFileAt(t, filepath.Join(base, filepath.FromSlash(f)), time.Now())
+			}
+
+			m := buildTestMatcher(t, driveDirs, searchDirs, !tt.caseSensitive)
+			out := m.match(&tt.input)
+
+			if out.Status != tt.wantStatus {
+				t.Fatalf("status = %q, want %q", out.Status, tt.wantStatus)
+			}
+			if out.MatchType != tt.wantMatchType {
+				t.Errorf("matchType = %q, want %q", out.MatchType, tt.wantMatchType)
+			}
+			if len(out.Matches) != tt.wantMatches {
+				t.Errorf("matches = %v, want %d entries", out.Matches, tt.wantMatches)
+			}
+			if tt.wantError && out.Error == "" {
+				t.Error("expected non-empty error message")
+			}
+		})
 	}
 }
 
 func TestMatch_StatTimeoutUsesSingleFlight(t *testing.T) {
-	prev := mediaRootStat
-	block := make(chan struct{})
-	t.Cleanup(func() { mediaRootStat = prev })
-	t.Cleanup(func() { close(block) })
+	_, _, starts := stubMediaRootStat(t, nil, os.ErrNotExist)
 
-	var starts atomic.Int32
-	mediaRootStat = func(_ *os.Root, _ string) (os.FileInfo, error) {
-		starts.Add(1)
-		<-block
-		return nil, os.ErrNotExist
-	}
-
-	svc := &MediaFileCheckService{}
-	m := buildTestMatcher(t, map[string]string{"O:": t.TempDir()}, nil, true)
-	m.statTimeout = 10 * time.Millisecond
-	m.startStatFlight = svc.statFlights.startOrJoin
+	m := buildTestMatcher(t, map[string]string{"O:": t.TempDir()}, nil, true,
+		withStatTimeout(10*time.Millisecond))
 
 	out := m.match(&matchInput{FilePath: `O:\Audio\frozen.wav`})
 	if out.Status != MediaStatusStatError || !strings.Contains(out.Error, "stat timeout") {
@@ -356,51 +373,45 @@ func TestMatch_StatTimeoutUsesSingleFlight(t *testing.T) {
 }
 
 func TestMatch_StatSingleFlightSuccessPath(t *testing.T) {
-	prev := mediaRootStat
-	t.Cleanup(func() { mediaRootStat = prev })
-
 	dir := t.TempDir()
 	full := filepath.Join(dir, "Audio", "hit.wav")
-	writeFile(t, full)
+	writeFileAt(t, full, time.Now())
 	info, err := os.Stat(full)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	started := make(chan struct{})
-	release := make(chan struct{})
-	var releaseOnce sync.Once
-	closeRelease := func() { releaseOnce.Do(func() { close(release) }) }
-	t.Cleanup(closeRelease)
+	started, release, starts := stubMediaRootStat(t, info, nil)
 
-	var starts atomic.Int32
-	mediaRootStat = func(_ *os.Root, _ string) (os.FileInfo, error) {
-		if starts.Add(1) == 1 {
-			close(started)
+	flights := new(statFlightGroup)
+	m := buildTestMatcher(t, map[string]string{"O:": dir}, nil, true, withStatFlights(flights))
+	joined := make(chan struct{})
+	m.startStatFlight = func(
+		key string,
+		now time.Time,
+		statFn func() (os.FileInfo, error),
+	) (*statInFlight, bool) {
+		flight, isNew := flights.startOrJoin(key, now, statFn)
+		if !isNew {
+			close(joined)
 		}
-		<-release
-		return info, nil
+		return flight, isNew
 	}
-
-	svc := &MediaFileCheckService{}
-	m := buildTestMatcher(t, map[string]string{"O:": dir}, nil, true)
-	m.ctx = context.Background()
-	m.statTimeout = time.Second
-	m.startStatFlight = svc.statFlights.startOrJoin
 
 	input := &matchInput{FilePath: `O:\Audio\hit.wav`}
 	first := make(chan matchOutcome, 1)
 	go func() { first <- m.match(input) }()
-	waitForTestSignal(t, started, "first stat start")
+	mustReceive(t, started, "first stat start")
 
-	go func() {
-		time.Sleep(10 * time.Millisecond)
-		closeRelease()
-	}()
-	second := m.match(input)
-	firstOut := receiveMatchOutcome(t, first)
+	second := make(chan matchOutcome, 1)
+	go func() { second <- m.match(input) }()
+	mustReceive(t, joined, "second match joining stat flight")
+	release()
 
-	for _, out := range []matchOutcome{firstOut, second} {
+	firstOut := mustReceive(t, first, "first match outcome")
+	secondOut := mustReceive(t, second, "second match outcome")
+
+	for _, out := range []matchOutcome{firstOut, secondOut} {
 		if out.Status != MediaStatusPresent || out.MatchType != matchTypeExactPath {
 			t.Fatalf("status=%q matchType=%q, want present/exact_path", out.Status, out.MatchType)
 		}
@@ -408,38 +419,22 @@ func TestMatch_StatSingleFlightSuccessPath(t *testing.T) {
 	if got := starts.Load(); got != 1 {
 		t.Fatalf("mediaRootStat starts = %d, want 1 shared successful stat", got)
 	}
-	waitForStatInflightEmpty(t, svc)
+	waitForStatInflightEmpty(t, flights)
 }
 
 func TestMatch_StatFlightContextCancel(t *testing.T) {
-	prev := mediaRootStat
-	block := make(chan struct{})
-	t.Cleanup(func() { mediaRootStat = prev })
-	t.Cleanup(func() { close(block) })
-
-	started := make(chan struct{})
-	var starts atomic.Int32
-	mediaRootStat = func(_ *os.Root, _ string) (os.FileInfo, error) {
-		if starts.Add(1) == 1 {
-			close(started)
-		}
-		<-block
-		return nil, os.ErrNotExist
-	}
+	started, _, starts := stubMediaRootStat(t, nil, os.ErrNotExist)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	svc := &MediaFileCheckService{}
-	m := buildTestMatcher(t, map[string]string{"O:": t.TempDir()}, nil, true)
-	m.ctx = ctx
-	m.statTimeout = time.Second
-	m.startStatFlight = svc.statFlights.startOrJoin
+	m := buildTestMatcher(t, map[string]string{"O:": t.TempDir()}, nil, true,
+		withMatcherContext(ctx))
 
 	outCh := make(chan matchOutcome, 1)
 	go func() { outCh <- m.match(&matchInput{FilePath: `O:\Audio\frozen.wav`}) }()
-	waitForTestSignal(t, started, "stat start")
+	mustReceive(t, started, "stat start")
 	cancel()
 
-	out := receiveMatchOutcome(t, outCh)
+	out := mustReceive(t, outCh, "match outcome")
 	if out.Status != MediaStatusStatError || !strings.Contains(out.Error, context.Canceled.Error()) {
 		t.Fatalf("status=%q error=%q, want context-canceled stat_error", out.Status, out.Error)
 	}
@@ -449,53 +444,34 @@ func TestMatch_StatFlightContextCancel(t *testing.T) {
 }
 
 func TestMatch_CompletedStatFlightIsRemoved(t *testing.T) {
-	prev := mediaRootStat
-	t.Cleanup(func() { mediaRootStat = prev })
-
 	dir := t.TempDir()
 	full := filepath.Join(dir, "Audio", "hit.wav")
-	writeFile(t, full)
+	writeFileAt(t, full, time.Now())
 	info, err := os.Stat(full)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	var starts atomic.Int32
-	mediaRootStat = func(_ *os.Root, _ string) (os.FileInfo, error) {
-		starts.Add(1)
-		return info, nil
+	_, release, starts := stubMediaRootStat(t, info, nil)
+	release() // every stat completes immediately
+
+	flights := new(statFlightGroup)
+	m := buildTestMatcher(t, map[string]string{"O:": dir}, nil, true, withStatFlights(flights))
+
+	input := &matchInput{FilePath: `O:\Audio\hit.wav`}
+	if out := m.match(input); out.Status != MediaStatusPresent {
+		t.Fatalf("first status = %q, want present", out.Status)
 	}
+	// The completed flight evicts itself asynchronously; wait so the second
+	// match cannot join the finished flight. The fresh stat below is the proof
+	// of eviction.
+	waitForStatInflightEmpty(t, flights)
 
-	svc := &MediaFileCheckService{}
-	m := buildTestMatcher(t, map[string]string{"O:": dir}, nil, true)
-	m.ctx = context.Background()
-	m.statTimeout = time.Second
-	m.startStatFlight = svc.statFlights.startOrJoin
-
-	for range 2 {
-		out := m.match(&matchInput{FilePath: `O:\Audio\hit.wav`})
-		if out.Status != MediaStatusPresent {
-			t.Fatalf("status = %q, want present", out.Status)
-		}
-		waitForStatInflightEmpty(t, svc)
+	if out := m.match(input); out.Status != MediaStatusPresent {
+		t.Fatalf("second status = %q, want present", out.Status)
 	}
 	if got := starts.Load(); got != 2 {
 		t.Fatalf("mediaRootStat starts = %d, want a fresh stat after completed flight cleanup", got)
-	}
-}
-
-func TestMatch_DriveMappingPrefersExactOverIndex(t *testing.T) {
-	// A correct exact path must win even when an index also has the basename.
-	driveDir := t.TempDir()
-	writeFile(t, filepath.Join(driveDir, "Audio", "hit.wav"))
-	root := t.TempDir()
-	writeFile(t, filepath.Join(root, "other", "hit.wav"))
-
-	m := buildTestMatcher(t, map[string]string{"O:": driveDir}, []string{root}, true)
-	out := m.match(&matchInput{FilePath: `O:\Audio\hit.wav`})
-
-	if out.Status != MediaStatusPresent || out.MatchType != matchTypeExactPath {
-		t.Fatalf("status=%q matchType=%q, want present/exact_path", out.Status, out.MatchType)
 	}
 }
 
@@ -508,21 +484,10 @@ func TestBuildFileIndexRecordsWalkError(t *testing.T) {
 }
 
 func TestMatch_IndexTimeoutReportsStatError(t *testing.T) {
-	prev := mediaWalkDir
-	block := make(chan struct{})
-	t.Cleanup(func() { mediaWalkDir = prev })
-	t.Cleanup(func() { close(block) })
+	_, starts := stubMediaWalkDir(t)
 
-	var starts atomic.Int32
-	mediaWalkDir = func(_ string, _ fs.WalkDirFunc) error {
-		starts.Add(1)
-		<-block
-		return nil
-	}
-
-	m := buildTestMatcher(t, nil, []string{"/frozen-share"}, true)
-	m.ctx = context.Background()
-	m.indexTimeout = 10 * time.Millisecond
+	m := buildTestMatcher(t, nil, []string{"/frozen-share"}, true,
+		withIndexTimeout(10*time.Millisecond))
 
 	out := m.match(&matchInput{FileName: `O:\Audio\frozen.wav`})
 	if out.Status != MediaStatusStatError || !strings.Contains(out.Error, "media file index timeout") {
@@ -534,32 +499,18 @@ func TestMatch_IndexTimeoutReportsStatError(t *testing.T) {
 }
 
 func TestGetIndexContextCancel(t *testing.T) {
-	prev := mediaWalkDir
-	block := make(chan struct{})
-	t.Cleanup(func() { mediaWalkDir = prev })
-	t.Cleanup(func() { close(block) })
-
-	started := make(chan struct{})
-	var starts atomic.Int32
-	mediaWalkDir = func(_ string, _ fs.WalkDirFunc) error {
-		if starts.Add(1) == 1 {
-			close(started)
-		}
-		<-block
-		return nil
-	}
+	started, starts := stubMediaWalkDir(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	m := buildTestMatcher(t, nil, []string{"/frozen-share"}, true)
-	m.ctx = ctx
-	m.indexTimeout = time.Hour
+	m := buildTestMatcher(t, nil, []string{"/frozen-share"}, true,
+		withMatcherContext(ctx), withIndexTimeout(time.Hour))
 
 	idxCh := make(chan *fileIndex, 1)
 	go func() { idxCh <- m.getIndex() }()
-	waitForTestSignal(t, started, "index walk start")
+	mustReceive(t, started, "index walk start")
 	cancel()
 
-	idx := receiveFileIndex(t, idxCh)
+	idx := mustReceive(t, idxCh, "file index")
 	if err := idx.err(); err == nil || !strings.Contains(err.Error(), "media file index canceled: context canceled") {
 		t.Fatalf("index error = %v, want context-canceled index error", err)
 	}

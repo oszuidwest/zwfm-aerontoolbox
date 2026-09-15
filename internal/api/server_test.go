@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -18,16 +19,12 @@ import (
 )
 
 func TestFileMonitorRoutesDisabledReturnNotFound(t *testing.T) {
+	t.Parallel()
+
 	cfg := &config.Config{}
 	cfg.FileMonitor.Enabled = false
 
-	svc, err := service.New(nil, cfg)
-	if err != nil {
-		t.Fatalf("service.New: %v", err)
-	}
-	t.Cleanup(svc.Close)
-
-	handler := New(svc, "test").router()
+	handler := newTestRouter(t, cfg)
 
 	tests := []struct {
 		name   string
@@ -52,43 +49,26 @@ func TestFileMonitorRoutesDisabledReturnNotFound(t *testing.T) {
 
 			handler.ServeHTTP(rec, req)
 
-			if rec.Code != http.StatusNotFound {
-				t.Fatalf("status code = %d, want %d; body: %s", rec.Code, http.StatusNotFound, rec.Body.String())
-			}
-
-			var got Response
-			if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
-				t.Fatalf("decode response: %v", err)
-			}
-			if got.Success {
-				t.Fatal("success = true, want false")
-			}
-			if got.Error != "file monitor is not enabled" {
-				t.Fatalf("error = %q, want %q", got.Error, "file monitor is not enabled")
-			}
+			assertErrorResponse(t, rec, http.StatusNotFound, "file monitor is not enabled")
 		})
 	}
 }
 
 func TestRateLimiterLimitsAuthenticatedProtectedRequests(t *testing.T) {
+	t.Parallel()
+
 	cfg := &config.Config{}
 	cfg.API.Enabled = true
-	cfg.API.Keys = []string{"test-api-key"}
+	cfg.API.Keys = []string{"test-api-key-12345"}
 	cfg.API.RateLimitEnabled = true
 	cfg.API.RateLimitRequests = 1
 	cfg.API.RateLimitWindowSeconds = 60
 	cfg.FileMonitor.Enabled = true
 
-	svc, err := service.New(nil, cfg)
-	if err != nil {
-		t.Fatalf("service.New: %v", err)
-	}
-	t.Cleanup(svc.Close)
-
-	handler := New(svc, "test").router()
+	handler := newTestRouter(t, cfg)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/file-monitor/check", http.NoBody)
-	req.Header.Set("X-API-Key", "test-api-key")
+	req.Header.Set("X-API-Key", "test-api-key-12345")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusAccepted {
@@ -96,32 +76,26 @@ func TestRateLimiterLimitsAuthenticatedProtectedRequests(t *testing.T) {
 	}
 
 	req = httptest.NewRequest(http.MethodPost, "/api/file-monitor/check", http.NoBody)
-	req.Header.Set("X-API-Key", "test-api-key")
+	req.Header.Set("X-API-Key", "test-api-key-12345")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("second status code = %d, want %d; body: %s", rec.Code, http.StatusTooManyRequests, rec.Body.String())
-	}
+	assertErrorResponse(t, rec, http.StatusTooManyRequests, "Rate limit exceeded")
 	if got, want := rec.Header().Get("Retry-After"), "60"; got != want {
 		t.Fatalf("Retry-After = %q, want %q", got, want)
 	}
 }
 
 func TestRateLimiterLimitsInvalidAPIKeyProbesByRemoteAddress(t *testing.T) {
+	t.Parallel()
+
 	cfg := &config.Config{}
 	cfg.API.Enabled = true
-	cfg.API.Keys = []string{"test-api-key"}
+	cfg.API.Keys = []string{"test-api-key-12345"}
 	cfg.API.RateLimitEnabled = true
 	cfg.API.RateLimitRequests = 1
 	cfg.API.RateLimitWindowSeconds = 60
 
-	svc, err := service.New(nil, cfg)
-	if err != nil {
-		t.Fatalf("service.New: %v", err)
-	}
-	t.Cleanup(svc.Close)
-
-	handler := New(svc, "test").router()
+	handler := newTestRouter(t, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/playlist", http.NoBody)
 	req.Header.Set("X-API-Key", "wrong-key-1")
@@ -141,16 +115,12 @@ func TestRateLimiterLimitsInvalidAPIKeyProbesByRemoteAddress(t *testing.T) {
 }
 
 func TestFileMonitorRoutesEnabledPassThrough(t *testing.T) {
+	t.Parallel()
+
 	cfg := &config.Config{}
 	cfg.FileMonitor.Enabled = true
 
-	svc, err := service.New(nil, cfg)
-	if err != nil {
-		t.Fatalf("service.New: %v", err)
-	}
-	t.Cleanup(svc.Close)
-
-	handler := New(svc, "test").router()
+	handler := newTestRouter(t, cfg)
 	req := httptest.NewRequest(http.MethodGet, "/api/file-monitor/status", http.NoBody)
 	rec := httptest.NewRecorder()
 
@@ -160,28 +130,20 @@ func TestFileMonitorRoutesEnabledPassThrough(t *testing.T) {
 		t.Fatalf("status code = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
 	}
 
-	var got Response
-	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if !got.Success {
+	if got := decodeResponse(t, rec); !got.Success {
 		t.Fatalf("success = false, want true; error: %s", got.Error)
 	}
 }
 
 func TestHTTPServerUsesConfiguredTimeouts(t *testing.T) {
+	t.Parallel()
+
 	cfg := &config.Config{}
 	cfg.API.ReadTimeoutSeconds = 12
 	cfg.API.WriteTimeoutSeconds = 34
 	cfg.API.IdleTimeoutSeconds = 56
 
-	svc, err := service.New(nil, cfg)
-	if err != nil {
-		t.Fatalf("service.New: %v", err)
-	}
-	t.Cleanup(svc.Close)
-
-	server := New(svc, "test").newHTTPServer("8080", http.NotFoundHandler())
+	server := newTestServer(t, cfg).newHTTPServer("8080", http.NotFoundHandler())
 
 	if got, want := server.ReadHeaderTimeout, 10*time.Second; got != want {
 		t.Fatalf("ReadHeaderTimeout = %s, want %s", got, want)
@@ -194,83 +156,6 @@ func TestHTTPServerUsesConfiguredTimeouts(t *testing.T) {
 	}
 	if got, want := server.IdleTimeout, 56*time.Second; got != want {
 		t.Fatalf("IdleTimeout = %s, want %s", got, want)
-	}
-}
-
-func TestImageUploadRejectsOversizedRequestBody(t *testing.T) {
-	cfg := &config.Config{}
-	cfg.API.MaxUploadBodyBytes = 8
-
-	svc, err := service.New(nil, cfg)
-	if err != nil {
-		t.Fatalf("service.New: %v", err)
-	}
-	t.Cleanup(svc.Close)
-
-	handler := New(svc, "test").router()
-	req := httptest.NewRequest(
-		http.MethodPost,
-		"/api/artists/123e4567-e89b-42d3-a456-426614174000/image",
-		strings.NewReader(`{"image":"this request is too large"}`),
-	)
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusRequestEntityTooLarge {
-		t.Fatalf("status code = %d, want %d; body: %s",
-			rec.Code, http.StatusRequestEntityTooLarge, rec.Body.String())
-	}
-
-	var got Response
-	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if got.Success {
-		t.Fatal("success = true, want false")
-	}
-	if got.Error != "Request body too large" {
-		t.Fatalf("error = %q, want %q", got.Error, "Request body too large")
-	}
-}
-
-func TestImageUploadAllowsBodyAtConfiguredLimit(t *testing.T) {
-	body := `{"image":"not-base64!"}`
-	cfg := &config.Config{}
-	cfg.API.MaxUploadBodyBytes = int64(len(body))
-
-	svc, err := service.New(nil, cfg)
-	if err != nil {
-		t.Fatalf("service.New: %v", err)
-	}
-	t.Cleanup(svc.Close)
-
-	handler := New(svc, "test").router()
-	req := httptest.NewRequest(
-		http.MethodPost,
-		"/api/artists/123e4567-e89b-42d3-a456-426614174000/image",
-		strings.NewReader(body),
-	)
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status code = %d, want %d; body: %s",
-			rec.Code, http.StatusBadRequest, rec.Body.String())
-	}
-
-	var got Response
-	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if got.Success {
-		t.Fatal("success = true, want false")
-	}
-	if got.Error != "Invalid base64 image" {
-		t.Fatalf("error = %q, want %q", got.Error, "Invalid base64 image")
 	}
 }
 
@@ -288,45 +173,65 @@ func (timeoutReader) Read([]byte) (int, error) {
 	return 0, timeoutReadError{}
 }
 
-func TestImageUploadReadTimeoutReturnsRequestTimeout(t *testing.T) {
-	cfg := &config.Config{}
-	cfg.API.MaxUploadBodyBytes = 1024
+func TestImageUploadBodyLimitHandling(t *testing.T) {
+	t.Parallel()
 
-	svc, err := service.New(nil, cfg)
-	if err != nil {
-		t.Fatalf("service.New: %v", err)
+	atLimitBody := `{"image":"not-base64!"}`
+	tests := []struct {
+		name               string
+		maxUploadBodyBytes int64
+		body               io.Reader
+		wantStatus         int
+		wantError          string
+	}{
+		{
+			name:               "rejects oversized request body",
+			maxUploadBodyBytes: 8,
+			body:               strings.NewReader(`{"image":"this request is too large"}`),
+			wantStatus:         http.StatusRequestEntityTooLarge,
+			wantError:          "Request body too large",
+		},
+		{
+			// The 400 for bad base64 proves the body passed the size gate and
+			// was read in full.
+			name:               "allows body at configured limit",
+			maxUploadBodyBytes: int64(len(atLimitBody)),
+			body:               strings.NewReader(atLimitBody),
+			wantStatus:         http.StatusBadRequest,
+			wantError:          "Invalid base64 image",
+		},
+		{
+			name:               "read timeout returns request timeout",
+			maxUploadBodyBytes: 1024,
+			body:               timeoutReader{},
+			wantStatus:         http.StatusRequestTimeout,
+			wantError:          "Request body read timeout",
+		},
 	}
-	t.Cleanup(svc.Close)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{}
+			cfg.API.MaxUploadBodyBytes = tt.maxUploadBodyBytes
 
-	handler := New(svc, "test").router()
-	req := httptest.NewRequest(
-		http.MethodPost,
-		"/api/artists/123e4567-e89b-42d3-a456-426614174000/image",
-		timeoutReader{},
-	)
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
+			handler := newTestRouter(t, cfg)
+			req := httptest.NewRequest(
+				http.MethodPost,
+				"/api/artists/123e4567-e89b-42d3-a456-426614174000/image",
+				tt.body,
+			)
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
 
-	handler.ServeHTTP(rec, req)
+			handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusRequestTimeout {
-		t.Fatalf("status code = %d, want %d; body: %s",
-			rec.Code, http.StatusRequestTimeout, rec.Body.String())
-	}
-
-	var got Response
-	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if got.Success {
-		t.Fatal("success = true, want false")
-	}
-	if got.Error != "Request body read timeout" {
-		t.Fatalf("error = %q, want %q", got.Error, "Request body read timeout")
+			assertErrorResponse(t, rec, tt.wantStatus, tt.wantError)
+		})
 	}
 }
 
 func TestBackupDownloadReturnsBackupFile(t *testing.T) {
+	t.Parallel()
+
 	backupPath := t.TempDir()
 	const filename = "aeron-backup-2026-01-02-030405.dump"
 	wantBody := []byte("backup-data")
@@ -340,13 +245,7 @@ func TestBackupDownloadReturnsBackupFile(t *testing.T) {
 	cfg.Backup.PgDumpPath = writeExistingToolFile(t, "pg_dump")
 	cfg.Backup.PgRestorePath = writeExistingToolFile(t, "pg_restore")
 
-	svc, err := service.New(nil, cfg)
-	if err != nil {
-		t.Fatalf("service.New: %v", err)
-	}
-	t.Cleanup(svc.Close)
-
-	handler := New(svc, "test").router()
+	handler := newTestRouter(t, cfg)
 	req := httptest.NewRequest(http.MethodGet, "/api/db/backups/"+filename, http.NoBody)
 	rec := httptest.NewRecorder()
 
@@ -373,65 +272,73 @@ func writeExistingToolFile(t *testing.T, name string) string {
 	return path
 }
 
-func TestIsValidAPIKey(t *testing.T) {
-	configuredKeys := []string{"first-test-key", "second-test-key"}
-	cfg := &config.Config{}
-	cfg.API.Enabled = true
+func TestAPIKeyAuthentication(t *testing.T) {
+	t.Parallel()
 
-	svc, err := service.New(nil, cfg)
-	if err != nil {
-		t.Fatalf("service.New: %v", err)
+	// send drives a protected route with the given API key; an empty key means
+	// no X-API-Key header at all.
+	send := func(handler http.Handler, key string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/api/file-monitor/status", http.NoBody)
+		if key != "" {
+			req.Header.Set("X-API-Key", key)
+		}
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
 	}
-	t.Cleanup(svc.Close)
 
-	tests := []struct {
-		name string
-		keys []string
-		key  string
-		want bool
-	}{
-		{
-			name: "first configured key",
-			keys: configuredKeys,
-			key:  "first-test-key",
-			want: true,
-		},
-		{
-			name: "second configured key",
-			keys: configuredKeys,
-			key:  "second-test-key",
-			want: true,
-		},
-		{
-			name: "unknown key",
-			keys: configuredKeys,
-			key:  "unknown-test-key",
-			want: false,
-		},
-		{
-			name: "empty key",
-			keys: configuredKeys,
-			key:  "",
-			want: false,
-		},
-		{
-			name: "no keys configured",
-			keys: nil,
-			key:  "any-test-key",
-			want: false,
-		},
+	newAuthRouter := func(t *testing.T, apiEnabled bool, keys ...string) http.Handler {
+		t.Helper()
+
+		cfg := &config.Config{}
+		cfg.API.Enabled = apiEnabled
+		cfg.API.Keys = keys
+		cfg.FileMonitor.Enabled = true
+		return newTestRouter(t, cfg)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Key hashes are precomputed at construction, so build the server
-			// after setting the configured keys.
-			cfg.API.Keys = tt.keys
-			server := New(svc, "test")
-			if got := server.isValidAPIKey(tt.key); got != tt.want {
-				t.Fatalf("isValidAPIKey(%q) = %v, want %v", tt.key, got, tt.want)
-			}
-		})
-	}
+
+	t.Run("configured keys", func(t *testing.T) {
+		handler := newAuthRouter(t, true, "first-test-key", "second-test-key")
+
+		tests := []struct {
+			name       string
+			key        string
+			wantStatus int
+		}{
+			{"first configured key", "first-test-key", http.StatusOK},
+			{"second configured key", "second-test-key", http.StatusOK},
+			{"unknown key", "unknown-test-key", http.StatusUnauthorized},
+			{"missing key", "", http.StatusUnauthorized},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				rec := send(handler, tt.key)
+				if tt.wantStatus == http.StatusUnauthorized {
+					assertErrorResponse(t, rec, http.StatusUnauthorized, "Unauthorized: invalid or missing API key")
+					return
+				}
+				if rec.Code != tt.wantStatus {
+					t.Fatalf("status code = %d, want %d; body: %s", rec.Code, tt.wantStatus, rec.Body.String())
+				}
+			})
+		}
+	})
+
+	t.Run("no keys configured rejects every key", func(t *testing.T) {
+		handler := newAuthRouter(t, true)
+
+		rec := send(handler, "any-test-key")
+		assertErrorResponse(t, rec, http.StatusUnauthorized, "Unauthorized: invalid or missing API key")
+	})
+
+	t.Run("authentication disabled passes without key", func(t *testing.T) {
+		handler := newAuthRouter(t, false)
+
+		rec := send(handler, "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status code = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+		}
+	})
 }
 
 func TestPublicHealthOmitsInternalDetails(t *testing.T) {
@@ -568,6 +475,52 @@ func TestDetailedHealthRequiresAuthAndIncludesOperatorDetails(t *testing.T) {
 	}
 }
 
+// newTestServer builds a Server around a fresh service layer (no database) and
+// registers cleanup for the service's background workers.
+func newTestServer(t *testing.T, cfg *config.Config) *Server {
+	t.Helper()
+
+	svc, err := service.New(nil, cfg)
+	if err != nil {
+		t.Fatalf("service.New: %v", err)
+	}
+	t.Cleanup(svc.Close)
+
+	return New(svc, "test")
+}
+
+// newTestRouter is newTestServer for tests that only drive the HTTP surface.
+func newTestRouter(t *testing.T, cfg *config.Config) http.Handler {
+	t.Helper()
+
+	return newTestServer(t, cfg).router()
+}
+
+// newHealthTestServer is newTestServer with the database ping stubbed out.
+func newHealthTestServer(t *testing.T, cfg *config.Config, pingErr error) *Server {
+	t.Helper()
+
+	server := newTestServer(t, cfg)
+	server.dbPing = func(context.Context) error { return pingErr }
+	return server
+}
+
+// assertErrorResponse checks the status code and the error envelope in one go.
+func assertErrorResponse(t *testing.T, rec *httptest.ResponseRecorder, wantStatus int, wantError string) {
+	t.Helper()
+
+	if rec.Code != wantStatus {
+		t.Fatalf("status code = %d, want %d; body: %s", rec.Code, wantStatus, rec.Body.String())
+	}
+	resp := decodeResponse(t, rec)
+	if resp.Success {
+		t.Fatal("success = true, want false")
+	}
+	if resp.Error != wantError {
+		t.Fatalf("error = %q, want %q", resp.Error, wantError)
+	}
+}
+
 func decodeResponseData(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
 	t.Helper()
 
@@ -614,18 +567,4 @@ func enableHealthDetailSignals(t *testing.T, cfg *config.Config) {
 	}}
 	cfg.MediaFileCheck.Enabled = true
 	cfg.MediaFileCheck.SearchDirs = []string{dir}
-}
-
-func newHealthTestServer(t *testing.T, cfg *config.Config, pingErr error) *Server {
-	t.Helper()
-
-	svc, err := service.New(nil, cfg)
-	if err != nil {
-		t.Fatalf("service.New: %v", err)
-	}
-	t.Cleanup(svc.Close)
-
-	server := New(svc, "test")
-	server.dbPing = func(context.Context) error { return pingErr }
-	return server
 }

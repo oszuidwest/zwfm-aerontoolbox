@@ -45,8 +45,10 @@ type ImageConfig struct {
 
 // APIConfig controls API authentication and request timeouts.
 type APIConfig struct {
-	Enabled                  bool     `json:"enabled"`
-	Keys                     []string `json:"keys" validate:"dive,required"`
+	Enabled bool `json:"enabled"`
+	// Keys must be long random tokens (min=16), not short guessable
+	// passwords; see the README for generation guidance.
+	Keys                     []string `json:"keys" validate:"dive,required,min=16"`
 	RequestTimeoutSeconds    int      `json:"request_timeout_seconds" validate:"gte=0"`
 	UploadReadTimeoutSeconds int      `json:"upload_read_timeout_seconds" validate:"gte=0"`
 	ReadTimeoutSeconds       int      `json:"read_timeout_seconds" validate:"gte=0"`
