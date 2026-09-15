@@ -65,7 +65,7 @@ jobs:
   docker:
     needs: release
     if: needs.release.outputs.is_release == 'true'
-    uses: oszuidwest/.github-templates/.github/workflows/docker-publish.yml@v2
+    uses: oszuidwest/.github-templates/.github/workflows/docker-publish.yml@v3
     with:
       version: ${{ needs.release.outputs.version }}
       image-labels: |
