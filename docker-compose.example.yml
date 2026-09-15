@@ -7,7 +7,7 @@ services:
       - "8080:8080"
     volumes:
       - ./config.json:/app/config.json:ro
-      - ./backups:/backups
+      - ./backups:/app/backups
     environment:
       - TZ=Europe/Amsterdam
       # Override log level via environment variable (optional)

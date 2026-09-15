@@ -48,7 +48,7 @@ RUN addgroup -g 1000 aeron && \
 WORKDIR /app
 
 # Create backup directory
-RUN install -d -o aeron -g aeron -m 0755 /backups
+RUN install -d -o aeron -g aeron -m 0755 /app/backups
 
 # Copy binary from builder
 COPY --from=builder --chown=0:0 --chmod=0555 /app/zwfm-aerontoolbox /app/zwfm-aerontoolbox
