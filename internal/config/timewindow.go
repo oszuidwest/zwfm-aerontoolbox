@@ -28,15 +28,15 @@ func ParseTimeWindow(s string) (TimeWindow, error) {
 	if s == "" {
 		return TimeWindow{}, nil
 	}
-	startText, endText, ok := strings.Cut(s, "-")
-	if !ok || strings.Contains(endText, "-") {
+	parts := strings.Split(s, "-")
+	if len(parts) != 2 {
 		return TimeWindow{}, fmt.Errorf("invalid window %q, expected HH:MM-HH:MM", s)
 	}
-	start, err := parseHHMM(strings.TrimSpace(startText))
+	start, err := parseHHMM(strings.TrimSpace(parts[0]))
 	if err != nil {
 		return TimeWindow{}, err
 	}
-	end, err := parseHHMM(strings.TrimSpace(endText))
+	end, err := parseHHMM(strings.TrimSpace(parts[1]))
 	if err != nil {
 		return TimeWindow{}, err
 	}

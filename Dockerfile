@@ -1,9 +1,6 @@
 # Build stage
 FROM golang:1.27.1-alpine3.24 AS builder
 
-# Install the CA bundle needed for module downloads.
-RUN apk add --no-cache ca-certificates
-
 # Set working directory
 WORKDIR /app
 
@@ -51,7 +48,7 @@ WORKDIR /app
 RUN install -d -o aeron -g aeron -m 0755 /app/backups
 
 # Copy binary from builder
-COPY --from=builder --chown=0:0 --chmod=0555 /app/zwfm-aerontoolbox /app/zwfm-aerontoolbox
+COPY --from=builder /app/zwfm-aerontoolbox /app/zwfm-aerontoolbox
 
 # Runtime config is mounted at /app/config.json; never bake local config into the image.
 
@@ -63,7 +60,7 @@ EXPOSE 8080
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD ["wget", "-q", "-T", "3", "--spider", "http://127.0.0.1:8080/health"]
+    CMD ["wget", "-q", "--spider", "http://127.0.0.1:8080/health"]
 
 # Start API server by default
 ENTRYPOINT ["/app/zwfm-aerontoolbox"]
