@@ -389,8 +389,8 @@ func (s *Server) handleImageUpload(entityType types.EntityType) http.HandlerFunc
 }
 
 func isTimeoutError(err error) bool {
-	var netErr net.Error
-	return (errors.As(err, &netErr) && netErr.Timeout()) || errors.Is(err, context.DeadlineExceeded)
+	netErr, ok := errors.AsType[net.Error](err)
+	return (ok && netErr.Timeout()) || errors.Is(err, context.DeadlineExceeded)
 }
 
 func (s *Server) handleDeleteImage(entityType types.EntityType) http.HandlerFunc {

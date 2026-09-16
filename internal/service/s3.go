@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -58,12 +57,12 @@ func newS3Service(cfg *config.S3Config) *s3Service {
 	}
 }
 
-// ptrOrNil returns nil for an empty string and an AWS string pointer otherwise.
+// ptrOrNil returns nil for an empty string and a string pointer otherwise.
 func ptrOrNil(s string) *string {
 	if s == "" {
 		return nil
 	}
-	return aws.String(s)
+	return new(s)
 }
 
 // upload streams one backup file to remote storage.
@@ -72,8 +71,8 @@ func (s *s3Service) upload(ctx context.Context, filename string, body io.Reader)
 	start := time.Now()
 
 	_, err := s.tm.UploadObject(ctx, &transfermanager.UploadObjectInput{
-		Bucket: aws.String(s.bucket),
-		Key:    aws.String(key),
+		Bucket: new(s.bucket),
+		Key:    new(key),
 		Body:   body,
 	})
 	if err != nil {
@@ -92,8 +91,8 @@ func (s *s3Service) delete(ctx context.Context, filename string) error {
 	key := s.prefix + filename
 
 	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
-		Bucket: aws.String(s.bucket),
-		Key:    aws.String(key),
+		Bucket: new(s.bucket),
+		Key:    new(key),
 	})
 	if err != nil {
 		return types.NewOperationError("S3 delete", err)

@@ -7,13 +7,13 @@ services:
       - "8080:8080"
     volumes:
       - ./config.json:/app/config.json:ro
-      - ./backups:/backups
+      - ./backups:/app/backups
     environment:
       - TZ=Europe/Amsterdam
       # Override log level via environment variable (optional)
       # - LOG_LEVEL=debug
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/health"]
       interval: 30s
       timeout: 3s
       retries: 3

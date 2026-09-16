@@ -256,11 +256,9 @@ func (s *Server) isValidAPIKeyHash(keyHash [sha256.Size]byte) bool {
 func parseQueryBoolParam(value string) *bool {
 	switch value {
 	case "yes", "true", "1":
-		v := true
-		return &v
+		return new(true)
 	case "no", "false", "0":
-		v := false
-		return &v
+		return new(false)
 	default:
 		return nil
 	}

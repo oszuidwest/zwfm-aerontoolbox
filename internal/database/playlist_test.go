@@ -14,8 +14,6 @@ func TestBuildPlaylistQueryRequiresBlockID(t *testing.T) {
 }
 
 func TestBuildPlaylistQueryFiltersSortAndPagination(t *testing.T) {
-	boolPtr := func(b bool) *bool { return &b }
-
 	// The image predicates carry the "AND " prefix on purpose: the SELECT list
 	// always contains "t.picture IS NOT NULL" / "a.picture IS NOT NULL" inside
 	// the has_*_image CASE expressions, so only the WHERE occurrence counts.
@@ -41,8 +39,8 @@ func TestBuildPlaylistQueryFiltersSortAndPagination(t *testing.T) {
 			name: "track image absent artist image present with limit and offset",
 			opts: &PlaylistOptions{
 				BlockID:     "block-1",
-				TrackImage:  boolPtr(false),
-				ArtistImage: boolPtr(true),
+				TrackImage:  new(false),
+				ArtistImage: new(true),
 				SortBy:      "artist",
 				SortDesc:    true,
 				Limit:       25,
@@ -61,8 +59,8 @@ func TestBuildPlaylistQueryFiltersSortAndPagination(t *testing.T) {
 			name: "track image present artist image absent with limit only",
 			opts: &PlaylistOptions{
 				BlockID:     "block-1",
-				TrackImage:  boolPtr(true),
-				ArtistImage: boolPtr(false),
+				TrackImage:  new(true),
+				ArtistImage: new(false),
 				Limit:       25,
 			},
 			wantContains: []string{

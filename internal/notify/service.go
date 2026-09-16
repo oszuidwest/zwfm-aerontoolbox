@@ -158,8 +158,7 @@ func (s *NotificationService) SecretExpiry() *SecretExpiryInfo {
 	if s.expiryChecker == nil {
 		return nil
 	}
-	info := s.expiryChecker.Info()
-	return &info
+	return new(s.expiryChecker.Info())
 }
 
 // StartExpiryChecker warms the secret-expiry cache in the background.

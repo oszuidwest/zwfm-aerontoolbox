@@ -17,6 +17,7 @@ linters:
     - unparam
     - unconvert
     - bodyclose
+    - modernize
   settings:
     gocritic:
       enabled-tags:
