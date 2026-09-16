@@ -561,7 +561,7 @@ func TestBackupServiceValidateRewindsFileBeforePgRestore(t *testing.T) {
 		t.Fatalf("backup prefix = %q, want backup-", buf)
 	}
 
-	if err := svc.validateBackupFile(context.Background(), file); err != nil {
+	if err := svc.validateBackupFile(t.Context(), file); err != nil {
 		t.Fatalf("validateBackupFile after partial read: %v", err)
 	}
 }

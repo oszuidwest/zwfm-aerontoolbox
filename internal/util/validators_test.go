@@ -25,6 +25,10 @@ func TestValidators(t *testing.T) {
 			check: func() error { return ValidateEntityID("9e37ff1f-7823-43ce-93d0-12fc1c2edb8b", "artist") },
 		},
 		{
+			name:  "entity id accepts uppercase uuid v4",
+			check: func() error { return ValidateEntityID("9E37FF1F-7823-43CE-93D0-12FC1C2EDB8B", "artist") },
+		},
+		{
 			name:    "entity id rejects empty",
 			check:   func() error { return ValidateEntityID("", "artist") },
 			wantErr: true,
@@ -32,6 +36,16 @@ func TestValidators(t *testing.T) {
 		{
 			name:    "entity id rejects non-uuid",
 			check:   func() error { return ValidateEntityID("not-a-uuid", "artist") },
+			wantErr: true,
+		},
+		{
+			name:    "entity id rejects non-v4 uuid",
+			check:   func() error { return ValidateEntityID("9e37ff1f-7823-13ce-93d0-12fc1c2edb8b", "artist") },
+			wantErr: true,
+		},
+		{
+			name:    "entity id rejects non-canonical uuid",
+			check:   func() error { return ValidateEntityID("9e37ff1f782343ce93d012fc1c2edb8b", "artist") },
 			wantErr: true,
 		},
 		{

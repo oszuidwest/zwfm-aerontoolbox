@@ -100,7 +100,7 @@ func withStatFlights(g *statFlightGroup) matcherOption {
 
 // buildTestMatcher constructs a matcher for tests, opening an os.Root per drive
 // mount (missing directories are stored as unopened roots, root == nil). It
-// mirrors buildMatcher's defaults: a background context, the production stat
+// mirrors buildMatcher's defaults: a test-scoped context, the production stat
 // and index timeouts, and a fresh stat-flight group.
 func buildTestMatcher(t *testing.T, driveDirs map[string]string, searchDirs []string, caseInsensitive bool, opts ...matcherOption) *mediaMatcher {
 	t.Helper()
@@ -121,7 +121,7 @@ func buildTestMatcher(t *testing.T, driveDirs map[string]string, searchDirs []st
 		caseInsensitive: caseInsensitive,
 		statTimeout:     config.DefaultMediaFileCheckStatTimeoutSeconds * time.Second,
 		indexTimeout:    mediaCheckRunTimeout,
-		ctx:             context.Background(),
+		ctx:             t.Context(),
 		startStatFlight: new(statFlightGroup).startOrJoin,
 	}
 	for _, opt := range opts {
@@ -425,7 +425,7 @@ func TestMatch_StatSingleFlightSuccessPath(t *testing.T) {
 func TestMatch_StatFlightContextCancel(t *testing.T) {
 	started, _, starts := stubMediaRootStat(t, nil, os.ErrNotExist)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	m := buildTestMatcher(t, map[string]string{"O:": t.TempDir()}, nil, true,
 		withMatcherContext(ctx))
 
@@ -476,7 +476,7 @@ func TestMatch_CompletedStatFlightIsRemoved(t *testing.T) {
 }
 
 func TestBuildFileIndexRecordsWalkError(t *testing.T) {
-	idx := buildFileIndexWithWalkDir(context.Background(), []string{filepath.Join(t.TempDir(), "missing")}, true, mediaWalkDir)
+	idx := buildFileIndexWithWalkDir(t.Context(), []string{filepath.Join(t.TempDir(), "missing")}, true, mediaWalkDir)
 
 	if err := idx.err(); err == nil {
 		t.Fatal("expected index error for missing root, got nil")
@@ -501,7 +501,7 @@ func TestMatch_IndexTimeoutReportsStatError(t *testing.T) {
 func TestGetIndexContextCancel(t *testing.T) {
 	started, starts := stubMediaWalkDir(t)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	m := buildTestMatcher(t, nil, []string{"/frozen-share"}, true,
 		withMatcherContext(ctx), withIndexTimeout(time.Hour))
 

@@ -621,8 +621,8 @@ func validate(config *Config) error {
 
 // formatErrors converts validator errors to user-friendly messages.
 func formatErrors(err error) error {
-	var ve validator.ValidationErrors
-	if !errors.As(err, &ve) {
+	ve, ok := errors.AsType[validator.ValidationErrors](err)
+	if !ok {
 		return err
 	}
 

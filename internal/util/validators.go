@@ -13,15 +13,11 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"uuid"
 
 	"github.com/doyensec/safeurl"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
 )
-
-// uuidRegex lazily compiles the UUID v4 validator.
-var uuidRegex = sync.OnceValue(func() *regexp.Regexp {
-	return regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
-})
 
 // GUIDPattern matches the standard GUID shape without UUID-version checks.
 var GUIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
@@ -32,7 +28,9 @@ func ValidateEntityID(id, entityLabel string) error {
 		return types.NewValidationError("id", fmt.Sprintf("invalid %s ID: must not be empty", entityLabel))
 	}
 
-	if !uuidRegex().MatchString(id) {
+	parsed, err := uuid.Parse(id)
+	isCanonicalV4 := err == nil && len(id) == 36 && parsed[6]>>4 == 4 && parsed[8]>>6 == 2
+	if !isCanonicalV4 {
 		return types.NewValidationError("id", fmt.Sprintf("invalid %s ID: must be a UUID", entityLabel))
 	}
 
