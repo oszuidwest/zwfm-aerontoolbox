@@ -3,9 +3,9 @@ module github.com/oszuidwest/zwfm-aerontoolbox
 go 1.27.1
 
 require (
-	github.com/aws/aws-sdk-go-v2/credentials v1.20.4
-	github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager v0.4.5
-	github.com/aws/aws-sdk-go-v2/service/s3 v1.113.0
+	github.com/aws/aws-sdk-go-v2/credentials v1.20.5
+	github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager v0.4.7
+	github.com/aws/aws-sdk-go-v2/service/s3 v1.113.1
 	github.com/doyensec/safeurl v0.2.5
 	github.com/go-chi/chi/v5 v5.3.2
 	github.com/go-playground/validator/v10 v10.30.4
