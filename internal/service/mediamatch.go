@@ -43,6 +43,22 @@ const (
 
 const maxFileIndexErrors = 5
 
+// windowsSystemDirs are volume-level Windows directories that never hold media
+// and are usually unreadable over SMB. The index walk skips them so a share
+// root can be used as a search dir.
+var windowsSystemDirs = []string{
+	"$RECYCLE.BIN",
+	"RECYCLER",
+	"System Volume Information",
+}
+
+// isWindowsSystemDir reports whether name is a known Windows system directory.
+func isWindowsSystemDir(name string) bool {
+	return slices.ContainsFunc(windowsSystemDirs, func(s string) bool {
+		return strings.EqualFold(s, name)
+	})
+}
+
 var mediaRootStat = func(root *os.Root, name string) (os.FileInfo, error) {
 	return root.Stat(name)
 }
@@ -125,7 +141,8 @@ type fileIndex struct {
 }
 
 // buildFileIndexWithWalkDir indexes regular files by full filename and stem.
-// Per-file walk errors are logged and skipped; ctx cancellation aborts the walk.
+// Known Windows system directories below a search dir are skipped. Per-file
+// walk errors are logged and skipped; ctx cancellation aborts the walk.
 // walkDir is injected so callers can snapshot mediaWalkDir before spawning.
 func buildFileIndexWithWalkDir(
 	ctx context.Context,
@@ -150,6 +167,9 @@ func buildFileIndexWithWalkDir(
 		err := walkDir(dir, func(path string, d fs.DirEntry, err error) error {
 			if ctx != nil && ctx.Err() != nil {
 				return ctx.Err()
+			}
+			if d != nil && d.IsDir() && path != dir && isWindowsSystemDir(d.Name()) {
+				return filepath.SkipDir
 			}
 			if err != nil {
 				idx.addError(fmt.Sprintf("%s: %v", path, err))

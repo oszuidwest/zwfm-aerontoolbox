@@ -483,6 +483,59 @@ func TestBuildFileIndexRecordsWalkError(t *testing.T) {
 	}
 }
 
+func TestBuildFileIndexSkipsWindowsSystemDirs(t *testing.T) {
+	root := t.TempDir()
+	files := []string{
+		filepath.Join(root, "Audio", "keep.wav"),
+		filepath.Join(root, "$RECYCLE.BIN", "S-1-5-21-1001", "deleted.wav"),
+		filepath.Join(root, "$Recycle.Bin", "old.wav"),
+		filepath.Join(root, "RECYCLER", "xp.wav"),
+		filepath.Join(root, "System Volume Information", "tracking.log"),
+	}
+	for _, f := range files {
+		if err := os.MkdirAll(filepath.Dir(f), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(f, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// An unreadable subdirectory must not be visited at all.
+	locked := filepath.Join(root, "$RECYCLE.BIN", "S-1-5-21-1002")
+	if err := os.Mkdir(locked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+
+	idx := buildFileIndexWithWalkDir(t.Context(), []string{root}, true, mediaWalkDir)
+
+	if err := idx.err(); err != nil {
+		t.Fatalf("index error = %v, want nil", err)
+	}
+	if idx.count != 1 {
+		t.Fatalf("indexed files = %d, want 1", idx.count)
+	}
+	if got := idx.byName["keep.wav"]; len(got) != 1 {
+		t.Fatalf("keep.wav matches = %v, want 1", got)
+	}
+}
+
+func TestBuildFileIndexWalksSystemDirAsSearchDir(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "$RECYCLE.BIN")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "restore.wav"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	idx := buildFileIndexWithWalkDir(t.Context(), []string{root}, true, mediaWalkDir)
+
+	if idx.count != 1 {
+		t.Fatalf("indexed files = %d, want 1 when the search dir itself is a system dir name", idx.count)
+	}
+}
+
 func TestMatch_IndexTimeoutReportsStatError(t *testing.T) {
 	_, starts := stubMediaWalkDir(t)
 
