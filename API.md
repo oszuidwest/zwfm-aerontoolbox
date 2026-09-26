@@ -544,7 +544,7 @@ De eerste controle na een herstart meet wel, maar verstuurt nog geen meldingen. 
 
 Deze endpoints bestaan alleen als `media_file_check.enabled` aanstaat; anders volgt `404`.
 
-De controle leest audioreferenties uit de playlist. `drive_mounts` vertaalt eerst een Windows-driveletter naar een exact hostpad. Als dat pad niet bestaat, doorzoekt `search_dirs` een bestandsnaamindex, eerst met en daarna zonder extensie. Een fout bij het controleren van het exacte pad levert `stat_error` op zonder fallback. Matching is standaard hoofdletterongevoelig.
+De controle leest audioreferenties uit de playlist. `drive_mounts` vertaalt eerst een Windows-driveletter naar een exact hostpad. Als dat pad niet bestaat, doorzoekt `search_dirs` een bestandsnaamindex, eerst met en daarna zonder extensie; `$RECYCLE.BIN`, `RECYCLER` en `System Volume Information` worden daarbij overgeslagen. Een fout bij het controleren van het exacte pad levert `stat_error` op zonder fallback. Matching is standaard hoofdletterongevoelig.
 
 ### `POST /api/media/files/check`
 

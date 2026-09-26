@@ -485,27 +485,16 @@ func TestBuildFileIndexRecordsWalkError(t *testing.T) {
 
 func TestBuildFileIndexSkipsWindowsSystemDirs(t *testing.T) {
 	root := t.TempDir()
-	files := []string{
+	// Mixed case ($Recycle.Bin is the name since Vista) exercises case folding
+	// on every host filesystem.
+	for _, f := range []string{
 		filepath.Join(root, "Audio", "keep.wav"),
-		filepath.Join(root, "$RECYCLE.BIN", "S-1-5-21-1001", "deleted.wav"),
-		filepath.Join(root, "$Recycle.Bin", "old.wav"),
+		filepath.Join(root, "$Recycle.Bin", "S-1-5-21-1001", "deleted.wav"),
 		filepath.Join(root, "RECYCLER", "xp.wav"),
 		filepath.Join(root, "System Volume Information", "tracking.log"),
+	} {
+		writeFileAt(t, f, time.Now())
 	}
-	for _, f := range files {
-		if err := os.MkdirAll(filepath.Dir(f), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(f, nil, 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// An unreadable subdirectory must not be visited at all.
-	locked := filepath.Join(root, "$RECYCLE.BIN", "S-1-5-21-1002")
-	if err := os.Mkdir(locked, 0o000); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
 
 	idx := buildFileIndexWithWalkDir(t.Context(), []string{root}, true, mediaWalkDir)
 
@@ -522,12 +511,7 @@ func TestBuildFileIndexSkipsWindowsSystemDirs(t *testing.T) {
 
 func TestBuildFileIndexWalksSystemDirAsSearchDir(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "$RECYCLE.BIN")
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "restore.wav"), nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeFileAt(t, filepath.Join(root, "restore.wav"), time.Now())
 
 	idx := buildFileIndexWithWalkDir(t.Context(), []string{root}, true, mediaWalkDir)
 
