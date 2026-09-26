@@ -185,6 +185,8 @@ func (c *FileMonitorConfig) Interval() time.Duration {
 //   - SearchDirs are directories indexed recursively; a reference is then matched
 //     by filename (with and, as a fallback, without extension). This is the
 //     fallback for files whose exact path moved or that are mounted flat.
+//     Windows system dirs ($RECYCLE.BIN, RECYCLER, System Volume Information)
+//     below a search dir are skipped.
 //
 // At least one of DriveMounts or SearchDirs must be configured when Enabled.
 type MediaFileCheckConfig struct {

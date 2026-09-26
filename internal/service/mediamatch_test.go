@@ -483,6 +483,43 @@ func TestBuildFileIndexRecordsWalkError(t *testing.T) {
 	}
 }
 
+func TestBuildFileIndexSkipsWindowsSystemDirs(t *testing.T) {
+	root := t.TempDir()
+	// Mixed case ($Recycle.Bin is the name since Vista) exercises case folding
+	// on every host filesystem.
+	for _, f := range []string{
+		filepath.Join(root, "Audio", "keep.wav"),
+		filepath.Join(root, "$Recycle.Bin", "S-1-5-21-1001", "deleted.wav"),
+		filepath.Join(root, "RECYCLER", "xp.wav"),
+		filepath.Join(root, "System Volume Information", "tracking.log"),
+	} {
+		writeFileAt(t, f, time.Now())
+	}
+
+	idx := buildFileIndexWithWalkDir(t.Context(), []string{root}, true, mediaWalkDir)
+
+	if err := idx.err(); err != nil {
+		t.Fatalf("index error = %v, want nil", err)
+	}
+	if idx.count != 1 {
+		t.Fatalf("indexed files = %d, want 1", idx.count)
+	}
+	if got := idx.byName["keep.wav"]; len(got) != 1 {
+		t.Fatalf("keep.wav matches = %v, want 1", got)
+	}
+}
+
+func TestBuildFileIndexWalksSystemDirAsSearchDir(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "$RECYCLE.BIN")
+	writeFileAt(t, filepath.Join(root, "restore.wav"), time.Now())
+
+	idx := buildFileIndexWithWalkDir(t.Context(), []string{root}, true, mediaWalkDir)
+
+	if idx.count != 1 {
+		t.Fatalf("indexed files = %d, want 1 when the search dir itself is a system dir name", idx.count)
+	}
+}
+
 func TestMatch_IndexTimeoutReportsStatError(t *testing.T) {
 	_, starts := stubMediaWalkDir(t)
 
