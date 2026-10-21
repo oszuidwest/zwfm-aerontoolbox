@@ -1,6 +1,6 @@
 module github.com/oszuidwest/zwfm-aerontoolbox
 
-go 1.27.2
+go 1.27.3
 
 require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.9
