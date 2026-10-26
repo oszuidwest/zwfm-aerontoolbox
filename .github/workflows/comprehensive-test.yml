@@ -1473,13 +1473,18 @@ jobs:
           fi
           echo "Backup lokaal verwijderd"
 
-          # Poll until the S3 object is gone (deletion happens asynchronously)
+          # Poll until the S3 object is gone (deletion happens asynchronously).
+          # Check the key itself: listing the prefix exits non-zero once the
+          # last object is gone, which is indistinguishable from an error.
+          S3_KEY="test-backups/${{ env.S3_BACKUP_FILENAME }}"
           DELETED=false
           for i in {1..15}; do
-            if OBJECTS=$(aws s3 ls s3://aeron-backups/test-backups/ 2>/dev/null) && \
-              ! grep -q "${{ env.S3_BACKUP_FILENAME }}" <<< "$OBJECTS"; then
-              DELETED=true
-              break
+            if ! ERR=$(aws s3api head-object --bucket aeron-backups --key "$S3_KEY" 2>&1 >/dev/null); then
+              if grep -q "(404)" <<< "$ERR"; then
+                DELETED=true
+                break
+              fi
+              echo "head-object fout: $ERR"
             fi
             echo "Wachten op S3 verwijdering... ($i/15)"
             sleep 1
