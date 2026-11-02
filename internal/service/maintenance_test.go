@@ -180,3 +180,26 @@ func TestCheckTableHealthSkipsRatioChecksOnSmallTables(t *testing.T) {
 		t.Fatalf("1001 rows: recommendations = %q, needs vacuum %v, needs analyze %v, want %q and both flags", got, table.NeedsVacuum, table.NeedsAnalyze, want)
 	}
 }
+
+func TestCheckTableHealthReportsVacuumAgeOnlyWithDeadTuples(t *testing.T) {
+	svc := &MaintenanceService{config: &config.Config{}}
+	now := time.Now()
+	monthAgo := now.AddDate(0, -1, 0)
+	table := TableHealth{Name: "track", RowCount: 5000, LastAutovacuum: &monthAgo, LastAutoanalyze: &now}
+
+	if got := svc.checkTableHealth(&table, nil, "VACUUM recommended"); len(got) != 0 {
+		t.Fatalf("recommendations without dead tuples = %q, want none", got)
+	}
+
+	table.DeadTuples = 1
+	want := []string{"Table 'track' has not been vacuumed in over 7 days"}
+	if got := svc.checkTableHealth(&table, nil, "VACUUM recommended"); !slices.Equal(got, want) {
+		t.Fatalf("recommendations with dead tuples = %q, want %q", got, want)
+	}
+
+	table.LastAutovacuum = nil
+	want = []string{"Table 'track' has never been vacuumed"}
+	if got := svc.checkTableHealth(&table, nil, "VACUUM recommended"); !slices.Equal(got, want) {
+		t.Fatalf("recommendations when never vacuumed = %q, want %q", got, want)
+	}
+}

@@ -228,6 +228,13 @@ func hasStaleStats(t *TableHealth, cfg *config.MaintenanceConfig) bool {
 	return t.RowCount > cfg.GetMinRowsForRecommendation() && t.ModSinceAnalyze > t.RowCount*int64(cfg.GetStaleStatsThreshold())/100
 }
 
+// vacuumOverdue reports whether a table with dead tuples has gone longer than the
+// staleness window without a VACUUM. Tables that were never vacuumed are not overdue.
+func vacuumOverdue(t *TableHealth, cfg *config.MaintenanceConfig) bool {
+	lastVac := lastVacuumTime(t)
+	return lastVac != nil && t.DeadTuples > 0 && time.Since(*lastVac) > cfg.GetVacuumStaleness()
+}
+
 // generateRecommendations returns operator actions for the health report.
 func (s *MaintenanceService) generateRecommendations(health *DatabaseHealth) []string {
 	var recs []string
@@ -292,8 +299,7 @@ func (s *MaintenanceService) checkTableHealth(t *TableHealth, recs []string, vac
 		recs = append(recs, fmt.Sprintf("Table '%s' has never been vacuumed", t.Name))
 	}
 
-	if lastVac := lastVacuumTime(t); lastVac != nil &&
-		time.Since(*lastVac) > cfg.GetVacuumStaleness() && t.RowCount > minRows {
+	if vacuumOverdue(t, &cfg) && t.RowCount > minRows {
 		recs = append(recs, fmt.Sprintf(
 			"Table '%s' has not been vacuumed in over %d days", t.Name, cfg.GetVacuumStalenessDays()))
 	}
