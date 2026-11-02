@@ -75,8 +75,8 @@ github.com/mattn/go-sqlite3 v1.14.22 h1:2gZY6PC6kBnID23Tichd1K+Z0oS6nE/XwU+Vz/5o
 github.com/mattn/go-sqlite3 v1.14.22/go.mod h1:Uh1q+B4BYcTPb+yiD3kU8Ct7aC0hY9fxUwlHK0RXw+Y=
 github.com/netresearch/go-cron v0.18.0 h1:laSsA/eSzlg5gY5qRV8t+8UFdImDc+u4pZeQol3eZos=
 github.com/netresearch/go-cron v0.18.0/go.mod h1:8HWm4hvHC3npgXeMSSEyGy3ZZBnLqDSLd+4v5al2i08=
-github.com/oszuidwest/zw-graphmail v0.0.1 h1:p/dvm2tpxM0+zGbo2nOQW04jfL9TVO3QsFevdnfrYnY=
-github.com/oszuidwest/zw-graphmail v0.0.1/go.mod h1:WUtF7zCTpCQ+rbKoUjYvSIj5tQ2bILMHIOctWuwvPkw=
+github.com/oszuidwest/zw-graphmail v0.0.2 h1:SIWjdgcgX9uRnQpDKnOYb3gQOvH2KuIbdAgBiG2Swis=
+github.com/oszuidwest/zw-graphmail v0.0.2/go.mod h1:WUtF7zCTpCQ+rbKoUjYvSIj5tQ2bILMHIOctWuwvPkw=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/stretchr/testify v1.8.4 h1:CcVxjf3Q8PM0mHUKJCdn+eZZtm5yQwehR5yeSVQQcUk=
