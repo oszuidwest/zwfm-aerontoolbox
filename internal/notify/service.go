@@ -46,7 +46,6 @@ type mailer interface {
 
 // NotificationService sends transition-based operational email alerts.
 type NotificationService struct {
-	config     *config.Config
 	runner     *async.Runner
 	recipients []string // parsed once at construction
 	configured bool     // fixed at construction; config is never reloaded
@@ -72,7 +71,6 @@ type NotificationService struct {
 func New(cfg *config.Config) *NotificationService {
 	emailCfg := &cfg.Notifications.Email
 	svc := &NotificationService{
-		config:     cfg,
 		runner:     async.New(),
 		recipients: ParseRecipients(emailCfg.Recipients),
 	}
