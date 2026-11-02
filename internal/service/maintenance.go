@@ -227,9 +227,21 @@ func hasStaleStats(t *TableHealth, cfg *config.MaintenanceConfig) bool {
 func (s *MaintenanceService) generateRecommendations(health *DatabaseHealth) []string {
 	var recs []string
 
+	// The session holding back the xmin horizon the most goes first, and the
+	// per-table VACUUM advice points at it instead of suggesting a VACUUM.
+	vacuumAdvice := "VACUUM recommended"
+	holder := xminHolder(health.LongRunningQueries)
+	if holder != nil {
+		vacuumAdvice = fmt.Sprintf("VACUUM blocked by PID %d", holder.PID)
+		recs = append(recs, fmt.Sprintf(
+			"VACUUM is blocked: PID %d (application %q, user %s, %s since %s) holds back the xmin horizon (xmin age %d) - "+
+				"dead rows newer than its snapshot cannot be removed until it ends",
+			holder.PID, holder.ApplicationName, holder.User, holder.State,
+			holder.StartedAt.Local().Format(time.DateTime), holder.XminAge))
+	}
 	for i := range health.Tables {
 		t := &health.Tables[i]
-		recs = s.checkTableHealth(t, recs)
+		recs = s.checkTableHealth(t, recs, vacuumAdvice)
 	}
 
 	cfg := s.config.Maintenance
@@ -239,22 +251,36 @@ func (s *MaintenanceService) generateRecommendations(health *DatabaseHealth) []s
 	}
 
 	for _, q := range health.LongRunningQueries {
+		if holder != nil && q.PID == holder.PID {
+			continue
+		}
 		recs = append(recs, fmt.Sprintf("Long-running query detected (PID %d, running for %s)", q.PID, q.Duration))
 	}
 
 	return recs
 }
 
-func (s *MaintenanceService) checkTableHealth(t *TableHealth, recs []string) []string {
+// xminHolder returns the session that holds back the xmin horizon the most, or nil.
+func xminHolder(queries []types.LongRunningQuery) *types.LongRunningQuery {
+	var holder *types.LongRunningQuery
+	for i := range queries {
+		if queries[i].XminAge > 0 && (holder == nil || queries[i].XminAge > holder.XminAge) {
+			holder = &queries[i]
+		}
+	}
+	return holder
+}
+
+func (s *MaintenanceService) checkTableHealth(t *TableHealth, recs []string, vacuumAdvice string) []string {
 	cfg := s.config.Maintenance
 	minRows := cfg.GetMinRowsForRecommendation()
 
 	if exceedsBloat(t, &cfg) {
-		recs = append(recs, fmt.Sprintf("Table '%s' has %.1f%% dead tuples - VACUUM recommended", t.Name, t.DeadTuplePct))
+		recs = append(recs, fmt.Sprintf("Table '%s' has %.1f%% dead tuples - %s", t.Name, t.DeadTuplePct, vacuumAdvice))
 	}
 
 	if exceedsDeadTuples(t, &cfg) {
-		recs = append(recs, fmt.Sprintf("Table '%s' has %d dead tuples - VACUUM recommended", t.Name, t.DeadTuples))
+		recs = append(recs, fmt.Sprintf("Table '%s' has %d dead tuples - %s", t.Name, t.DeadTuples, vacuumAdvice))
 	}
 
 	if t.LastVacuum == nil && t.LastAutovacuum == nil && t.RowCount > minRows {

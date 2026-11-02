@@ -357,7 +357,7 @@ Retourneert database-, tabel-, connectie- en querystatistieken.
 | `database_size`, `database_size_bytes` | Totale grootte, leesbaar en in bytes |
 | `active_connections`, `max_connections`, `connection_usage_pct` | Connectiegebruik |
 | `tables` | Status per tabel |
-| `long_running_queries` | Queries boven de ingestelde tijdsdrempel |
+| `long_running_queries` | Sessies waarvan de transactie langer loopt dan de ingestelde tijdsdrempel |
 | `needs_maintenance` | Of minimaal één tabel `VACUUM` of `ANALYZE` nodig heeft |
 | `recommendations` | Operatoracties; `No issues detected` als de lijst anders leeg zou zijn |
 | `checked_at` | Tijdstip van de controle |
@@ -378,7 +378,7 @@ Tabelvelden:
 | `seq_scans`, `idx_scans` | Scanstatistieken |
 | `needs_vacuum`, `needs_analyze` | Afgeleide onderhoudssignalen |
 
-Een item in `long_running_queries` bevat `pid`, `duration`, `query` en `state`. `query` is leeg tenzij `maintenance.expose_long_running_query_text` aanstaat.
+Een item in `long_running_queries` bevat `pid`, `duration`, `query`, `state`, `application_name`, `user`, `started_at` en `xmin_age`. `started_at` is de start van de transactie, of van de query als er geen transactie is; `duration` telt vanaf dat moment. `query` is leeg tenzij `maintenance.expose_long_running_query_text` aanstaat. `xmin_age` is groter dan 0 als de sessie de xmin-horizon tegenhoudt: dode rijen die nieuwer zijn dan haar snapshot kan VACUUM dan niet opruimen. De sessie met de hoogste `xmin_age` komt bovenaan `recommendations`. Volledige gegevens over sessies van andere databasegebruikers zijn alleen zichtbaar als de gebruiker van de toolbox superuser is, `pg_read_all_stats` heeft of de rechten van de rol van die sessie heeft; anders ontbreken die sessies in deze lijst.
 
 ## Back-ups
 
