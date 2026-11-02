@@ -320,7 +320,10 @@ func (s *BackupService) executePgDump(
 ) (os.FileInfo, time.Duration, error) {
 	//nolint:gosec // G204: pgDumpPath is resolved from config/PATH, not user HTTP input
 	cmd := exec.CommandContext(ctx, pgDumpPath, args...)
-	cmd.Env = append(os.Environ(), "PGPASSWORD="+s.config.Database.Password)
+	cmd.Env = append(os.Environ(),
+		"PGPASSWORD="+s.config.Database.Password,
+		"PGSSLMODE="+s.config.Database.SSLMode,
+	)
 
 	start := time.Now()
 	output, err := cmd.CombinedOutput()

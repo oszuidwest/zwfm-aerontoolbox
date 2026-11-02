@@ -592,3 +592,27 @@ func TestBackupServiceCloseClosesBackupRoot(t *testing.T) {
 		t.Fatalf("root.Stat after Close error = %v, want %v", err, os.ErrClosed)
 	}
 }
+
+func TestExecutePgDumpPassesConfiguredSSLMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test uses a POSIX shell as pg_dump")
+	}
+	t.Setenv("PGSSLMODE", "prefer")
+
+	svc := newTestBackupService(t)
+	svc.config.Database.SSLMode = "verify-full"
+	path := filepath.Join(svc.config.Backup.GetPath(), testBackupFilename)
+
+	args := []string{"-c", `printf %s "$PGSSLMODE" > "$1"`, "sh", path}
+	if _, _, err := svc.executePgDump(t.Context(), "/bin/sh", testBackupFilename, path, args); err != nil {
+		t.Fatalf("executePgDump: %v", err)
+	}
+
+	got, err := svc.backupRoot.ReadFile(testBackupFilename)
+	if err != nil {
+		t.Fatalf("read pg_dump output: %v", err)
+	}
+	if string(got) != "verify-full" {
+		t.Fatalf("pg_dump PGSSLMODE = %q, want verify-full", got)
+	}
+}
