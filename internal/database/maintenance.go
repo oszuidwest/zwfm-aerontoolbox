@@ -46,7 +46,7 @@ func (r *Repository) GetDatabaseSize(ctx context.Context) (int64, error) {
 }
 
 // GetFrozenXIDAge returns the transaction ID age of the current database and the
-// server's autovacuum_freeze_max_age, at which autovacuum forces a freeze.
+// server's autovacuum_freeze_max_age, above which autovacuum forces an anti-wraparound vacuum.
 func (r *Repository) GetFrozenXIDAge(ctx context.Context) (age, freezeMaxAge int64, err error) {
 	row := r.db.QueryRowContext(ctx, `
 		SELECT age(datfrozenxid), current_setting('autovacuum_freeze_max_age')::bigint

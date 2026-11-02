@@ -2,7 +2,6 @@ package service
 
 import (
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -199,7 +198,9 @@ func TestGenerateRecommendationsWarnsAboveFreezeMaxAge(t *testing.T) {
 	}
 
 	health.FrozenXIDAge++
-	if got := svc.generateRecommendations(health); len(got) != 1 || !strings.HasPrefix(got[0], "Transaction ID age 200000001 is above autovacuum_freeze_max_age (200000000) - ") {
-		t.Fatalf("recommendations above freeze max age = %q", got)
+	want := []string{"Transaction ID age 200000001 is above autovacuum_freeze_max_age (200000000) - " +
+		"check that anti-wraparound autovacuum is making progress and that no session holds back VACUUM"}
+	if got := svc.generateRecommendations(health); !slices.Equal(got, want) {
+		t.Fatalf("recommendations above freeze max age = %q, want %q", got, want)
 	}
 }
