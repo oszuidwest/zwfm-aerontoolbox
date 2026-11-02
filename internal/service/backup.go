@@ -316,11 +316,21 @@ func generateBackupFilename() string {
 
 // executePgDump runs pg_dump and removes the partial file on failure.
 func (s *BackupService) executePgDump(
-	ctx context.Context, pgDumpPath, filename, fullPath string, args []string,
+	ctx context.Context, pgDumpPath, filename string, args []string,
 ) (os.FileInfo, time.Duration, error) {
+	// Create the file owner-only up front; pg_dump truncates it and keeps the mode.
+	file, err := s.backupRoot.OpenFile(filename, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return nil, 0, types.NewOperationError("create backup", err)
+	}
+	_ = file.Close()
+
 	//nolint:gosec // G204: pgDumpPath is resolved from config/PATH, not user HTTP input
 	cmd := exec.CommandContext(ctx, pgDumpPath, args...)
-	cmd.Env = append(os.Environ(), "PGPASSWORD="+s.config.Database.Password)
+	cmd.Env = append(os.Environ(),
+		"PGPASSWORD="+s.config.Database.Password,
+		"PGSSLMODE="+s.config.Database.SSLMode,
+	)
 
 	start := time.Now()
 	output, err := cmd.CombinedOutput()
@@ -350,10 +360,6 @@ func (s *BackupService) executePgDump(
 	fileInfo, err := s.backupRoot.Stat(filename)
 	if err != nil {
 		return nil, 0, types.NewOperationError("create backup", fmt.Errorf("backup file not found after creation: %w", err))
-	}
-
-	if err := os.Chmod(fullPath, 0o600); err != nil {
-		slog.Warn("Could not set file permissions", "file", filename, "error", err)
 	}
 
 	return fileInfo, duration, nil
@@ -421,7 +427,7 @@ func (s *BackupService) execute(ctx context.Context, req BackupRequest) error {
 	s.setStatusFilename(filename)
 	slog.Info("Backup started", "filename", filename)
 
-	fileInfo, duration, err := s.executePgDump(ctx, s.pgDumpPath, filename, fullPath, args)
+	fileInfo, duration, err := s.executePgDump(ctx, s.pgDumpPath, filename, args)
 	if err != nil {
 		s.setStatusDone(false, filename, err.Error())
 		s.notifyBackup()
