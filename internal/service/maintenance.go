@@ -275,7 +275,7 @@ func (s *MaintenanceService) checkTableHealth(t *TableHealth, recs []string, vac
 	cfg := s.config.Maintenance
 	minRows := cfg.GetMinRowsForRecommendation()
 
-	if exceedsBloat(t, &cfg) {
+	if exceedsBloat(t, &cfg) && t.RowCount > minRows {
 		recs = append(recs, fmt.Sprintf("Table '%s' has %.1f%% dead tuples - %s", t.Name, t.DeadTuplePct, vacuumAdvice))
 	}
 
@@ -297,13 +297,13 @@ func (s *MaintenanceService) checkTableHealth(t *TableHealth, recs []string, vac
 		recs = append(recs, fmt.Sprintf("Table '%s' has never been analyzed - ANALYZE recommended", t.Name))
 	}
 
-	if hasStaleStats(t, &cfg) {
+	if hasStaleStats(t, &cfg) && t.RowCount > minRows {
 		recs = append(recs, fmt.Sprintf(
 			"Table '%s' has %d modifications since last ANALYZE - statistics stale",
 			t.Name, t.ModSinceAnalyze))
 	}
 
-	if t.SeqScans > 1000 && t.IdxScans > 0 &&
+	if t.SeqScans > 1000 && t.IdxScans > 0 && t.RowCount > minRows &&
 		float64(t.SeqScans)/float64(t.IdxScans) > cfg.GetSeqScanRatioThreshold() {
 		recs = append(recs, fmt.Sprintf(
 			"Table '%s' has high sequential scans (%d) vs index scans (%d) - possible missing index",
