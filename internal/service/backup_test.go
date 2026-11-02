@@ -604,7 +604,7 @@ func TestExecutePgDumpPassesConfiguredSSLMode(t *testing.T) {
 	path := filepath.Join(svc.config.Backup.GetPath(), testBackupFilename)
 
 	args := []string{"-c", `printf %s "$PGSSLMODE" > "$1"`, "sh", path}
-	if _, _, err := svc.executePgDump(t.Context(), "/bin/sh", testBackupFilename, path, args); err != nil {
+	if _, _, err := svc.executePgDump(t.Context(), "/bin/sh", testBackupFilename, args); err != nil {
 		t.Fatalf("executePgDump: %v", err)
 	}
 
@@ -614,5 +614,23 @@ func TestExecutePgDumpPassesConfiguredSSLMode(t *testing.T) {
 	}
 	if string(got) != "verify-full" {
 		t.Fatalf("pg_dump PGSSLMODE = %q, want verify-full", got)
+	}
+}
+
+func TestExecutePgDumpWritesOwnerOnlyFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test uses a POSIX shell as pg_dump")
+	}
+
+	svc := newTestBackupService(t)
+	path := filepath.Join(svc.config.Backup.GetPath(), testBackupFilename)
+
+	// Fails unless the file already exists with mode 0600 while pg_dump runs.
+	args := []string{"-c", `test -n "$(find "$1" -perm 600)"`, "sh", path}
+	if _, _, err := svc.executePgDump(t.Context(), "/bin/sh", testBackupFilename, args); err != nil {
+		t.Fatalf("executePgDump: %v", err)
+	}
+	if _, _, err := svc.executePgDump(t.Context(), "/bin/sh", testBackupFilename, args); err == nil {
+		t.Fatal("executePgDump reused an existing backup file")
 	}
 }
