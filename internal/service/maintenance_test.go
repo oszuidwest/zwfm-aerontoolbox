@@ -139,8 +139,8 @@ func TestGenerateRecommendationsPointsAtXminHolder(t *testing.T) {
 	want := []string{
 		`VACUUM is blocked: PID 42 (application "DBmod", user aeron, idle in transaction since 2026-09-26 12:36:00) ` +
 			"holds back the xmin horizon (xmin age 900) - dead rows newer than its snapshot cannot be removed until it ends",
-		"Table 'track' has 80.0% dead tuples - VACUUM blocked by PID 42",
-		"Table 'track' has 20000 dead tuples - VACUUM blocked by PID 42",
+		"Table 'track' has 80.0% dead tuples - VACUUM may be blocked by PID 42",
+		"Table 'track' has 20000 dead tuples - VACUUM may be blocked by PID 42",
 		"Long-running query detected (PID 7, running for 00:01:00)",
 		"Long-running query detected (PID 50, running for 00:00:30)",
 		"Long-running query detected (PID 60, running for 00:00:10)",
