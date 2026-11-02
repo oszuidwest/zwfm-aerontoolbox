@@ -2,6 +2,7 @@ package service
 
 import (
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -201,5 +202,19 @@ func TestCheckTableHealthReportsVacuumAgeOnlyWithDeadTuples(t *testing.T) {
 	want = []string{"Table 'track' has never been vacuumed"}
 	if got := svc.checkTableHealth(&table, nil, "VACUUM recommended"); !slices.Equal(got, want) {
 		t.Fatalf("recommendations when never vacuumed = %q, want %q", got, want)
+	}
+}
+
+func TestGenerateRecommendationsWarnsAboveFreezeMaxAge(t *testing.T) {
+	svc := &MaintenanceService{config: &config.Config{}}
+	health := &DatabaseHealth{FrozenXIDAge: 200_000_000, FreezeMaxAge: 200_000_000}
+
+	if got := svc.generateRecommendations(health); len(got) != 0 {
+		t.Fatalf("recommendations at freeze max age = %q, want none", got)
+	}
+
+	health.FrozenXIDAge++
+	if got := svc.generateRecommendations(health); len(got) != 1 || !strings.HasPrefix(got[0], "Transaction ID age 200000001 is above autovacuum_freeze_max_age (200000000) - ") {
+		t.Fatalf("recommendations above freeze max age = %q", got)
 	}
 }

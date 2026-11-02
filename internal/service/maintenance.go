@@ -41,6 +41,8 @@ type DatabaseHealth struct {
 	ActiveConnections  int                      `json:"active_connections"`
 	MaxConnections     int                      `json:"max_connections"`
 	ConnectionUsagePct float64                  `json:"connection_usage_pct"`
+	FrozenXIDAge       int64                    `json:"frozen_xid_age"`
+	FreezeMaxAge       int64                    `json:"autovacuum_freeze_max_age"`
 	Tables             []TableHealth            `json:"tables"`
 	LongRunningQueries []types.LongRunningQuery `json:"long_running_queries"`
 	NeedsMaintenance   bool                     `json:"needs_maintenance"`
@@ -110,6 +112,11 @@ func (s *MaintenanceService) GetHealth(ctx context.Context) (*DatabaseHealth, er
 	health.MaxConnections = maxConns
 	if maxConns > 0 {
 		health.ConnectionUsagePct = float64(active) / float64(maxConns) * 100
+	}
+
+	health.FrozenXIDAge, health.FreezeMaxAge, err = s.repo.GetFrozenXIDAge(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	queries, err := s.repo.GetLongRunningQueries(ctx, s.config.Maintenance.GetLongQueryThresholdSeconds())
@@ -260,6 +267,13 @@ func (s *MaintenanceService) generateRecommendations(health *DatabaseHealth) []s
 	if int(health.ConnectionUsagePct) >= cfg.GetConnectionUsageThreshold() {
 		recs = append(recs, fmt.Sprintf("Connection usage is high: %d/%d (%.0f%%) - check for connection leaks",
 			health.ActiveConnections, health.MaxConnections, health.ConnectionUsagePct))
+	}
+
+	if health.FrozenXIDAge > health.FreezeMaxAge {
+		recs = append(recs, fmt.Sprintf(
+			"Transaction ID age %d is above autovacuum_freeze_max_age (%d) - "+
+				"check that anti-wraparound autovacuum is making progress and that no session holds back VACUUM",
+			health.FrozenXIDAge, health.FreezeMaxAge))
 	}
 
 	for _, q := range health.LongRunningQueries {

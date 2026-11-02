@@ -356,6 +356,7 @@ Retourneert database-, tabel-, connectie- en querystatistieken.
 | `database_name`, `database_version`, `schema_name` | Database-identificatie |
 | `database_size`, `database_size_bytes` | Totale grootte, leesbaar en in bytes |
 | `active_connections`, `max_connections`, `connection_usage_pct` | Connectiegebruik |
+| `frozen_xid_age`, `autovacuum_freeze_max_age` | Transactie-ID-leeftijd van de database en de grens waarboven autovacuum een anti-wraparound-VACUUM start; boven die grens volgt een aanbeveling |
 | `tables` | Status per tabel |
 | `long_running_queries` | Sessies waarvan de transactie langer loopt dan de ingestelde tijdsdrempel |
 | `needs_maintenance` | Of minimaal één tabel `VACUUM` of `ANALYZE` nodig heeft |

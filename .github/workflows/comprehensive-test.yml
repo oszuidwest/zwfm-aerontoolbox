@@ -717,6 +717,12 @@ jobs:
             echo "Response: $RESPONSE"
             exit 1
           fi
+          # postgres:17 runs with the default autovacuum_freeze_max_age.
+          if ! echo "$RESPONSE" | jq -e '.data.frozen_xid_age > 0 and .data.autovacuum_freeze_max_age == 200000000' > /dev/null; then
+            echo "::error::frozen_xid_age of autovacuum_freeze_max_age ontbreekt"
+            echo "$RESPONSE" | jq '.data | {frozen_xid_age, autovacuum_freeze_max_age}'
+            exit 1
+          fi
 
       - name: "Maintenance: Health endpoint shows table stats"
         if: matrix.suite == 'maintenance'
