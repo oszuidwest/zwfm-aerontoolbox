@@ -2,9 +2,17 @@ package util
 
 import (
 	"bytes"
+	"context"
 	"image"
 	"image/png"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/doyensec/safeurl"
 )
 
 func TestValidators(t *testing.T) {
@@ -93,5 +101,41 @@ func TestValidators(t *testing.T) {
 				t.Fatalf("error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestValidateAndDownloadImageStopsWhenContextEnds(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		w.(http.Flusher).Flush()
+		<-release // stall mid-body
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) })
+
+	// safeurl blocks loopback; allow only this test server.
+	port := srv.Listener.Addr().(*net.TCPAddr).Port
+	orig := safeHTTPClient
+	safeHTTPClient = func() *safeurl.WrappedClient {
+		return safeurl.Client(safeurl.GetConfigBuilder().SetAllowedIPs("127.0.0.1").SetAllowedPorts(port).Build())
+	}
+	t.Cleanup(func() { safeHTTPClient = orig })
+
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := ValidateAndDownloadImage(ctx, srv.URL, 1<<20)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), context.DeadlineExceeded.Error()) {
+			t.Fatalf("ValidateAndDownloadImage error = %v, want %v", err, context.DeadlineExceeded)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ValidateAndDownloadImage kept reading after its context ended")
 	}
 }

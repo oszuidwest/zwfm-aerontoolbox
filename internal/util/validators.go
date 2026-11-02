@@ -3,6 +3,7 @@ package util
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"image"
 	"io"
@@ -97,14 +98,18 @@ func ValidateImageFormat(format string) error {
 }
 
 // ValidateAndDownloadImage validates, downloads, and decodes a remote image.
-func ValidateAndDownloadImage(urlString string, maxSize int64) ([]byte, error) {
+// The download ends when ctx is done.
+func ValidateAndDownloadImage(ctx context.Context, urlString string, maxSize int64) ([]byte, error) {
 	if err := ValidateURL(urlString); err != nil {
 		return nil, err
 	}
 
-	client := safeHTTPClient()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlString, http.NoBody)
+	if err != nil {
+		return nil, types.NewValidationError("image", fmt.Sprintf("download failed: %v", err))
+	}
 
-	resp, err := client.Get(urlString)
+	resp, err := safeHTTPClient().Do(req)
 	if err != nil {
 		return nil, types.NewValidationError("image", fmt.Sprintf("download failed: %v", err))
 	}
