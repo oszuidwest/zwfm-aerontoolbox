@@ -154,3 +154,23 @@ func TestGenerateRecommendationsPointsAtXminHolder(t *testing.T) {
 		t.Fatalf("recommendations without holder = %q, want first %q", got, want)
 	}
 }
+
+func TestCheckTableHealthSkipsRatioChecksOnSmallTables(t *testing.T) {
+	svc := &MaintenanceService{config: &config.Config{}}
+	now := time.Now()
+	table := TableHealth{
+		Name: "computer", DeadTuplePct: 50, ModSinceAnalyze: 500, SeqScans: 2000, IdxScans: 1,
+		LastAutovacuum: &now, LastAutoanalyze: &now,
+	}
+
+	// The default min_rows_for_recommendation is 1000.
+	table.RowCount = 1000
+	if got := svc.checkTableHealth(&table, nil, "VACUUM recommended"); len(got) != 0 {
+		t.Fatalf("recommendations for %d rows = %q, want none", table.RowCount, got)
+	}
+
+	table.RowCount = 1001
+	if got := svc.checkTableHealth(&table, nil, "VACUUM recommended"); len(got) != 3 {
+		t.Fatalf("recommendations for %d rows = %q, want dead tuple, stale stats and seq scan", table.RowCount, got)
+	}
+}
