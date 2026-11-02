@@ -19,6 +19,7 @@ import (
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/service"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/util"
+	"golang.org/x/oauth2"
 )
 
 // ImageUploadRequest accepts either an image URL or base64-encoded image data.
@@ -495,15 +496,13 @@ func (s *Server) handleTestEmail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.service.Notify.ValidateAuth(); err != nil {
-		slog.Error("Test email authentication failed", "error", err)
-		respondClientError(w, http.StatusBadGateway, "Authentication with mail provider failed")
-		return
-	}
-
 	if err := s.service.Notify.SendTestEmail(r.Context()); err != nil {
 		slog.Error("Test email delivery failed", "error", err)
-		respondClientError(w, http.StatusBadGateway, "Failed to send test email")
+		message := "Failed to send test email"
+		if _, ok := errors.AsType[*oauth2.RetrieveError](err); ok {
+			message = "Authentication with mail provider failed"
+		}
+		respondClientError(w, http.StatusBadGateway, message)
 		return
 	}
 
