@@ -55,7 +55,9 @@ func optimizeImage(data []byte, format string, cfg Config) ([]byte, error) {
 
 	bounds := sourceImage.Bounds()
 	if bounds.Dx() > cfg.TargetWidth || bounds.Dy() > cfg.TargetHeight {
-		sourceImage = resizeImage(sourceImage, cfg.TargetWidth, cfg.TargetHeight)
+		if sourceImage, err = resizeImage(sourceImage, cfg.TargetWidth, cfg.TargetHeight); err != nil {
+			return nil, err
+		}
 	}
 
 	var jpegBuffer bytes.Buffer
@@ -70,7 +72,7 @@ func optimizeImage(data []byte, format string, cfg Config) ([]byte, error) {
 }
 
 // resizeImage scales an image to fit within max dimensions using Catmull-Rom.
-func resizeImage(sourceImage image.Image, maxWidth, maxHeight int) image.Image {
+func resizeImage(sourceImage image.Image, maxWidth, maxHeight int) (image.Image, error) {
 	bounds := sourceImage.Bounds()
 	width, height := bounds.Dx(), bounds.Dy()
 
@@ -79,16 +81,19 @@ func resizeImage(sourceImage image.Image, maxWidth, maxHeight int) image.Image {
 	scale := min(scaleFactorX, scaleFactorY)
 
 	if scale >= 1 {
-		return sourceImage
+		return sourceImage, nil
 	}
 
 	newWidth := int(float64(width) * scale)
 	newHeight := int(float64(height) * scale)
+	if newWidth < 1 || newHeight < 1 {
+		return nil, types.NewValidationError("dimensions", fmt.Sprintf("image is too narrow to resize: %dx%d", width, height))
+	}
 
 	dst := image.NewRGBA(image.Rect(0, 0, newWidth, newHeight))
 	draw.CatmullRom.Scale(dst, dst.Bounds(), sourceImage, sourceImage.Bounds(), draw.Over, nil)
 
-	return dst
+	return dst, nil
 }
 
 // Process validates imageData and returns the bytes that should be stored.

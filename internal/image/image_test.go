@@ -53,6 +53,22 @@ func TestProcessRejectsSmallerImageWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestProcessRejectsImageThatResizesToZero(t *testing.T) {
+	for _, size := range [][2]int{{21, 1}, {1, 21}} {
+		_, err := Process(testPNG(t, size[0], size[1]), Config{TargetWidth: 20, TargetHeight: 20, Quality: 85})
+		if err == nil || !strings.Contains(err.Error(), "too narrow to resize") {
+			t.Fatalf("Process(%dx%d) error = %v, want too narrow to resize", size[0], size[1], err)
+		}
+	}
+
+	// These resize to 20x1 and 1x20, the thinnest results that are still allowed.
+	for _, size := range [][2]int{{40, 2}, {2, 40}} {
+		if _, err := Process(testPNG(t, size[0], size[1]), Config{TargetWidth: 20, TargetHeight: 20, Quality: 85}); err != nil {
+			t.Fatalf("Process(%dx%d): %v", size[0], size[1], err)
+		}
+	}
+}
+
 func TestProcessRejectsOversizedDimensionsBeforeDecode(t *testing.T) {
 	tests := []struct {
 		name          string
