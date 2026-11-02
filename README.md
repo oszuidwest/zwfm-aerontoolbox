@@ -49,6 +49,8 @@ go build -o zwfm-aerontoolbox .
 
 Voor back-ups buiten Docker zijn `pg_dump` en `pg_restore` nodig van dezelfde of een nieuwere majorversie dan de server; bij het opstarten worden ze gecontroleerd. De Docker-image bevat PostgreSQL-client 17. Andere binaries stel je in met `backup.pg_dump_path` en `backup.pg_restore_path`.
 
+Back-ups gebruiken dezelfde `database.sslmode` als de applicatie. Bij `verify-ca` of `verify-full` heeft `pg_dump` het CA-certificaat nodig: zet de omgevingsvariabele `PGSSLROOTCERT` op het pad van dat certificaat, of op `system` bij `verify-full` (vanaf PostgreSQL-client 16).
+
 ## Configuratie
 
 Kopieer [`config.example.json`](config.example.json) naar `config.json` en pas deze secties aan:
