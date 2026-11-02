@@ -2,6 +2,7 @@ package service
 
 import (
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -186,5 +187,19 @@ func TestCheckTableHealthSkipsRatioChecksOnSmallTables(t *testing.T) {
 	}
 	if got := svc.checkTableHealth(&table, nil, "VACUUM recommended"); !slices.Equal(got, want) || !table.NeedsVacuum || !table.NeedsAnalyze {
 		t.Fatalf("1001 rows: recommendations = %q, needs vacuum %v, needs analyze %v, want %q and both flags", got, table.NeedsVacuum, table.NeedsAnalyze, want)
+	}
+}
+
+func TestGenerateRecommendationsWarnsAboveFreezeMaxAge(t *testing.T) {
+	svc := &MaintenanceService{config: &config.Config{}}
+	health := &DatabaseHealth{FrozenXIDAge: 200_000_000, FreezeMaxAge: 200_000_000}
+
+	if got := svc.generateRecommendations(health); len(got) != 0 {
+		t.Fatalf("recommendations at freeze max age = %q, want none", got)
+	}
+
+	health.FrozenXIDAge++
+	if got := svc.generateRecommendations(health); len(got) != 1 || !strings.HasPrefix(got[0], "Transaction ID age 200000001 is above autovacuum_freeze_max_age (200000000) - ") {
+		t.Fatalf("recommendations above freeze max age = %q", got)
 	}
 }
