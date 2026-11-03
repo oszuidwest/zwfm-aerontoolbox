@@ -1,12 +1,90 @@
 package notify
 
 import (
+	"context"
+	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	graphmail "github.com/oszuidwest/zw-graphmail"
+
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/config"
 )
+
+type fakeMailer struct {
+	sent []*graphmail.Message
+	err  error
+}
+
+func (f *fakeMailer) Send(_ context.Context, m *graphmail.Message) error {
+	f.sent = append(f.sent, m)
+	return f.err
+}
+
+func TestNew_ConfiguredBuildsClientAndExpiryChecker(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Notifications.Email = config.GraphConfig{
+		TenantID:     "12345678-1234-1234-1234-123456789abc",
+		ClientID:     "12345678-1234-1234-1234-123456789abc",
+		ClientSecret: "secret",
+		FromAddress:  "noreply@example.com",
+		Recipients:   "a@example.com",
+	}
+	svc := New(cfg)
+	if !svc.IsConfigured() || svc.client == nil || svc.expiryChecker == nil {
+		t.Fatalf("configured=%v client=%v expiryChecker=%v, want all set", svc.IsConfigured(), svc.client, svc.expiryChecker)
+	}
+}
+
+func TestSend_PlainTextToAllRecipients(t *testing.T) {
+	fake := &fakeMailer{err: errors.New("graph down")}
+	svc := &NotificationService{client: fake, recipients: []string{"a@example.com", "b@example.com"}}
+
+	svc.send("subject", "body")
+
+	if len(fake.sent) != 1 {
+		t.Fatalf("sent %d messages, want 1", len(fake.sent))
+	}
+	m := fake.sent[0]
+	if !slices.Equal(m.To, svc.recipients) || m.Subject != "subject" || m.Body != "body" || m.HTML {
+		t.Errorf("message = %+v, want plain text to %v", m, svc.recipients)
+	}
+	if lastErr, _ := svc.LastError(); lastErr != "graph down" {
+		t.Errorf("LastError = %q, want %q", lastErr, "graph down")
+	}
+}
+
+func TestSecretExpiryChecker_Refresh(t *testing.T) {
+	expiresAt := time.Now().Add(10*24*time.Hour + time.Hour).Truncate(time.Second)
+	tests := []struct {
+		name string
+		at   time.Time
+		err  error
+		want SecretExpiryInfo
+	}{
+		{
+			name: "expiry within warning window",
+			at:   expiresAt,
+			want: SecretExpiryInfo{ExpiresAt: expiresAt.Format(time.RFC3339), ExpiresSoon: true, DaysLeft: 10},
+		},
+		{
+			name: "lookup error",
+			err:  errors.New("secret not found"),
+			want: SecretExpiryInfo{Error: "secret not found"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := NewSecretExpiryChecker(func(context.Context) (time.Time, error) { return tt.at, tt.err })
+			c.refresh()
+			if c.cached != tt.want {
+				t.Errorf("cached = %+v, want %+v", c.cached, tt.want)
+			}
+		})
+	}
+}
 
 // TestSendAsync_DroppedOnClose verifies that when the runner is closed,
 // sendAsync records the drop via trackError so the health endpoint reflects it.

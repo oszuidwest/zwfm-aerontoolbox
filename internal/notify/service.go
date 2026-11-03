@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	graphmail "github.com/oszuidwest/zw-graphmail"
+
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/async"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/config"
 )
@@ -37,16 +39,17 @@ type S3SyncResult struct {
 	Error  string
 }
 
+// mailer sends one email. *graphmail.Client implements it.
+type mailer interface {
+	Send(ctx context.Context, m *graphmail.Message) error
+}
+
 // NotificationService sends transition-based operational email alerts.
 type NotificationService struct {
-	config     *config.Config
 	runner     *async.Runner
 	recipients []string // parsed once at construction
 	configured bool     // fixed at construction; config is never reloaded
-
-	// Lazily built Graph client, cached for the process lifetime
-	client   *GraphClient
-	clientMu sync.Mutex
+	client     mailer   // nil unless configured
 
 	// Recovery state (in-memory, lost on restart)
 	prevBackupFailed      bool
@@ -68,14 +71,27 @@ type NotificationService struct {
 func New(cfg *config.Config) *NotificationService {
 	emailCfg := &cfg.Notifications.Email
 	svc := &NotificationService{
-		config:     cfg,
 		runner:     async.New(),
 		recipients: ParseRecipients(emailCfg.Recipients),
-		configured: IsConfigured(emailCfg),
+	}
+
+	if IsConfigured(emailCfg) {
+		client, err := graphmail.New(graphmail.Config{
+			TenantID:     emailCfg.TenantID,
+			ClientID:     emailCfg.ClientID,
+			ClientSecret: emailCfg.ClientSecret,
+			From:         emailCfg.FromAddress,
+		})
+		if err != nil {
+			slog.Error("Email client creation failed", "error", err)
+		} else {
+			svc.client = client
+			svc.expiryChecker = NewSecretExpiryChecker(client.SecretExpiry)
+			svc.configured = true
+		}
 	}
 
 	if svc.configured {
-		svc.expiryChecker = NewSecretExpiryChecker(emailCfg)
 		slog.Info("Email notifications configured")
 	} else {
 		slog.Warn("Email notifications not configured - failures will not be reported by email")
@@ -168,21 +184,11 @@ func (s *NotificationService) StartExpiryChecker() {
 	}
 }
 
-// ValidateAuth verifies Microsoft Graph credentials and mailbox access.
-func (s *NotificationService) ValidateAuth() error {
-	client, err := s.getOrCreateClient()
-	if err != nil {
-		return fmt.Errorf("client init: %w", err)
-	}
-	return client.ValidateAuth()
-}
-
 // SendTestEmail sends a synchronous probe message to all configured recipients.
 // The context controls cancellation of the request.
 func (s *NotificationService) SendTestEmail(ctx context.Context) error {
-	client, err := s.getOrCreateClient()
-	if err != nil {
-		return fmt.Errorf("client init: %w", err)
+	if !s.configured {
+		return errors.New("email notifications not configured")
 	}
 
 	subject := "[TEST] Aeron Toolbox - Email notification test"
@@ -191,32 +197,12 @@ func (s *NotificationService) SendTestEmail(ctx context.Context) error {
 			"If you received this email, notification settings are configured correctly.",
 		time.Now().Format(timeFormat))
 
-	return client.SendMail(ctx, s.recipients, subject, body)
+	return s.client.Send(ctx, &graphmail.Message{To: s.recipients, Subject: subject, Body: body})
 }
 
 // Close waits for tracked background notification work to finish.
 func (s *NotificationService) Close() {
 	s.runner.Close()
-}
-
-// getOrCreateClient returns the cached Graph client, building it on first use.
-// Config is loaded once at startup, so the client never needs rebuilding; a
-// failed build is retried on the next call.
-func (s *NotificationService) getOrCreateClient() (*GraphClient, error) {
-	s.clientMu.Lock()
-	defer s.clientMu.Unlock()
-
-	if s.client != nil {
-		return s.client, nil
-	}
-
-	client, err := NewGraphClient(&s.config.Notifications.Email)
-	if err != nil {
-		return nil, err
-	}
-
-	s.client = client
-	return client, nil
 }
 
 // sendAsync sends an email asynchronously via the runner.
@@ -238,17 +224,10 @@ const sendTimeout = 2 * time.Minute
 
 // send delivers one email and records the last failure for health reporting.
 func (s *NotificationService) send(subject, body string) {
-	client, err := s.getOrCreateClient()
-	if err != nil {
-		slog.Error("Notification client creation failed", "error", err)
-		s.trackError(err)
-		return
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), sendTimeout)
 	defer cancel()
 
-	if err := client.SendMail(ctx, s.recipients, subject, body); err != nil {
+	if err := s.client.Send(ctx, &graphmail.Message{To: s.recipients, Subject: subject, Body: body}); err != nil {
 		slog.Error("Notification email sending failed", "error", err, "subject", subject)
 		s.trackError(err)
 		return
