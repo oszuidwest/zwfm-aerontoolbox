@@ -86,6 +86,13 @@ func resizeImage(sourceImage image.Image, maxWidth, maxHeight int) (image.Image,
 
 	newWidth := int(float64(width) * scale)
 	newHeight := int(float64(height) * scale)
+	// Floating point can put an exact result of 1 just below it, so check a 0 with integers.
+	if newWidth == 0 && width > (height-1)/maxHeight {
+		newWidth = 1
+	}
+	if newHeight == 0 && height > (width-1)/maxWidth {
+		newHeight = 1
+	}
 	if newWidth < 1 || newHeight < 1 {
 		return nil, types.NewValidationError("dimensions", fmt.Sprintf("image is too narrow to resize: %dx%d", width, height))
 	}
