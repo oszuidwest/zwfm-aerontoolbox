@@ -18,6 +18,13 @@ linters:
     - unconvert
     - bodyclose
     - modernize
+    # Upload context must reach the image download
+    - contextcheck
+  exclusions:
+    rules:
+      - path-except: internal/service/media\.go
+        linters:
+          - contextcheck
   settings:
     gocritic:
       enabled-tags:
