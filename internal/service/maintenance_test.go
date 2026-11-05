@@ -15,7 +15,8 @@ import (
 // leave DeadTuplePct at 0 and potentially miss the NeedsVacuum signal.
 //
 // defaultCfg uses zero-value fields so getter methods return their built-in defaults:
-// BloatThreshold=10.0, DeadTupleThreshold=10000, StaleStatsThresholdPct=10.
+// BloatThreshold=10.0, DeadTupleThreshold=10000, StaleStatsThresholdPct=10,
+// MinRowsForRecommendation=1000.
 func TestConvertTableRow(t *testing.T) {
 	defaultCfg := &config.MaintenanceConfig{}
 	now := time.Now()
@@ -35,26 +36,26 @@ func TestConvertTableRow(t *testing.T) {
 		{
 			// LiveTuples=0, DeadTuples=50: the guard must use total (live+dead) not
 			// just live, otherwise DeadTuplePct stays 0 even though all tuples are
-			// dead. 100.0 > bloatThreshold(10.0) -> NeedsVacuum must be true.
-			name:       "all dead no live",
-			row:        &database.TableStatsRow{TableName: "t", LiveTuples: 0, DeadTuples: 50},
-			wantPct:    100.0,
-			wantVacuum: true,
+			// dead. NeedsVacuum stays false: no live rows is below
+			// MinRowsForRecommendation and 50 is below DeadTupleThreshold.
+			name:    "all dead no live",
+			row:     &database.TableStatsRow{TableName: "t", LiveTuples: 0, DeadTuples: 50},
+			wantPct: 100.0,
 		},
 		{
-			// live=900, dead=100, total=1000 -> pct = 100/1000*100 = 10.0.
+			// live=9000, dead=1000, total=10000 -> pct = 1000/10000*100 = 10.0.
 			// NeedsVacuum must be false: the code uses >, not >=, so exactly at the
 			// default threshold (10.0) is not a trigger. NeedsAnalyze is true
 			// because the table has rows but was never analyzed.
 			name:        "exactly at bloat threshold",
-			row:         &database.TableStatsRow{TableName: "t", LiveTuples: 900, DeadTuples: 100},
+			row:         &database.TableStatsRow{TableName: "t", LiveTuples: 9000, DeadTuples: 1000},
 			wantPct:     10.0,
 			wantAnalyze: true,
 		},
 		{
 			// BloatThreshold=5.0: pct=10.0 > 5.0 -> NeedsVacuum=true, proving cfg is used.
 			name:        "needs vacuum by custom threshold",
-			row:         &database.TableStatsRow{TableName: "t", LiveTuples: 900, DeadTuples: 100},
+			row:         &database.TableStatsRow{TableName: "t", LiveTuples: 9000, DeadTuples: 1000},
 			cfg:         &config.MaintenanceConfig{BloatThreshold: 5.0},
 			wantPct:     10.0,
 			wantVacuum:  true,
@@ -70,29 +71,29 @@ func TestConvertTableRow(t *testing.T) {
 			wantAnalyze: true,
 		},
 		{
-			// Row count > 0 with no analyze timestamps -> NeedsAnalyze=true.
+			// Row count above MinRowsForRecommendation with no analyze timestamps -> NeedsAnalyze=true.
 			name:        "needs analyze never analyzed",
-			row:         &database.TableStatsRow{TableName: "t", LiveTuples: 100},
+			row:         &database.TableStatsRow{TableName: "t", LiveTuples: 1001},
 			wantAnalyze: true,
 		},
 		{
-			// live=100, ModSinceAnalyze=11 > 100*10%=10 -> stale stats trigger NeedsAnalyze.
+			// live=2000, ModSinceAnalyze=201 > 2000*10%=200 -> stale stats trigger NeedsAnalyze.
 			name: "needs analyze stale stats",
 			row: &database.TableStatsRow{
 				TableName:       "t",
-				LiveTuples:      100,
-				ModSinceAnalyze: 11,
+				LiveTuples:      2000,
+				ModSinceAnalyze: 201,
 				LastAnalyze:     &now,
 			},
 			wantAnalyze: true,
 		},
 		{
-			// live=100, ModSinceAnalyze=5 < 10% threshold, recently analyzed -> NeedsAnalyze=false.
+			// live=2000, ModSinceAnalyze=200 is not above 10%, recently analyzed -> NeedsAnalyze=false.
 			name: "no needs analyze",
 			row: &database.TableStatsRow{
 				TableName:       "t",
-				LiveTuples:      100,
-				ModSinceAnalyze: 5,
+				LiveTuples:      2000,
+				ModSinceAnalyze: 200,
 				LastAnalyze:     &now,
 			},
 		},
@@ -152,5 +153,38 @@ func TestGenerateRecommendationsPointsAtXminHolder(t *testing.T) {
 	got = svc.generateRecommendations(&DatabaseHealth{Tables: []TableHealth{table}, LongRunningQueries: queries[:1]})
 	if want := "Table 'track' has 80.0% dead tuples - VACUUM recommended"; len(got) == 0 || got[0] != want {
 		t.Fatalf("recommendations without holder = %q, want first %q", got, want)
+	}
+}
+
+func TestCheckTableHealthSkipsRatioChecksOnSmallTables(t *testing.T) {
+	svc := &MaintenanceService{config: &config.Config{}}
+	now := time.Now()
+	row := database.TableStatsRow{TableName: "computer", ModSinceAnalyze: 500, SeqScan: 2000, IdxScan: 1, LastAutovacuum: &now}
+
+	// The default min_rows_for_recommendation is 1000. The flags follow the advice.
+	row.LiveTuples, row.DeadTuples = 1000, 1000
+	table := convertTableRow(&row, &svc.config.Maintenance)
+	if got := svc.checkTableHealth(&table, nil, "VACUUM recommended"); len(got) != 0 || table.NeedsVacuum || table.NeedsAnalyze {
+		t.Fatalf("1000 rows: recommendations = %q, needs vacuum %v, needs analyze %v, want none", got, table.NeedsVacuum, table.NeedsAnalyze)
+	}
+
+	// The absolute dead tuple check has no minimum row count.
+	row.DeadTuples = 10001
+	table = convertTableRow(&row, &svc.config.Maintenance)
+	want := []string{"Table 'computer' has 10001 dead tuples - VACUUM recommended"}
+	if got := svc.checkTableHealth(&table, nil, "VACUUM recommended"); !slices.Equal(got, want) || !table.NeedsVacuum {
+		t.Fatalf("10001 dead tuples: recommendations = %q, needs vacuum %v, want %q and the flag", got, table.NeedsVacuum, want)
+	}
+
+	row.LiveTuples, row.DeadTuples = 1001, 1001
+	table = convertTableRow(&row, &svc.config.Maintenance)
+	want = []string{
+		"Table 'computer' has 50.0% dead tuples - VACUUM recommended",
+		"Table 'computer' has never been analyzed - ANALYZE recommended",
+		"Table 'computer' has 500 modifications since last ANALYZE - statistics stale",
+		"Table 'computer' has high sequential scans (2000) vs index scans (1) - possible missing index",
+	}
+	if got := svc.checkTableHealth(&table, nil, "VACUUM recommended"); !slices.Equal(got, want) || !table.NeedsVacuum || !table.NeedsAnalyze {
+		t.Fatalf("1001 rows: recommendations = %q, needs vacuum %v, needs analyze %v, want %q and both flags", got, table.NeedsVacuum, table.NeedsAnalyze, want)
 	}
 }

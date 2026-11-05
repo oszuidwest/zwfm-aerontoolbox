@@ -200,16 +200,21 @@ func convertTableRow(row *database.TableStatsRow, cfg *config.MaintenanceConfig)
 		table.DeadTuplePct = float64(row.DeadTuples) / float64(total) * 100
 	}
 
-	neverAnalyzed := table.LastAnalyze == nil && table.LastAutoanalyze == nil && table.RowCount > 0
 	table.NeedsVacuum = exceedsBloat(&table, cfg) || exceedsDeadTuples(&table, cfg)
-	table.NeedsAnalyze = neverAnalyzed || hasStaleStats(&table, cfg)
+	table.NeedsAnalyze = neverAnalyzed(&table, cfg) || hasStaleStats(&table, cfg)
 
 	return table
 }
 
-// exceedsBloat reports whether the dead-tuple percentage crosses the bloat threshold.
+// exceedsBloat reports whether the dead-tuple percentage crosses the bloat threshold
+// on a table above the minimum row count.
 func exceedsBloat(t *TableHealth, cfg *config.MaintenanceConfig) bool {
-	return t.DeadTuplePct > cfg.GetBloatThreshold()
+	return t.DeadTuplePct > cfg.GetBloatThreshold() && t.RowCount > cfg.GetMinRowsForRecommendation()
+}
+
+// neverAnalyzed reports whether a table above the minimum row count has never been analyzed.
+func neverAnalyzed(t *TableHealth, cfg *config.MaintenanceConfig) bool {
+	return t.LastAnalyze == nil && t.LastAutoanalyze == nil && t.RowCount > cfg.GetMinRowsForRecommendation()
 }
 
 // exceedsDeadTuples reports whether the absolute dead-tuple count crosses its threshold.
@@ -218,9 +223,9 @@ func exceedsDeadTuples(t *TableHealth, cfg *config.MaintenanceConfig) bool {
 }
 
 // hasStaleStats reports whether modifications since the last ANALYZE exceed the
-// configured percentage of the row count.
+// configured percentage of the row count on a table above the minimum row count.
 func hasStaleStats(t *TableHealth, cfg *config.MaintenanceConfig) bool {
-	return t.RowCount > 0 && t.ModSinceAnalyze > t.RowCount*int64(cfg.GetStaleStatsThreshold())/100
+	return t.RowCount > cfg.GetMinRowsForRecommendation() && t.ModSinceAnalyze > t.RowCount*int64(cfg.GetStaleStatsThreshold())/100
 }
 
 // generateRecommendations returns operator actions for the health report.
@@ -293,7 +298,7 @@ func (s *MaintenanceService) checkTableHealth(t *TableHealth, recs []string, vac
 			"Table '%s' has not been vacuumed in over %d days", t.Name, cfg.GetVacuumStalenessDays()))
 	}
 
-	if t.LastAnalyze == nil && t.LastAutoanalyze == nil && t.RowCount > minRows {
+	if neverAnalyzed(t, &cfg) {
 		recs = append(recs, fmt.Sprintf("Table '%s' has never been analyzed - ANALYZE recommended", t.Name))
 	}
 
@@ -303,7 +308,7 @@ func (s *MaintenanceService) checkTableHealth(t *TableHealth, recs []string, vac
 			t.Name, t.ModSinceAnalyze))
 	}
 
-	if t.SeqScans > 1000 && t.IdxScans > 0 &&
+	if t.SeqScans > 1000 && t.IdxScans > 0 && t.RowCount > minRows &&
 		float64(t.SeqScans)/float64(t.IdxScans) > cfg.GetSeqScanRatioThreshold() {
 		recs = append(recs, fmt.Sprintf(
 			"Table '%s' has high sequential scans (%d) vs index scans (%d) - possible missing index",
