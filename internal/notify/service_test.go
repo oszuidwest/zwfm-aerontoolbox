@@ -11,6 +11,7 @@ import (
 	graphmail "github.com/oszuidwest/zw-graphmail"
 
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/config"
+	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
 )
 
 type fakeMailer struct {
@@ -227,5 +228,16 @@ func TestFormatters(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestFormatHealthAlertPutsRecommendationsFirst(t *testing.T) {
+	_, body := formatHealthAlert(&HealthAlertResult{
+		Recommendations:    []string{"VACUUM may be blocked"},
+		LongRunningQueries: []types.LongRunningQuery{{PID: 42}},
+	})
+	recs, queries := strings.Index(body, "Recommendations:"), strings.Index(body, "Long-running queries:")
+	if recs < 0 || queries < recs {
+		t.Fatalf("body = %q, want recommendations before long-running queries", body)
 	}
 }

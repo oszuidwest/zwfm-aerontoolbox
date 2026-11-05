@@ -137,7 +137,7 @@ func TestGenerateRecommendationsPointsAtXminHolder(t *testing.T) {
 
 	got := svc.generateRecommendations(&DatabaseHealth{Tables: []TableHealth{table}, LongRunningQueries: queries})
 	want := []string{
-		`VACUUM is blocked: PID 42 (application "DBmod", user aeron, idle in transaction since 2026-09-26 12:36:00) ` +
+		`VACUUM may be blocked: PID 42 (application "DBmod", user aeron, idle in transaction since 2026-09-26 12:36:00) ` +
 			"holds back the xmin horizon (xmin age 900) - dead rows newer than its snapshot cannot be removed until it ends",
 		"Table 'track' has 80.0% dead tuples - VACUUM may be blocked by PID 42",
 		"Table 'track' has 20000 dead tuples - VACUUM may be blocked by PID 42",

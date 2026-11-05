@@ -234,7 +234,7 @@ func (s *MaintenanceService) generateRecommendations(health *DatabaseHealth) []s
 	if holder != nil {
 		vacuumAdvice = fmt.Sprintf("VACUUM may be blocked by PID %d", holder.PID)
 		recs = append(recs, fmt.Sprintf(
-			"VACUUM is blocked: PID %d (application %q, user %s, %s since %s) holds back the xmin horizon (xmin age %d) - "+
+			"VACUUM may be blocked: PID %d (application %q, user %s, %s since %s) holds back the xmin horizon (xmin age %d) - "+
 				"dead rows newer than its snapshot cannot be removed until it ends",
 			holder.PID, holder.ApplicationName, holder.User, holder.State,
 			holder.StartedAt.Local().Format(time.DateTime), holder.XminAge))

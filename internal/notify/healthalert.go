@@ -65,6 +65,14 @@ func formatHealthAlert(r *HealthAlertResult) (subject, body string) {
 	fmt.Fprintf(&b, "Connections:  %d / %d (%.0f%%)\n\n",
 		r.ActiveConnections, r.MaxConnections, r.ConnectionUsagePct)
 
+	if len(r.Recommendations) > 0 {
+		fmt.Fprintf(&b, "Recommendations: %d\n", len(r.Recommendations))
+		for _, rec := range r.Recommendations {
+			fmt.Fprintf(&b, "  - %s\n", rec)
+		}
+		b.WriteString("\n")
+	}
+
 	if len(r.LongRunningQueries) > 0 {
 		fmt.Fprintf(&b, "Long-running queries: %d\n", len(r.LongRunningQueries))
 		for _, q := range r.LongRunningQueries {
@@ -72,14 +80,6 @@ func formatHealthAlert(r *HealthAlertResult) (subject, body string) {
 			if q.Query != "" {
 				fmt.Fprintf(&b, "    Query: %s\n", q.Query)
 			}
-		}
-		b.WriteString("\n")
-	}
-
-	if len(r.Recommendations) > 0 {
-		fmt.Fprintf(&b, "Recommendations: %d\n", len(r.Recommendations))
-		for _, rec := range r.Recommendations {
-			fmt.Fprintf(&b, "  - %s\n", rec)
 		}
 	}
 
