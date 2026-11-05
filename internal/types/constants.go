@@ -1,6 +1,9 @@
 package types
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // EntityType identifies the media entity kind used by API routes.
 type EntityType string
@@ -12,12 +15,16 @@ const (
 	EntityTypeTrack EntityType = "track"
 )
 
-// LongRunningQuery is a database query exceeding the configured duration threshold.
+// LongRunningQuery is a database session whose transaction exceeds the configured duration threshold.
 type LongRunningQuery struct {
-	PID      int    `db:"pid" json:"pid"`
-	Duration string `db:"duration" json:"duration"`
-	Query    string `db:"query" json:"query"`
-	State    string `db:"state" json:"state"`
+	PID             int       `db:"pid" json:"pid"`
+	Duration        string    `db:"duration" json:"duration"`
+	Query           string    `db:"query" json:"query"`
+	State           string    `db:"state" json:"state"`
+	ApplicationName string    `db:"application_name" json:"application_name"`
+	User            string    `db:"user_name" json:"user"`
+	StartedAt       time.Time `db:"started_at" json:"started_at"`
+	XminAge         int64     `db:"xmin_age" json:"xmin_age"`
 }
 
 // VoicetrackUserID is the UUID used in Aeron to identify voice tracks.

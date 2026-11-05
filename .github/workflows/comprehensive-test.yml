@@ -791,6 +791,10 @@ jobs:
           PGPASSWORD=aeron123 psql -h 127.0.0.1 -p 5433 -U aeron -d aeron_db -c "SELECT pg_sleep(30);" &
           SLEEP_PID=$!
           sleep 3
+          # Use up one transaction ID, so the sleeper's snapshot holds back something.
+          PGPASSWORD=aeron123 psql -h 127.0.0.1 -p 5433 -U aeron -d aeron_db -c "SELECT txid_current();" > /dev/null
+          SLEEPER=$(PGPASSWORD=aeron123 psql -h 127.0.0.1 -p 5433 -U aeron -d aeron_db -Atc \
+            "SELECT pid FROM pg_stat_activity WHERE query = 'SELECT pg_sleep(30);'")
 
           # Now the query has been running ~3s, threshold is 1s, should be detected
           RESPONSE=$(curl -s -H "X-API-Key: ${{ env.API_KEY }}" http://localhost:${{ env.API_PORT }}/api/db/maintenance/health)
@@ -810,6 +814,12 @@ jobs:
               exit 1
             fi
             echo "Correct: query structuur bevat pid, duration, query en state"
+            # The sleeping query holds back the xmin horizon, so it leads the recommendations.
+            if ! echo "$RESPONSE" | jq -e --arg pid "$SLEEPER" '.data.recommendations[0] | startswith("VACUUM may be blocked: PID \($pid) ")' > /dev/null; then
+              echo "::error::Sessie die VACUUM tegenhoudt staat niet bovenaan"
+              echo "$RESPONSE" | jq '.data.recommendations'
+              exit 1
+            fi
             if echo "$QUERY_TEXT" | grep -qi "pg_sleep"; then
               echo "Correct: pg_sleep query gedetecteerd"
             else
@@ -818,6 +828,35 @@ jobs:
           else
             echo "::error::Geen langlopende query gedetecteerd met threshold van 1s"
             echo "Response: $(echo "$RESPONSE" | jq '.data.long_running_queries')"
+            exit 1
+          fi
+
+      - name: "Maintenance: Idle transaction leads the recommendations"
+        if: matrix.suite == 'maintenance'
+        run: |
+          export PGHOST=127.0.0.1 PGPORT=5433 PGUSER=aeron PGPASSWORD=aeron123 PGDATABASE=aeron_db
+          # Killing psql leaves the previous step's pg_sleep running, and it holds back more.
+          psql -XqAtc "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE query = 'SELECT pg_sleep(30);'" > /dev/null
+          coproc HOLDER { PGAPPNAME=ci-holder psql -XqAt; }
+          trap 'psql -XqAtc "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = '\''ci-holder'\''" > /dev/null' EXIT
+          printf 'BEGIN;\nSELECT txid_current();\n' >&"${HOLDER[1]}"
+          read -r -t 10 _ <&"${HOLDER[0]}"
+          sleep 3
+          psql -XqAtc "SELECT txid_current();" > /dev/null
+          # A fresh query in the old transaction: only xact_start still shows its age.
+          printf 'SELECT 1;\n' >&"${HOLDER[1]}"
+          read -r -t 10 _ <&"${HOLDER[0]}"
+
+          RESPONSE=$(curl -s -H "X-API-Key: ${{ env.API_KEY }}" http://localhost:${{ env.API_PORT }}/api/db/maintenance/health)
+          if ! echo "$RESPONSE" | jq -e '
+            .data as $d
+            | [$d.long_running_queries[] | select(.application_name == "ci-holder")]
+            | length == 1 and (.[0]
+              | .state == "idle in transaction" and .xmin_age > 0
+              and (.duration | split(":") | map(tonumber) | .[0]*3600 + .[1]*60 + .[2]) >= 3
+              and (.pid as $pid | $d.recommendations[0] | startswith("VACUUM may be blocked: PID \($pid) ")))' > /dev/null; then
+            echo "::error::Open transactie niet gemeld of niet bovenaan"
+            echo "$RESPONSE" | jq '.data | {long_running_queries, recommendations}'
             exit 1
           fi
 

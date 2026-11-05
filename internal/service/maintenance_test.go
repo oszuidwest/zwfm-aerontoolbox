@@ -1,11 +1,13 @@
 package service
 
 import (
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/config"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/database"
+	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
 )
 
 // TestConvertTableRow covers the convertTableRow helper, including the edge case
@@ -114,5 +116,41 @@ func TestConvertTableRow(t *testing.T) {
 				t.Errorf("NeedsAnalyze = %t, want %t", got.NeedsAnalyze, tt.wantAnalyze)
 			}
 		})
+	}
+}
+
+func TestGenerateRecommendationsPointsAtXminHolder(t *testing.T) {
+	svc := &MaintenanceService{config: &config.Config{}}
+	now := time.Now()
+	table := TableHealth{
+		Name: "track", RowCount: 5000, DeadTuples: 20000, DeadTuplePct: 80,
+		LastAutovacuum: &now, LastAutoanalyze: &now,
+	}
+	started := time.Date(2026, 9, 26, 12, 36, 0, 0, time.Local)
+	queries := []types.LongRunningQuery{
+		{PID: 7, Duration: "00:01:00", State: "active"},
+		{PID: 50, Duration: "00:00:30", State: "active", XminAge: 5},
+		{PID: 42, Duration: "00:00:20", State: "idle in transaction", ApplicationName: "DBmod", User: "aeron",
+			StartedAt: started, XminAge: 900},
+		{PID: 60, Duration: "00:00:10", State: "active", XminAge: 3},
+	}
+
+	got := svc.generateRecommendations(&DatabaseHealth{Tables: []TableHealth{table}, LongRunningQueries: queries})
+	want := []string{
+		`VACUUM may be blocked: PID 42 (application "DBmod", user aeron, idle in transaction since 2026-09-26 12:36:00) ` +
+			"holds back the xmin horizon (xmin age 900) - dead rows newer than its snapshot cannot be removed until it ends",
+		"Table 'track' has 80.0% dead tuples - VACUUM may be blocked by PID 42",
+		"Table 'track' has 20000 dead tuples - VACUUM may be blocked by PID 42",
+		"Long-running query detected (PID 7, running for 00:01:00)",
+		"Long-running query detected (PID 50, running for 00:00:30)",
+		"Long-running query detected (PID 60, running for 00:00:10)",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("recommendations =\n%q\nwant\n%q", got, want)
+	}
+
+	got = svc.generateRecommendations(&DatabaseHealth{Tables: []TableHealth{table}, LongRunningQueries: queries[:1]})
+	if want := "Table 'track' has 80.0% dead tuples - VACUUM recommended"; len(got) == 0 || got[0] != want {
+		t.Fatalf("recommendations without holder = %q, want first %q", got, want)
 	}
 }
