@@ -95,7 +95,7 @@ func (s *MediaService) UploadImage(ctx context.Context, params *ImageUploadParam
 	var imageData []byte
 	var err error
 	if params.ImageURL != "" {
-		imageData, err = util.ValidateAndDownloadImage(params.ImageURL, s.config.Image.GetMaxDownloadBytes())
+		imageData, err = util.ValidateAndDownloadImage(ctx, params.ImageURL, s.config.Image.GetMaxDownloadBytes())
 		if err != nil {
 			slog.Error("Image download failed", "url", params.ImageURL, "error", err)
 			return nil, types.NewValidationError("image", fmt.Sprintf("download failed: %v", err))
