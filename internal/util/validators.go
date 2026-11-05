@@ -3,6 +3,7 @@ package util
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"image"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/doyensec/safeurl"
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/types"
@@ -37,10 +39,14 @@ func ValidateEntityID(id, entityLabel string) error {
 	return nil
 }
 
-// safeHTTPClient returns the shared SSRF-protected HTTP client.
+// safeHTTPClient returns the shared SSRF-protected HTTP client. A canceled request
+// leaves its dial and TLS handshake running, so the handshake needs its own timeout.
+// Passing a fresh transport through SetTransport would make the client offer HTTP/2
+// while it only speaks HTTP/1.1, so the timeout goes on the transport safeurl built.
 var safeHTTPClient = sync.OnceValue(func() *safeurl.WrappedClient {
-	cfg := safeurl.GetConfigBuilder().Build()
-	return safeurl.Client(cfg)
+	client := safeurl.Client(safeurl.GetConfigBuilder().Build())
+	client.Client.Transport.(*http.Transport).TLSHandshakeTimeout = 10 * time.Second
+	return client
 })
 
 // ValidateURL allows only HTTP(S) URLs with a hostname.
@@ -97,14 +103,18 @@ func ValidateImageFormat(format string) error {
 }
 
 // ValidateAndDownloadImage validates, downloads, and decodes a remote image.
-func ValidateAndDownloadImage(urlString string, maxSize int64) ([]byte, error) {
+// The download ends when ctx is done.
+func ValidateAndDownloadImage(ctx context.Context, urlString string, maxSize int64) ([]byte, error) {
 	if err := ValidateURL(urlString); err != nil {
 		return nil, err
 	}
 
-	client := safeHTTPClient()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlString, http.NoBody)
+	if err != nil {
+		return nil, types.NewValidationError("image", fmt.Sprintf("download failed: %v", err))
+	}
 
-	resp, err := client.Get(urlString)
+	resp, err := safeHTTPClient().Do(req)
 	if err != nil {
 		return nil, types.NewValidationError("image", fmt.Sprintf("download failed: %v", err))
 	}
