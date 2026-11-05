@@ -168,9 +168,17 @@ func TestCheckTableHealthSkipsRatioChecksOnSmallTables(t *testing.T) {
 		t.Fatalf("1000 rows: recommendations = %q, needs vacuum %v, needs analyze %v, want none", got, table.NeedsVacuum, table.NeedsAnalyze)
 	}
 
+	// The absolute dead tuple check has no minimum row count.
+	row.DeadTuples = 10001
+	table = convertTableRow(&row, &svc.config.Maintenance)
+	want := []string{"Table 'computer' has 10001 dead tuples - VACUUM recommended"}
+	if got := svc.checkTableHealth(&table, nil, "VACUUM recommended"); !slices.Equal(got, want) || !table.NeedsVacuum {
+		t.Fatalf("10001 dead tuples: recommendations = %q, needs vacuum %v, want %q and the flag", got, table.NeedsVacuum, want)
+	}
+
 	row.LiveTuples, row.DeadTuples = 1001, 1001
 	table = convertTableRow(&row, &svc.config.Maintenance)
-	want := []string{
+	want = []string{
 		"Table 'computer' has 50.0% dead tuples - VACUUM recommended",
 		"Table 'computer' has never been analyzed - ANALYZE recommended",
 		"Table 'computer' has 500 modifications since last ANALYZE - statistics stale",
