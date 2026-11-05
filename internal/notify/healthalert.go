@@ -68,7 +68,7 @@ func formatHealthAlert(r *HealthAlertResult) (subject, body string) {
 	if len(r.LongRunningQueries) > 0 {
 		fmt.Fprintf(&b, "Long-running queries: %d\n", len(r.LongRunningQueries))
 		for _, q := range r.LongRunningQueries {
-			fmt.Fprintf(&b, "  PID %-6d  %s  %s\n", q.PID, q.Duration, q.State)
+			fmt.Fprintf(&b, "  PID %-6d  %s  %s  %q\n", q.PID, q.Duration, q.State, q.ApplicationName)
 			if q.Query != "" {
 				fmt.Fprintf(&b, "    Query: %s\n", q.Query)
 			}

@@ -717,6 +717,12 @@ jobs:
             echo "Response: $RESPONSE"
             exit 1
           fi
+          # postgres:17 runs with the default autovacuum_freeze_max_age.
+          if ! echo "$RESPONSE" | jq -e '.data.frozen_xid_age > 0 and .data.autovacuum_freeze_max_age == 200000000' > /dev/null; then
+            echo "::error::frozen_xid_age of autovacuum_freeze_max_age ontbreekt"
+            echo "$RESPONSE" | jq '.data | {frozen_xid_age, autovacuum_freeze_max_age}'
+            exit 1
+          fi
 
       - name: "Maintenance: Health endpoint shows table stats"
         if: matrix.suite == 'maintenance'
@@ -791,6 +797,10 @@ jobs:
           PGPASSWORD=aeron123 psql -h 127.0.0.1 -p 5433 -U aeron -d aeron_db -c "SELECT pg_sleep(30);" &
           SLEEP_PID=$!
           sleep 3
+          # Use up one transaction ID, so the sleeper's snapshot holds back something.
+          PGPASSWORD=aeron123 psql -h 127.0.0.1 -p 5433 -U aeron -d aeron_db -c "SELECT txid_current();" > /dev/null
+          SLEEPER=$(PGPASSWORD=aeron123 psql -h 127.0.0.1 -p 5433 -U aeron -d aeron_db -Atc \
+            "SELECT pid FROM pg_stat_activity WHERE query = 'SELECT pg_sleep(30);'")
 
           # Now the query has been running ~3s, threshold is 1s, should be detected
           RESPONSE=$(curl -s -H "X-API-Key: ${{ env.API_KEY }}" http://localhost:${{ env.API_PORT }}/api/db/maintenance/health)
@@ -810,6 +820,12 @@ jobs:
               exit 1
             fi
             echo "Correct: query structuur bevat pid, duration, query en state"
+            # The sleeping query holds back the xmin horizon, so it leads the recommendations.
+            if ! echo "$RESPONSE" | jq -e --arg pid "$SLEEPER" '.data.recommendations[0] | startswith("VACUUM is blocked: PID \($pid) ")' > /dev/null; then
+              echo "::error::Sessie die VACUUM tegenhoudt staat niet bovenaan"
+              echo "$RESPONSE" | jq '.data.recommendations'
+              exit 1
+            fi
             if echo "$QUERY_TEXT" | grep -qi "pg_sleep"; then
               echo "Correct: pg_sleep query gedetecteerd"
             else

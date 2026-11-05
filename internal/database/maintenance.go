@@ -45,6 +45,19 @@ func (r *Repository) GetDatabaseSize(ctx context.Context) (int64, error) {
 	return size, nil
 }
 
+// GetFrozenXIDAge returns the transaction ID age of the current database and the
+// server's autovacuum_freeze_max_age, at which autovacuum forces a freeze.
+func (r *Repository) GetFrozenXIDAge(ctx context.Context) (age, freezeMaxAge int64, err error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT age(datfrozenxid), current_setting('autovacuum_freeze_max_age')::bigint
+		FROM pg_database
+		WHERE datname = current_database()`)
+	if err := row.Scan(&age, &freezeMaxAge); err != nil {
+		return 0, 0, types.NewOperationError("get frozen xid age", err)
+	}
+	return age, freezeMaxAge, nil
+}
+
 // GetConnectionStats returns the active connection count and the server's
 // max_connections setting.
 func (r *Repository) GetConnectionStats(ctx context.Context) (active, maxConns int, err error) {
@@ -67,21 +80,30 @@ func (r *Repository) GetConnectionStats(ctx context.Context) (active, maxConns i
 	return active, maxConns, nil
 }
 
-// GetLongRunningQueries returns queries running longer than thresholdSeconds.
+// GetLongRunningQueries returns non-idle sessions whose transaction (or query,
+// outside a transaction) has run longer than thresholdSeconds, oldest first.
+// XminAge is how far a client session holds back the xmin horizon, 0 if it does not.
 func (r *Repository) GetLongRunningQueries(ctx context.Context, thresholdSeconds int) ([]types.LongRunningQuery, error) {
 	query := `
 		SELECT
 			pid,
-			(now() - query_start)::text AS duration,
+			(now() - coalesce(xact_start, query_start))::text AS duration,
 			LEFT(query, 200) AS query,
-			state
+			state,
+			coalesce(application_name, '') AS application_name,
+			coalesce(usename::text, '') AS user_name,
+			coalesce(xact_start, query_start) AS started_at,
+			CASE WHEN backend_type = 'client backend' AND pid NOT IN (SELECT pid FROM pg_stat_progress_vacuum)
+				THEN coalesce(greatest(age(backend_xid), age(backend_xmin)), 0)
+				ELSE 0
+			END AS xmin_age
 		FROM pg_stat_activity
 		WHERE state != 'idle'
-			AND query_start IS NOT NULL
-			AND now() - query_start > make_interval(secs => $1)
+			AND coalesce(xact_start, query_start) IS NOT NULL
+			AND now() - coalesce(xact_start, query_start) > make_interval(secs => $1)
 			AND datname = current_database()
 			AND pid != pg_backend_pid()
-		ORDER BY query_start ASC
+		ORDER BY coalesce(xact_start, query_start) ASC
 	`
 
 	var queries []types.LongRunningQuery

@@ -41,6 +41,8 @@ type DatabaseHealth struct {
 	ActiveConnections  int                      `json:"active_connections"`
 	MaxConnections     int                      `json:"max_connections"`
 	ConnectionUsagePct float64                  `json:"connection_usage_pct"`
+	FrozenXIDAge       int64                    `json:"frozen_xid_age"`
+	FreezeMaxAge       int64                    `json:"autovacuum_freeze_max_age"`
 	Tables             []TableHealth            `json:"tables"`
 	LongRunningQueries []types.LongRunningQuery `json:"long_running_queries"`
 	NeedsMaintenance   bool                     `json:"needs_maintenance"`
@@ -110,6 +112,11 @@ func (s *MaintenanceService) GetHealth(ctx context.Context) (*DatabaseHealth, er
 	health.MaxConnections = maxConns
 	if maxConns > 0 {
 		health.ConnectionUsagePct = float64(active) / float64(maxConns) * 100
+	}
+
+	health.FrozenXIDAge, health.FreezeMaxAge, err = s.repo.GetFrozenXIDAge(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	queries, err := s.repo.GetLongRunningQueries(ctx, s.config.Maintenance.GetLongQueryThresholdSeconds())
@@ -200,16 +207,21 @@ func convertTableRow(row *database.TableStatsRow, cfg *config.MaintenanceConfig)
 		table.DeadTuplePct = float64(row.DeadTuples) / float64(total) * 100
 	}
 
-	neverAnalyzed := table.LastAnalyze == nil && table.LastAutoanalyze == nil && table.RowCount > 0
 	table.NeedsVacuum = exceedsBloat(&table, cfg) || exceedsDeadTuples(&table, cfg)
-	table.NeedsAnalyze = neverAnalyzed || hasStaleStats(&table, cfg)
+	table.NeedsAnalyze = neverAnalyzed(&table, cfg) || hasStaleStats(&table, cfg)
 
 	return table
 }
 
-// exceedsBloat reports whether the dead-tuple percentage crosses the bloat threshold.
+// exceedsBloat reports whether the dead-tuple percentage crosses the bloat threshold
+// on a table above the minimum row count.
 func exceedsBloat(t *TableHealth, cfg *config.MaintenanceConfig) bool {
-	return t.DeadTuplePct > cfg.GetBloatThreshold()
+	return t.DeadTuplePct > cfg.GetBloatThreshold() && t.RowCount > cfg.GetMinRowsForRecommendation()
+}
+
+// neverAnalyzed reports whether a table above the minimum row count has never been analyzed.
+func neverAnalyzed(t *TableHealth, cfg *config.MaintenanceConfig) bool {
+	return t.LastAnalyze == nil && t.LastAutoanalyze == nil && t.RowCount > cfg.GetMinRowsForRecommendation()
 }
 
 // exceedsDeadTuples reports whether the absolute dead-tuple count crosses its threshold.
@@ -218,18 +230,37 @@ func exceedsDeadTuples(t *TableHealth, cfg *config.MaintenanceConfig) bool {
 }
 
 // hasStaleStats reports whether modifications since the last ANALYZE exceed the
-// configured percentage of the row count.
+// configured percentage of the row count on a table above the minimum row count.
 func hasStaleStats(t *TableHealth, cfg *config.MaintenanceConfig) bool {
-	return t.RowCount > 0 && t.ModSinceAnalyze > t.RowCount*int64(cfg.GetStaleStatsThreshold())/100
+	return t.RowCount > cfg.GetMinRowsForRecommendation() && t.ModSinceAnalyze > t.RowCount*int64(cfg.GetStaleStatsThreshold())/100
+}
+
+// vacuumOverdue reports whether a table with dead tuples has gone longer than the
+// staleness window without a VACUUM. Tables that were never vacuumed are not overdue.
+func vacuumOverdue(t *TableHealth, cfg *config.MaintenanceConfig) bool {
+	lastVac := lastVacuumTime(t)
+	return lastVac != nil && t.DeadTuples > 0 && time.Since(*lastVac) > cfg.GetVacuumStaleness()
 }
 
 // generateRecommendations returns operator actions for the health report.
 func (s *MaintenanceService) generateRecommendations(health *DatabaseHealth) []string {
 	var recs []string
 
+	// The session holding back the xmin horizon the most goes first, and the
+	// per-table VACUUM advice points at it instead of suggesting a VACUUM.
+	vacuumAdvice := "VACUUM recommended"
+	holder := xminHolder(health.LongRunningQueries)
+	if holder != nil {
+		vacuumAdvice = fmt.Sprintf("VACUUM may be blocked by PID %d", holder.PID)
+		recs = append(recs, fmt.Sprintf(
+			"VACUUM is blocked: PID %d (application %q, user %s, %s since %s) holds back the xmin horizon (xmin age %d) - "+
+				"dead rows newer than its snapshot cannot be removed until it ends",
+			holder.PID, holder.ApplicationName, holder.User, holder.State,
+			holder.StartedAt.Local().Format(time.DateTime), holder.XminAge))
+	}
 	for i := range health.Tables {
 		t := &health.Tables[i]
-		recs = s.checkTableHealth(t, recs)
+		recs = s.checkTableHealth(t, recs, vacuumAdvice)
 	}
 
 	cfg := s.config.Maintenance
@@ -238,36 +269,56 @@ func (s *MaintenanceService) generateRecommendations(health *DatabaseHealth) []s
 			health.ActiveConnections, health.MaxConnections, health.ConnectionUsagePct))
 	}
 
+	if health.FrozenXIDAge > health.FreezeMaxAge {
+		recs = append(recs, fmt.Sprintf(
+			"Transaction ID age %d is above autovacuum_freeze_max_age (%d) - "+
+				"check that anti-wraparound autovacuum is making progress and that no session holds back VACUUM",
+			health.FrozenXIDAge, health.FreezeMaxAge))
+	}
+
 	for _, q := range health.LongRunningQueries {
+		if holder != nil && q.PID == holder.PID {
+			continue
+		}
 		recs = append(recs, fmt.Sprintf("Long-running query detected (PID %d, running for %s)", q.PID, q.Duration))
 	}
 
 	return recs
 }
 
-func (s *MaintenanceService) checkTableHealth(t *TableHealth, recs []string) []string {
+// xminHolder returns the session that holds back the xmin horizon the most, or nil.
+func xminHolder(queries []types.LongRunningQuery) *types.LongRunningQuery {
+	var holder *types.LongRunningQuery
+	for i := range queries {
+		if queries[i].XminAge > 0 && (holder == nil || queries[i].XminAge > holder.XminAge) {
+			holder = &queries[i]
+		}
+	}
+	return holder
+}
+
+func (s *MaintenanceService) checkTableHealth(t *TableHealth, recs []string, vacuumAdvice string) []string {
 	cfg := s.config.Maintenance
 	minRows := cfg.GetMinRowsForRecommendation()
 
 	if exceedsBloat(t, &cfg) {
-		recs = append(recs, fmt.Sprintf("Table '%s' has %.1f%% dead tuples - VACUUM recommended", t.Name, t.DeadTuplePct))
+		recs = append(recs, fmt.Sprintf("Table '%s' has %.1f%% dead tuples - %s", t.Name, t.DeadTuplePct, vacuumAdvice))
 	}
 
 	if exceedsDeadTuples(t, &cfg) {
-		recs = append(recs, fmt.Sprintf("Table '%s' has %d dead tuples - VACUUM recommended", t.Name, t.DeadTuples))
+		recs = append(recs, fmt.Sprintf("Table '%s' has %d dead tuples - %s", t.Name, t.DeadTuples, vacuumAdvice))
 	}
 
 	if t.LastVacuum == nil && t.LastAutovacuum == nil && t.RowCount > minRows {
 		recs = append(recs, fmt.Sprintf("Table '%s' has never been vacuumed", t.Name))
 	}
 
-	if lastVac := lastVacuumTime(t); lastVac != nil &&
-		time.Since(*lastVac) > cfg.GetVacuumStaleness() && t.RowCount > minRows {
+	if vacuumOverdue(t, &cfg) && t.RowCount > minRows {
 		recs = append(recs, fmt.Sprintf(
 			"Table '%s' has not been vacuumed in over %d days", t.Name, cfg.GetVacuumStalenessDays()))
 	}
 
-	if t.LastAnalyze == nil && t.LastAutoanalyze == nil && t.RowCount > minRows {
+	if neverAnalyzed(t, &cfg) {
 		recs = append(recs, fmt.Sprintf("Table '%s' has never been analyzed - ANALYZE recommended", t.Name))
 	}
 
@@ -277,7 +328,7 @@ func (s *MaintenanceService) checkTableHealth(t *TableHealth, recs []string) []s
 			t.Name, t.ModSinceAnalyze))
 	}
 
-	if t.SeqScans > 1000 && t.IdxScans > 0 &&
+	if t.SeqScans > 1000 && t.IdxScans > 0 && t.RowCount > minRows &&
 		float64(t.SeqScans)/float64(t.IdxScans) > cfg.GetSeqScanRatioThreshold() {
 		recs = append(recs, fmt.Sprintf(
 			"Table '%s' has high sequential scans (%d) vs index scans (%d) - possible missing index",
