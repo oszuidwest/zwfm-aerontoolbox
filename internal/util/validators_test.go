@@ -139,3 +139,14 @@ func TestValidateAndDownloadImageStopsWhenContextEnds(t *testing.T) {
 		t.Fatal("ValidateAndDownloadImage kept reading after its context ended")
 	}
 }
+
+func TestSafeHTTPClientLimitsTLSHandshake(t *testing.T) {
+	transport := safeHTTPClient().Client.Transport.(*http.Transport)
+	if transport.TLSHandshakeTimeout <= 0 {
+		t.Fatalf("TLSHandshakeTimeout = %v, want above 0", transport.TLSHandshakeTimeout)
+	}
+	// Passing a fresh transport through SetTransport fills this config with HTTP/2 ALPN.
+	if transport.TLSClientConfig != nil {
+		t.Fatalf("TLSClientConfig = %+v, want nil", transport.TLSClientConfig)
+	}
+}
