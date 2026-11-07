@@ -147,6 +147,15 @@ func TestProcessSkipsAlreadyTargetSize(t *testing.T) {
 	}
 }
 
+func TestProcessRejectsTruncatedImageAtTargetSize(t *testing.T) {
+	data := testPNG(t, 12, 8)
+
+	_, err := Process(data[:len(data)-1], Config{TargetWidth: 12, TargetHeight: 8, Quality: 85})
+	if err == nil || !strings.Contains(err.Error(), "failed to decode") {
+		t.Fatalf("Process error = %v, want a decode error", err)
+	}
+}
+
 func TestExceedsMaxPixels(t *testing.T) {
 	maxInt := int(^uint(0) >> 1)
 	tests := []struct {

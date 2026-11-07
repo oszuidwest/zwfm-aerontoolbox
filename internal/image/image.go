@@ -115,6 +115,10 @@ func Process(imageData []byte, config Config) (*ProcessingResult, error) {
 	}
 
 	if isAlreadyTargetSize(originalInfo, config) {
+		// So far only the header was read, so check that the rest of the image is there.
+		if _, _, err := image.Decode(bytes.NewReader(imageData)); err != nil {
+			return nil, types.NewValidationError("image", fmt.Sprintf("failed to decode %s: %v", originalInfo.Format, err))
+		}
 		return createSkippedResult(imageData, originalInfo), nil
 	}
 
