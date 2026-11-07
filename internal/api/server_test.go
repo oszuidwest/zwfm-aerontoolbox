@@ -229,6 +229,46 @@ func TestImageUploadBodyLimitHandling(t *testing.T) {
 	}
 }
 
+type writeDeadlineRecorder struct {
+	*httptest.ResponseRecorder
+	deadline time.Time
+}
+
+func (r *writeDeadlineRecorder) SetWriteDeadline(deadline time.Time) error {
+	r.deadline = deadline
+	return nil
+}
+
+func TestImageUploadWriteDeadlineOutlastsRouteDeadline(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{}
+	cfg.API.UploadReadTimeoutSeconds = 100
+	cfg.API.RequestTimeoutSeconds = 20
+	cfg.API.WriteTimeoutSeconds = 3
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/artists/123e4567-e89b-42d3-a456-426614174000/image",
+		strings.NewReader(`{"image":"not-base64!"}`),
+	)
+	// The compression middleware wraps the writer, and the deadline must still reach it.
+	req.Header.Set("Accept-Encoding", "gzip")
+	rec := &writeDeadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+
+	before := time.Now()
+	newTestRouter(t, cfg).ServeHTTP(rec, req)
+	after := time.Now()
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status code = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+	const want = 123 * time.Second
+	if rec.deadline.Before(before.Add(want)) || rec.deadline.After(after.Add(want)) {
+		t.Fatalf("write deadline = %s after the request, want %s", rec.deadline.Sub(before), want)
+	}
+}
+
 func TestBackupDownloadReturnsBackupFile(t *testing.T) {
 	t.Parallel()
 
