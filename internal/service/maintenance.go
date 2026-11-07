@@ -292,12 +292,6 @@ func (s *MaintenanceService) checkTableHealth(t *TableHealth, recs []string, vac
 		recs = append(recs, fmt.Sprintf("Table '%s' has never been vacuumed", t.Name))
 	}
 
-	if lastVac := lastVacuumTime(t); lastVac != nil &&
-		time.Since(*lastVac) > cfg.GetVacuumStaleness() && t.RowCount > minRows {
-		recs = append(recs, fmt.Sprintf(
-			"Table '%s' has not been vacuumed in over %d days", t.Name, cfg.GetVacuumStalenessDays()))
-	}
-
 	if neverAnalyzed(t, &cfg) {
 		recs = append(recs, fmt.Sprintf("Table '%s' has never been analyzed - ANALYZE recommended", t.Name))
 	}
@@ -320,11 +314,4 @@ func (s *MaintenanceService) checkTableHealth(t *TableHealth, recs []string, vac
 	}
 
 	return recs
-}
-
-func lastVacuumTime(t *TableHealth) *time.Time {
-	if t.LastVacuum != nil && (t.LastAutovacuum == nil || t.LastVacuum.After(*t.LastAutovacuum)) {
-		return t.LastVacuum
-	}
-	return t.LastAutovacuum
 }
