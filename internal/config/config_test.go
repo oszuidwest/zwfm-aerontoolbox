@@ -7,7 +7,25 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/lib/pq"
 )
+
+func TestConnectionStringKeepsValuesUnchanged(t *testing.T) {
+	for _, value := range []string{"has space", "'start", `back\slash`} {
+		t.Run(value, func(t *testing.T) {
+			db := DatabaseConfig{Host: "/run/" + value, Port: "5433", User: value + "-user", Password: value, Name: value + "-db", SSLMode: "disable"}
+
+			got, err := pq.NewConfig(db.ConnectionString())
+			if err != nil {
+				t.Fatalf("NewConfig: %v", err)
+			}
+			if got.Host != db.Host || got.Port != 5433 || got.User != db.User || got.Password != db.Password || got.Database != db.Name || got.SSLMode != pq.SSLModeDisable {
+				t.Fatalf("parsed host=%q port=%d user=%q password=%q dbname=%q sslmode=%q", got.Host, got.Port, got.User, got.Password, got.Database, got.SSLMode)
+			}
+		})
+	}
+}
 
 func TestFileMonitorValidation(t *testing.T) {
 	tests := []struct {
