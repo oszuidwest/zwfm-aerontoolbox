@@ -326,13 +326,26 @@ func (s *Server) handleImageUpload(entityType types.EntityType) http.HandlerFunc
 			return
 		}
 
+		controller := http.NewResponseController(w)
+
 		uploadReadTimeout := s.service.Config().API.GetUploadReadTimeout()
-		if err := http.NewResponseController(w).SetReadDeadline(time.Now().Add(uploadReadTimeout)); err != nil {
+		if err := controller.SetReadDeadline(time.Now().Add(uploadReadTimeout)); err != nil {
 			slog.Warn("Could not set read deadline for image upload; large upload may time out",
 				"entity_type", entityType,
 				"id", entityID,
 				"timeout", uploadReadTimeout,
 				"error", err)
+		}
+
+		// WriteTimeout started with the request headers and can end before the
+		// route deadline, so give the answer a full write timeout after that deadline.
+		if deadline, ok := r.Context().Deadline(); ok {
+			if err := controller.SetWriteDeadline(deadline.Add(s.service.Config().API.GetWriteTimeout())); err != nil {
+				slog.Warn("Could not set write deadline for image upload; slow upload may get no answer",
+					"entity_type", entityType,
+					"id", entityID,
+					"error", err)
+			}
 		}
 
 		r.Body = http.MaxBytesReader(w, r.Body, s.service.Config().API.GetMaxUploadBodyBytes())
