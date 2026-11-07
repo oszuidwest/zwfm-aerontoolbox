@@ -679,8 +679,9 @@ func tagMessage(tag, param string) string {
 	}
 }
 
-// ConnectionString returns a PostgreSQL connection string.
+// ConnectionString returns a PostgreSQL connection string with escaped, quoted values.
 func (c *DatabaseConfig) ConnectionString() string {
-	return fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
-		c.Host, c.Port, c.User, c.Password, c.Name, c.SSLMode)
+	quote := strings.NewReplacer(`\`, `\\`, `'`, `\'`).Replace
+	return fmt.Sprintf("host='%s' port='%s' user='%s' password='%s' dbname='%s' sslmode='%s'",
+		quote(c.Host), quote(c.Port), quote(c.User), quote(c.Password), quote(c.Name), quote(c.SSLMode))
 }
