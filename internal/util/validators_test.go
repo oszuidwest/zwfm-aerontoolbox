@@ -104,6 +104,41 @@ func TestValidators(t *testing.T) {
 	}
 }
 
+// allowTestServer lets safeHTTPClient reach srv, because safeurl blocks loopback.
+func allowTestServer(t *testing.T, srv *httptest.Server) {
+	t.Helper()
+	port := srv.Listener.Addr().(*net.TCPAddr).Port
+	orig := safeHTTPClient
+	safeHTTPClient = func() *safeurl.WrappedClient {
+		return safeurl.Client(safeurl.GetConfigBuilder().SetAllowedIPs("127.0.0.1").SetAllowedPorts(port).Build())
+	}
+	t.Cleanup(func() { safeHTTPClient = orig })
+}
+
+func TestValidateAndDownloadImageSizeLimit(t *testing.T) {
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, image.NewGray(image.Rect(0, 0, 1, 1))); err != nil {
+		t.Fatal(err)
+	}
+	data := buf.Bytes()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(data)
+	}))
+	t.Cleanup(srv.Close)
+	allowTestServer(t, srv)
+
+	got, err := ValidateAndDownloadImage(t.Context(), srv.URL, int64(len(data)))
+	if err != nil || !bytes.Equal(got, data) {
+		t.Fatalf("at the limit: got %d bytes, error %v, want all %d bytes", len(got), err, len(data))
+	}
+
+	_, err = ValidateAndDownloadImage(t.Context(), srv.URL, int64(len(data))-1)
+	if err == nil || !strings.Contains(err.Error(), "larger than the limit") {
+		t.Fatalf("over the limit: error = %v, want a size error", err)
+	}
+}
+
 func TestValidateAndDownloadImageStopsWhenContextEnds(t *testing.T) {
 	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -114,13 +149,7 @@ func TestValidateAndDownloadImageStopsWhenContextEnds(t *testing.T) {
 	t.Cleanup(srv.Close)
 	t.Cleanup(func() { close(release) })
 
-	// safeurl blocks loopback; allow only this test server.
-	port := srv.Listener.Addr().(*net.TCPAddr).Port
-	orig := safeHTTPClient
-	safeHTTPClient = func() *safeurl.WrappedClient {
-		return safeurl.Client(safeurl.GetConfigBuilder().SetAllowedIPs("127.0.0.1").SetAllowedPorts(port).Build())
-	}
-	t.Cleanup(func() { safeHTTPClient = orig })
+	allowTestServer(t, srv)
 
 	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()

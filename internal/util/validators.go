@@ -4,6 +4,7 @@ package util
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"image"
 	"io"
@@ -133,8 +134,10 @@ func ValidateAndDownloadImage(ctx context.Context, urlString string, maxSize int
 		return nil, err
 	}
 
-	limitedReader := io.LimitReader(resp.Body, maxSize)
-	data, err := io.ReadAll(limitedReader)
+	data, err := io.ReadAll(http.MaxBytesReader(nil, resp.Body, maxSize))
+	if _, tooLarge := errors.AsType[*http.MaxBytesError](err); tooLarge {
+		return nil, types.NewValidationError("image", fmt.Sprintf("image is larger than the limit of %d bytes", maxSize))
+	}
 	if err != nil {
 		return nil, types.NewValidationError("image", fmt.Sprintf("error reading: %v", err))
 	}
