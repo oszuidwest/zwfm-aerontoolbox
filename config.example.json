@@ -35,7 +35,6 @@
   "maintenance": {
     "bloat_threshold": 10.0,
     "dead_tuple_threshold": 10000,
-    "vacuum_staleness_days": 7,
     "min_rows_for_recommendation": 1000,
     "toast_size_warning_bytes": 524288000,
     "stale_stats_threshold_pct": 10,

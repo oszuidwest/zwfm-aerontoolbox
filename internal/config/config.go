@@ -64,7 +64,6 @@ type APIConfig struct {
 type MaintenanceConfig struct {
 	BloatThreshold              float64         `json:"bloat_threshold" validate:"gte=0,lte=100"`
 	DeadTupleThreshold          int64           `json:"dead_tuple_threshold" validate:"gte=0"`
-	VacuumStalenessDays         int             `json:"vacuum_staleness_days" validate:"gte=0"`
 	MinRowsForRecommendation    int64           `json:"min_rows_for_recommendation" validate:"gte=0"`
 	ToastSizeWarningBytes       int64           `json:"toast_size_warning_bytes" validate:"gte=0"`
 	StaleStatsThresholdPct      int             `json:"stale_stats_threshold_pct" validate:"gte=0,lte=100"`
@@ -267,7 +266,6 @@ const (
 	DefaultRateLimitWindowSeconds      = 60
 	DefaultBloatThreshold              = 10.0
 	DefaultDeadTupleThreshold          = 10000
-	DefaultVacuumStalenessDays         = 7
 	DefaultMinRowsForRecommendation    = 1000
 	DefaultToastSizeWarningBytes       = 500 * 1024 * 1024
 	DefaultStaleStatsThresholdPct      = 10
@@ -354,16 +352,6 @@ func (c *MaintenanceConfig) GetBloatThreshold() float64 {
 // GetDeadTupleThreshold returns the dead tuple count that triggers vacuum recommendations.
 func (c *MaintenanceConfig) GetDeadTupleThreshold() int64 {
 	return cmp.Or(c.DeadTupleThreshold, DefaultDeadTupleThreshold)
-}
-
-// GetVacuumStalenessDays returns the number of days after which a table is considered stale.
-func (c *MaintenanceConfig) GetVacuumStalenessDays() int {
-	return cmp.Or(c.VacuumStalenessDays, DefaultVacuumStalenessDays)
-}
-
-// GetVacuumStaleness returns the staleness threshold as a Duration.
-func (c *MaintenanceConfig) GetVacuumStaleness() time.Duration {
-	return time.Duration(c.GetVacuumStalenessDays()) * 24 * time.Hour
 }
 
 // GetMinRowsForRecommendation returns the minimum row count for maintenance recommendations.
