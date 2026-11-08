@@ -45,6 +45,19 @@ func (r *Repository) GetDatabaseSize(ctx context.Context) (int64, error) {
 	return size, nil
 }
 
+// GetFrozenXIDAge returns the transaction ID age of the current database and the
+// server's autovacuum_freeze_max_age, above which autovacuum forces an anti-wraparound vacuum.
+func (r *Repository) GetFrozenXIDAge(ctx context.Context) (age, freezeMaxAge int64, err error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT age(datfrozenxid), current_setting('autovacuum_freeze_max_age')::bigint
+		FROM pg_database
+		WHERE datname = current_database()`)
+	if err := row.Scan(&age, &freezeMaxAge); err != nil {
+		return 0, 0, types.NewOperationError("get frozen xid age", err)
+	}
+	return age, freezeMaxAge, nil
+}
+
 // GetConnectionStats returns the active connection count and the server's
 // max_connections setting.
 func (r *Repository) GetConnectionStats(ctx context.Context) (active, maxConns int, err error) {
