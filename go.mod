@@ -12,7 +12,7 @@ require (
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/lib/pq v1.12.3
 	github.com/netresearch/go-cron v0.19.0
-	github.com/oszuidwest/zw-graphmail v0.0.2
+	github.com/oszuidwest/zw-graphmail v0.0.3
 	golang.org/x/image v0.48.0
 	golang.org/x/oauth2 v0.38.0
 	golang.org/x/sync v0.25.0
