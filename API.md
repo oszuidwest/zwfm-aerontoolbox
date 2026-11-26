@@ -74,7 +74,7 @@ completed_run_id >= run_id && running == false
 
 Bij `completed_run_id == run_id` hoort het resultaat bij jouw run. Een hogere waarde betekent dat een latere geplande run het al heeft vervangen.
 
-Een back-up geeft geen `run_id`. Poll tot `running` `false` is en vergelijk `started_at` met het moment van je aanvraag. De status toont alleen de laatste back-up, dus een latere geplande back-up kan het resultaat al hebben vervangen.
+Een back-up geeft geen `run_id`. Poll tot `running` `false` is. De status toont alleen de laatste back-up: start er intussen een geplande back-up, dan zie je de uitkomst daarvan en niet die van jouw aanvraag.
 
 ## Endpointoverzicht
 
