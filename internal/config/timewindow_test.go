@@ -98,13 +98,17 @@ func TestParseTimeWindow_Weekdays(t *testing.T) {
 	}{
 		{"mon-fri 06:25-21:00, sat-sun 07:25-18:00", at(2, 20, 59), true},  // Fri evening
 		{"mon-fri 06:25-21:00, sat-sun 07:25-18:00", at(3, 20, 59), false}, // Sat evening
-		{"mon-fri 06:25-21:00, sat-sun 07:25-18:00", at(3, 7, 24), false},
-		{"mon-fri 06:25-21:00, sat-sun 07:25-18:00", at(4, 7, 25), true}, // Sun
-		{"mon-fri 06:25-21:00, sat-sun 07:25-18:00", at(5, 6, 25), true}, // Mon
-		{"fri 22:00-02:00", at(3, 1, 59), true},                          // wraps into Saturday
-		{"fri 22:00-02:00", at(2, 1, 0), false},                          // Thursday night is not Friday's
-		{"fri 22:00-02:00", at(3, 22, 0), false},                         // Saturday itself
-		{"FRI-mon 10:00-11:00", at(4, 10, 30), true},
+		{"mon-fri 06:25-21:00, sat-sun 07:25-18:00", at(3, 7, 24), false},  // Sat, one minute early
+		{"mon-fri 06:25-21:00, sat-sun 07:25-18:00", at(4, 7, 25), true},   // Sun
+		{"mon-fri 06:25-21:00, sat-sun 07:25-18:00", at(5, 6, 25), true},   // Mon
+		{"fri 22:00-02:00", at(3, 1, 59), true},                            // wraps into Saturday
+		{"fri 22:00-02:00", at(2, 1, 0), false},                            // Fri 01:00 is Thursday's night
+		{"fri 22:00-02:00", at(3, 22, 0), false},                           // no window starts on Saturday
+		{"sun 22:00-02:00", at(5, 1, 59), true},                            // Sunday wraps into Monday
+		{"sat-sun 00:00-00:00", at(3, 23, 59), true},                       // whole day
+		{"sat-sun 00:00-00:00", at(5, 0, 0), false},
+		{"sat 12:00-12:00", at(4, 11, 59), true},      // 24 hours from Saturday noon
+		{"FRI-mon 10:00-11:00", at(4, 10, 30), true},  // case and wrap
 		{"fri-mon 10:00-11:00", at(6, 10, 30), false}, // Tuesday
 	}
 	for _, tc := range tests {
@@ -116,7 +120,6 @@ func TestParseTimeWindow_Weekdays(t *testing.T) {
 			t.Errorf("%q at %s = %v, want %v", tc.input, tc.at.Format("Mon 15:04"), got, tc.want)
 		}
 	}
-
 }
 
 func TestFileMonitorValidation_ActiveWindow(t *testing.T) {

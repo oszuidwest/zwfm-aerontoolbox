@@ -16,14 +16,17 @@ import (
 // whose end is earlier than its start wraps around midnight and belongs to the
 // day it starts on (e.g. "fri 22:00-02:00" is active until Saturday 02:00).
 //
-// An unconfigured window (zero value) is always active. Equal start and end
-// would be ambiguous, so they are rejected at parse time.
+// Equal start and end means 24 hours from the start on the given days
+// ("sat-sun 00:00-00:00" is all of Saturday and Sunday);
+// without days it is rejected, because an empty window already means always.
+// An unconfigured window (zero value) is always active.
 type TimeWindow struct {
 	spans []timeSpan
 }
 
 // timeSpan is one window on the weekdays set in days (bit n = time.Weekday(n)).
-// endMin runs past 24*60 when the window crosses midnight.
+// endMin runs past 24*60 when the window crosses midnight; equal start and end
+// with days given means 24 hours from the start.
 type timeSpan struct {
 	days             uint8
 	startMin, endMin int
@@ -42,9 +45,10 @@ func ParseTimeWindow(s string) (TimeWindow, error) {
 	}
 	var w TimeWindow
 	for entry := range strings.SplitSeq(s, ",") {
-		span, err := parseSpan(strings.TrimSpace(entry))
+		entry = strings.TrimSpace(entry)
+		span, err := parseSpan(entry)
 		if err != nil {
-			return TimeWindow{}, err
+			return TimeWindow{}, fmt.Errorf("invalid window %q: %w", entry, err)
 		}
 		w.spans = append(w.spans, span)
 	}
@@ -53,7 +57,9 @@ func ParseTimeWindow(s string) (TimeWindow, error) {
 
 func parseSpan(s string) (timeSpan, error) {
 	span := timeSpan{days: allDays}
-	if dayPart, rest, ok := strings.Cut(s, " "); ok && !strings.Contains(dayPart, ":") {
+	dayPart, rest, hasDays := strings.Cut(s, " ")
+	hasDays = hasDays && !strings.Contains(dayPart, ":")
+	if hasDays {
 		days, err := parseDays(dayPart)
 		if err != nil {
 			return timeSpan{}, err
@@ -63,7 +69,7 @@ func parseSpan(s string) (timeSpan, error) {
 	}
 	parts := strings.Split(s, "-")
 	if len(parts) != 2 {
-		return timeSpan{}, fmt.Errorf("invalid window %q, expected [days ]HH:MM-HH:MM", s)
+		return timeSpan{}, fmt.Errorf("expected [days ]HH:MM-HH:MM")
 	}
 	var err error
 	if span.startMin, err = parseHHMM(strings.TrimSpace(parts[0])); err != nil {
@@ -72,17 +78,17 @@ func parseSpan(s string) (timeSpan, error) {
 	if span.endMin, err = parseHHMM(strings.TrimSpace(parts[1])); err != nil {
 		return timeSpan{}, err
 	}
-	if span.startMin == span.endMin {
-		return timeSpan{}, fmt.Errorf("invalid window %q: start and end are equal (an empty active_window means all day, every day)", s)
+	if span.startMin == span.endMin && !hasDays {
+		return timeSpan{}, fmt.Errorf("start and end are equal; leave active_window empty to monitor all day, every day")
 	}
-	if span.endMin < span.startMin {
+	if span.endMin <= span.startMin {
 		span.endMin += 24 * 60
 	}
 	return span, nil
 }
 
-// parseDays parses "mon" or a range such as "mon-fri" or "sat-sun" (ranges
-// wrap past Saturday) into a time.Weekday bit mask.
+// parseDays parses a day ("mon") or an inclusive range ("mon-fri"; ranges may
+// wrap, e.g. "fri-mon"), ignoring case, into a time.Weekday bit mask.
 func parseDays(s string) (uint8, error) {
 	from, to, isRange := strings.Cut(strings.ToLower(s), "-")
 	if !isRange {
