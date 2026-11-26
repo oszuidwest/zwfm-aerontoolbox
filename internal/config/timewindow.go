@@ -65,7 +65,7 @@ func parseSpan(s string) (timeSpan, error) {
 			return timeSpan{}, err
 		}
 		span.days = days
-		s = strings.TrimSpace(rest)
+		s = rest
 	}
 	parts := strings.Split(s, "-")
 	if len(parts) != 2 {

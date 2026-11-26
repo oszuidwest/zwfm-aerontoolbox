@@ -57,7 +57,7 @@ func TestParseTimeWindow_Cases(t *testing.T) {
 		{name: "equal start and end", input: "12:00-12:00", wantErr: true},
 		{name: "midnight equal", input: "00:00-00:00", wantErr: true},
 		{name: "trailing junk in time", input: "06:00:00-22:00", wantErr: true},
-		{name: "unknown day", input: "funday 06:00-07:00", wantErr: true},
+		{name: "unknown range start", input: "xyz-fri 06:00-07:00", wantErr: true},
 		{name: "unknown range end", input: "mon-xyz 06:00-07:00", wantErr: true},
 		{name: "days without time", input: "mon-fri", wantErr: true},
 		{name: "trailing comma", input: "06:00-07:00,", wantErr: true},
@@ -79,7 +79,7 @@ func TestParseTimeWindow_Cases(t *testing.T) {
 				t.Errorf("IsConfigured() = %v, want %v", got, want)
 			}
 			for _, c := range tc.checks {
-				ts := time.Date(2026, 1, 1, c.hh, c.mm, 0, 0, time.UTC)
+				ts := time.Date(2026, 1, 4, c.hh, c.mm, 0, 0, time.UTC) // a Sunday, so all-day masks cover the weekend
 				if got := w.Active(ts); got != c.want {
 					t.Errorf("Active(%02d:%02d) = %v, want %v", c.hh, c.mm, got, c.want)
 				}
