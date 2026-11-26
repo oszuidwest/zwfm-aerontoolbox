@@ -32,12 +32,12 @@ sudo chown 1000:1000 backups
 docker compose up -d
 ```
 
-De meegeleverde Docker-configuratie gebruikt `Europe/Amsterdam` voor geplande taken. Voeg voor `file_monitor` en `media_file_check` de betrokken hostmappen als volumes toe aan `docker-compose.yml`.
+Geplande taken gebruiken de tijdzone uit `TZ`; de compose-voorbeeldconfiguratie zet die op `Europe/Amsterdam`. Gebruik je `file_monitor` of `media_file_check`, voeg dan de hostmappen als volumes toe aan `docker-compose.yml`.
 
 ### Andere installatiemethoden
 
 - Download een Linux- of macOS-binary via [GitHub Releases](https://github.com/oszuidwest/zwfm-aerontoolbox/releases).
-- Zelf bouwen vereist Go 1.27 of nieuwer:
+- Zelf bouwen vereist Go 1.27.4 of nieuwer:
 
 ```bash
 git clone https://github.com/oszuidwest/zwfm-aerontoolbox.git
@@ -47,13 +47,13 @@ go build -o zwfm-aerontoolbox .
 ./zwfm-aerontoolbox -config=config.json -port=8080
 ```
 
-Voor back-ups buiten Docker zijn `pg_dump` en `pg_restore` nodig van dezelfde of een nieuwere majorversie dan de server; bij het opstarten worden ze gecontroleerd. De Docker-image bevat PostgreSQL-client 17. Andere binaries stel je in met `backup.pg_dump_path` en `backup.pg_restore_path`.
+Back-ups buiten Docker hebben `pg_dump` en `pg_restore` nodig, van dezelfde of een nieuwere majorversie dan de server. Staat `backup.enabled` aan, dan start de applicatie niet als ze ontbreken. De Docker-image bevat PostgreSQL-client 17. Een ander pad stel je in met `backup.pg_dump_path` en `backup.pg_restore_path`.
 
-Back-ups gebruiken dezelfde `database.sslmode` als de applicatie. Bij `verify-ca` of `verify-full` heeft `pg_dump` het CA-certificaat nodig: zet de omgevingsvariabele `PGSSLROOTCERT` op het pad van dat certificaat, of op `system` bij `verify-full` (vanaf PostgreSQL-client 16).
+`pg_dump` gebruikt dezelfde `database.sslmode` als de applicatie. Bij `verify-ca` of `verify-full` heeft `pg_dump` het CA-certificaat nodig. Zet de omgevingsvariabele `PGSSLROOTCERT` op het pad van dat certificaat. Bij `verify-full` kan ook `system` (vanaf PostgreSQL-client 16).
 
 ## Configuratie
 
-Kopieer [`config.example.json`](config.example.json) naar `config.json` en pas deze secties aan:
+Kopieer [`config.example.json`](config.example.json) naar `config.json`. Het bestand heeft deze secties:
 
 | Sectie | Doel |
 |---|---|
@@ -69,13 +69,13 @@ Kopieer [`config.example.json`](config.example.json) naar `config.json` en pas d
 
 ### Authenticatie
 
-Authenticatie staat standaard aan. Vul in `api.keys` minstens één unieke sleutel van minimaal 16 tekens in, bijvoorbeeld gegenereerd met `openssl rand -base64 32`; met een lege lijst of een te korte sleutel start de applicatie niet. Zet authenticatie alleen uit in een afgeschermde testomgeving en commit `config.json` nooit.
+In `config.example.json` staat authenticatie aan (`api.enabled: true`). Ontbreekt `api.enabled`, dan staat authenticatie uit. Met authenticatie aan vul je in `api.keys` minstens één unieke sleutel van minimaal 16 tekens in, bijvoorbeeld gemaakt met `openssl rand -base64 32`. Met een lege lijst of een te korte sleutel start de applicatie niet. Zet authenticatie alleen uit in een afgeschermde testomgeving. Commit `config.json` nooit.
 
-Zie [API.md](API.md) voor details over instellingen en endpoints.
+Instellingen en endpoints staan in [API.md](API.md).
 
 ## Voorbeelden
 
-Publieke statuscontrole:
+Healthcheck, zonder API-sleutel:
 
 ```bash
 curl http://localhost:8080/health
