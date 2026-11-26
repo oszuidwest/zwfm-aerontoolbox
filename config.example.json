@@ -80,7 +80,7 @@
         "path": "/data/news.mp3",
         "max_age_minutes": 30,
         "stat_timeout_seconds": 5,
-        "active_window": "06:00-22:00"
+        "active_window": "mon-fri 06:00-22:00, sat-sun 08:00-20:00"
       },
       {
         "name": "Weer",

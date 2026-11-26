@@ -84,6 +84,42 @@ func TestParseTimeWindow_Cases(t *testing.T) {
 	}
 }
 
+func TestParseTimeWindow_Weekdays(t *testing.T) {
+	// 2026-01-02 is a Friday.
+	at := func(day, hh, mm int) time.Time { return time.Date(2026, 1, day, hh, mm, 0, 0, time.UTC) }
+	tests := []struct {
+		input string
+		at    time.Time
+		want  bool
+	}{
+		{"mon-fri 06:25-21:00, sat-sun 07:25-18:00", at(2, 20, 59), true},  // Fri evening
+		{"mon-fri 06:25-21:00, sat-sun 07:25-18:00", at(3, 20, 59), false}, // Sat evening
+		{"mon-fri 06:25-21:00, sat-sun 07:25-18:00", at(3, 7, 24), false},
+		{"mon-fri 06:25-21:00, sat-sun 07:25-18:00", at(4, 7, 25), true}, // Sun
+		{"mon-fri 06:25-21:00, sat-sun 07:25-18:00", at(5, 6, 25), true}, // Mon
+		{"fri 22:00-02:00", at(3, 1, 59), true},                          // wraps into Saturday
+		{"fri 22:00-02:00", at(2, 1, 0), false},                          // Thursday night is not Friday's
+		{"fri 22:00-02:00", at(3, 22, 0), false},                         // Saturday itself
+		{"FRI-mon 10:00-11:00", at(4, 10, 30), true},
+		{"fri-mon 10:00-11:00", at(6, 10, 30), false}, // Tuesday
+	}
+	for _, tc := range tests {
+		w, err := ParseTimeWindow(tc.input)
+		if err != nil {
+			t.Fatalf("ParseTimeWindow(%q): %v", tc.input, err)
+		}
+		if got := w.Active(tc.at); got != tc.want {
+			t.Errorf("%q at %s = %v, want %v", tc.input, tc.at.Format("Mon 15:04"), got, tc.want)
+		}
+	}
+
+	for _, bad := range []string{"funday 06:00-07:00", "mon-xyz 06:00-07:00", "mon-fri", "06:00-07:00,"} {
+		if _, err := ParseTimeWindow(bad); err == nil {
+			t.Errorf("ParseTimeWindow(%q) = nil error, want error", bad)
+		}
+	}
+}
+
 func TestFileMonitorValidation_ActiveWindow(t *testing.T) {
 	cfg := minimalConfig()
 	cfg.FileMonitor.Enabled = true
@@ -104,7 +140,7 @@ func TestFileMonitorValidation_ActiveWindow(t *testing.T) {
 	}{
 		{"12:00-12:00", "start and end are equal"},
 		{"24:00-06:00", "out of range"},
-		{"garbage", "expected HH:MM"},
+		{"garbage", "expected [days ]HH:MM-HH:MM"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.input, func(t *testing.T) {
