@@ -1,82 +1,73 @@
-# Aeron Toolbox Tests
+# Aeron Toolbox-tests
 
-This directory contains test fixtures and data for the Aeron Toolbox project.
+Deze map bevat testdata en de testdatabase voor Aeron Toolbox.
 
-## Structure
+## Structuur
 
 ```
 tests/
-├── fixtures/              # Test data
-│   └── mock_data.sql      # Mock database data (artists, tracks, playlist)
-├── docker-compose.test.yml # Test database (and optional SeaweedFS) setup
-└── README.md              # This file
+├── fixtures/              # Testdata
+│   ├── mock_data.sql      # Mockdata voor de database (artiesten, tracks, playlist)
+│   └── s3_config.json     # S3-inloggegevens voor SeaweedFS
+├── docker-compose.test.yml # Testdatabase (en optioneel SeaweedFS)
+└── README.md              # Dit bestand
 ```
 
-## Test Execution
+## Tests in GitHub Actions
 
-All tests are executed through GitHub Actions. See `.github/workflows/comprehensive-test.yml` for the complete test suite.
+Alle tests draaien in `.github/workflows/comprehensive-test.yml`, bij elke pull request naar `main`, voor elke release (`release.yml`) en handmatig. De workflow heeft drie jobs:
 
-## Local Testing (Optional)
+1. `build` bouwt de applicatie.
+2. `lint` roept de gedeelde workflow `go-ci.yml` aan uit `oszuidwest/.github-templates`. Die draait `go test -race -shuffle=on -v ./...`, `go vet`, een formatcontrole, golangci-lint, deadcode en govulncheck.
+3. `integration` start per suite de testdatabase met de mockdata en test de draaiende applicatie via HTTP. De suites zijn `api-basic`, `artists`, `tracks`, `maintenance`, `backup`, `system-validation`, `s3` en `edge-cases`.
 
-If you want to test locally, you can:
+## Lokaal testen
 
-### 1. Start Test Database
+### 1. Testdatabase starten
 
 ```bash
 cd tests
 docker compose -f docker-compose.test.yml up -d
 ```
 
-This starts a PostgreSQL container on port 5433 with mock data. The SeaweedFS
-container (used by the S3 test suite) is behind a compose profile and only
-starts when you add `--profile s3`.
+Dit start een PostgreSQL-container op poort 5433 met de mockdata. De SeaweedFS-container (voor de suite `s3`) zit achter een compose-profiel en start alleen met `--profile s3`.
 
-### 2. Create a test config and run the application
+### 2. Testconfiguratie maken en de applicatie starten
 
 ```bash
-# Create test config (see config.example.json, use port 5433)
+cd ..
+# Maak een testconfiguratie (zie config.example.json)
 cp config.example.json test_config.json
-# Edit test_config.json: set port to "5433"
+# Pas test_config.json aan: database.port "5433", database.name "aeron_db",
+# database.password "aeron123" en minstens één sleutel in api.keys
 
 go build -o zwfm-aerontoolbox .
 ./zwfm-aerontoolbox -config=test_config.json -port=8080
 ```
 
-## Test Data
+## Testdata
 
-The `fixtures/mock_data.sql` file contains:
-- 1000 artists
-  - 50 artists with a dummy PNG image (deterministic: the 50 lowest artist IDs)
-  - 950 artists without images
-- 1100 tracks with realistic data
-  - 50 tracks with a dummy PNG image (deterministic: the 50 lowest title IDs)
-  - 1050 tracks without images
-- Playlist items covering the mocked broadcast day
+`fixtures/mock_data.sql` bevat:
+- 1000 artiesten
+  - 50 met een dummy-PNG (vast: de 50 laagste artist-ID's)
+  - 950 zonder afbeelding
+- 1100 tracks
+  - 50 met een dummy-PNG (vast: de 50 laagste title-ID's)
+  - 1050 zonder afbeelding
+- Playlistitems voor de gesimuleerde uitzenddag
 
-## CI/CD Integration
+## Nieuwe tests schrijven
 
-GitHub Actions automatically:
-1. Sets up a test database
-2. Loads mock data
-3. Runs all integration tests
-4. Reports results
+1. Voeg testdata toe aan `fixtures/mock_data.sql`.
+2. Pas de workflow `.github/workflows/comprehensive-test.yml` aan.
 
-## Writing New Tests
+## Testconfiguratie
 
-1. Add test data to `fixtures/mock_data.sql`
-2. Update the GitHub Actions workflow in `.github/workflows/comprehensive-test.yml`
+De tests gebruiken PostgreSQL 17 op poort 5433, in CI en lokaal. De container koppelt 5433 aan 5432. CI gebruikt de API-sleutels `test-api-key-12345` en `another-test-key-67890`.
 
-## Test Configuration
+## Benodigdheden voor lokaal testen
 
-The test configuration uses:
-- **Database**: PostgreSQL 17
-- **Port**: 5433 (both CI and local; the container maps 5433 -> 5432)
-- **API Keys**: test-api-key-12345, another-test-key-67890
-
-## System Requirements for Local Testing
-
-When testing backup functionality locally, you need:
-- **PostgreSQL client tools**: `pg_dump` and `pg_restore`
+Voor de back-uptests heb je `pg_dump` en `pg_restore` nodig. Zie de versie-eisen in de [README](../README.md).
 
 ```bash
 # Debian/Ubuntu
@@ -85,7 +76,7 @@ apt-get install postgresql-client
 # macOS
 brew install libpq
 
-# The GitHub Actions workflow installs these automatically
+# De GitHub Actions-workflow installeert deze tools zelf
 ```
 
-The application validates these tools at startup when `backup.enabled: true`. Without them, it will refuse to start.
+Met `backup.enabled: true` controleert de applicatie bij het opstarten of deze tools bestaan. Ontbreken ze, dan start de applicatie niet.
