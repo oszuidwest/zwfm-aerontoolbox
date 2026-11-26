@@ -657,3 +657,5 @@ Mogelijke fouten:
 | `notifications` | Microsoft Graph-afzender en ontvangers |
 
 Cron-schema's en `active_window` gebruiken de lokale tijdzone van het proces. Stel in Docker daarom `TZ`, bijvoorbeeld `TZ=Europe/Amsterdam`.
+
+`active_window` is één venster, zoals `06:00-22:00`, of meerdere vensters gescheiden door komma's. Zet dagen voor een venster om het tot die dagen te beperken: `mon-fri 06:25-21:00, sat-sun 07:25-18:00`. Dagen zijn `mon` tot en met `sun`, los of als reeks. `mon-fri` is maandag tot en met vrijdag, en een reeks mag over het weekend heen lopen, zoals `fri-mon`. Een venster zonder dagen geldt voor elke dag. De vensters tellen op: een tijdstip valt binnen `active_window` als één venster past. Een later venster overschrijft dus niets. De begintijd valt binnen het venster, de eindtijd niet. Een venster over middernacht, zoals `fri 22:00-02:00`, hoort bij de dag waarop het begint en loopt dus door tot zaterdag 02:00. Met dagen erbij betekent een gelijke begin- en eindtijd 24 uur vanaf de begintijd. `sat-sun 00:00-00:00` is dus de hele zaterdag en zondag. Zonder dagen is dat een fout; laat het veld dan leeg.

@@ -130,7 +130,7 @@ type FileMonitorConfig struct {
 // FileMonitorCheckConfig defines a single file to monitor for staleness.
 //
 // ActiveWindow is validated by validateFileMonitorConfig (struct-level) so the
-// parser's specific reason - equal start/end, range, format - survives into
+// parser's specific reason - equal start/end, range, days, format - survives into
 // the error message instead of collapsing to a generic tag string.
 type FileMonitorCheckConfig struct {
 	Name           string `json:"name"`
@@ -526,7 +526,7 @@ func validateS3Config(sl validator.StructLevel) {
 // rather than only after the operator flips the feature on. The parser
 // error string is forwarded verbatim via the tag param so the user sees the
 // concrete reason (e.g. "start and end are equal") instead of a generic
-// "must be HH:MM-HH:MM".
+// "must be a valid window".
 func validateFileMonitorConfig(sl validator.StructLevel) {
 	fm := sl.Current().Interface().(FileMonitorConfig)
 

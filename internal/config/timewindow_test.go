@@ -57,6 +57,10 @@ func TestParseTimeWindow_Cases(t *testing.T) {
 		{name: "equal start and end", input: "12:00-12:00", wantErr: true},
 		{name: "midnight equal", input: "00:00-00:00", wantErr: true},
 		{name: "trailing junk in time", input: "06:00:00-22:00", wantErr: true},
+		{name: "unknown range start", input: "xyz-fri 06:00-07:00", wantErr: true},
+		{name: "unknown range end", input: "mon-xyz 06:00-07:00", wantErr: true},
+		{name: "days without time", input: "mon-fri", wantErr: true},
+		{name: "trailing comma", input: "06:00-07:00,", wantErr: true},
 	}
 
 	for _, tc := range tests {
@@ -75,12 +79,46 @@ func TestParseTimeWindow_Cases(t *testing.T) {
 				t.Errorf("IsConfigured() = %v, want %v", got, want)
 			}
 			for _, c := range tc.checks {
-				ts := time.Date(2026, 1, 1, c.hh, c.mm, 0, 0, time.UTC)
+				ts := time.Date(2026, 1, 4, c.hh, c.mm, 0, 0, time.UTC) // a Sunday, so all-day masks cover the weekend
 				if got := w.Active(ts); got != c.want {
 					t.Errorf("Active(%02d:%02d) = %v, want %v", c.hh, c.mm, got, c.want)
 				}
 			}
 		})
+	}
+}
+
+func TestParseTimeWindow_Weekdays(t *testing.T) {
+	// 2026-01-02 is a Friday.
+	at := func(day, hh, mm int) time.Time { return time.Date(2026, 1, day, hh, mm, 0, 0, time.UTC) }
+	tests := []struct {
+		input string
+		at    time.Time
+		want  bool
+	}{
+		{"mon-fri 06:25-21:00, sat-sun 07:25-18:00", at(2, 20, 59), true},  // Fri evening
+		{"mon-fri 06:25-21:00, sat-sun 07:25-18:00", at(3, 20, 59), false}, // Sat evening
+		{"mon-fri 06:25-21:00, sat-sun 07:25-18:00", at(3, 7, 24), false},  // Sat, one minute early
+		{"mon-fri 06:25-21:00, sat-sun 07:25-18:00", at(4, 7, 25), true},   // Sun
+		{"mon-fri 06:25-21:00, sat-sun 07:25-18:00", at(5, 6, 25), true},   // Mon
+		{"fri 22:00-02:00", at(3, 1, 59), true},                            // wraps into Saturday
+		{"fri 22:00-02:00", at(2, 1, 0), false},                            // Fri 01:00 is Thursday's night
+		{"fri 22:00-02:00", at(3, 22, 0), false},                           // no window starts on Saturday
+		{"sun 22:00-02:00", at(5, 1, 59), true},                            // Sunday wraps into Monday
+		{"sat-sun 00:00-00:00", at(3, 23, 59), true},                       // whole day
+		{"sat-sun 00:00-00:00", at(5, 0, 0), false},
+		{"sat 12:00-12:00", at(4, 11, 59), true},      // 24 hours from Saturday noon
+		{"FRI-mon 10:00-11:00", at(4, 10, 30), true},  // case and wrap
+		{"fri-mon 10:00-11:00", at(6, 10, 30), false}, // Tuesday
+	}
+	for _, tc := range tests {
+		w, err := ParseTimeWindow(tc.input)
+		if err != nil {
+			t.Fatalf("ParseTimeWindow(%q): %v", tc.input, err)
+		}
+		if got := w.Active(tc.at); got != tc.want {
+			t.Errorf("%q at %s = %v, want %v", tc.input, tc.at.Format("Mon 15:04"), got, tc.want)
+		}
 	}
 }
 
@@ -104,7 +142,7 @@ func TestFileMonitorValidation_ActiveWindow(t *testing.T) {
 	}{
 		{"12:00-12:00", "start and end are equal"},
 		{"24:00-06:00", "out of range"},
-		{"garbage", "expected HH:MM"},
+		{"garbage", "expected [days ]HH:MM-HH:MM"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.input, func(t *testing.T) {
