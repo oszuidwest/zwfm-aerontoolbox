@@ -11,15 +11,6 @@ import (
 	"github.com/oszuidwest/zwfm-aerontoolbox/internal/util"
 )
 
-// MediaCheckStartResponse is returned by POST /media/files/check. RunID is the
-// monotonic ID of the run just started; clients poll /status until
-// completed_run_id >= RunID && running == false.
-type MediaCheckStartResponse struct {
-	Message string `json:"message"`
-	RunID   uint64 `json:"run_id"`
-	Check   string `json:"check"`
-}
-
 // dateParam is the accepted date format for media file check scope parameters.
 const dateParam = "2006-01-02"
 
@@ -36,7 +27,7 @@ func (s *Server) handleMediaFileCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	respondJSON(w, http.StatusAccepted, MediaCheckStartResponse{
+	respondJSON(w, http.StatusAccepted, AsyncStartResponse{
 		Message: "Media file check started",
 		RunID:   runID,
 		Check:   "/api/media/files/check/status",

@@ -133,9 +133,45 @@ func TestBackupServiceStartRejectsConcurrentRun(t *testing.T) {
 	}
 	defer svc.runner.Done()
 
-	err := svc.Start(BackupRequest{})
+	_, err := svc.Start(BackupRequest{})
 	if _, ok := errors.AsType[*types.ConflictError](err); !ok {
 		t.Fatalf("Start error = %T %[1]v, want *types.ConflictError", err)
+	}
+}
+
+// A scheduled Run and a manual Start share one counter, and the status names
+// the run that produced it. pg_dump is unset, so each run fails fast.
+func TestBackupStatusRunIDsCoverScheduledAndManualRuns(t *testing.T) {
+	svc := newTestBackupService(t)
+	svc.notify = notify.New(svc.config)
+
+	_ = svc.Run(t.Context(), BackupRequest{})
+	if st := svc.Status(); st.RunID != 1 || st.CompletedRunID != 1 {
+		t.Fatalf("after Run: run_id=%d completed_run_id=%d, want 1 and 1", st.RunID, st.CompletedRunID)
+	}
+
+	runID, err := svc.Start(BackupRequest{})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	svc.runner.Close() // waits for the background run
+	if st := svc.Status(); runID != 2 || st.RunID != 2 || st.CompletedRunID != 2 {
+		t.Fatalf("after Start: returned %d, run_id=%d completed_run_id=%d, want 2", runID, st.RunID, st.CompletedRunID)
+	}
+}
+
+// While a run is active, completed_run_id still names the previous run.
+func TestBackupStatusCompletedRunIDWaitsForRunEnd(t *testing.T) {
+	svc := newTestBackupService(t)
+	if !svc.runner.TryStart() {
+		t.Fatal("TryStart returned false")
+	}
+	defer svc.runner.Done()
+
+	svc.setStatusStarted()
+	if st := svc.Status(); !st.Running || st.RunID != 1 || st.CompletedRunID != 0 {
+		t.Fatalf("during run: running=%v run_id=%d completed_run_id=%d, want true, 1, 0",
+			st.Running, st.RunID, st.CompletedRunID)
 	}
 }
 
