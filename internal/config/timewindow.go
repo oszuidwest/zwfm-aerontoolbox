@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -15,16 +16,14 @@ import (
 // whose end is earlier than its start wraps around midnight and belongs to the
 // day it starts on (e.g. "fri 22:00-02:00" is active until Saturday 02:00).
 //
-// An unconfigured window (zero value) is always active; this is distinct from a
-// parsed window - equal start and end would otherwise be ambiguous, so it is
-// rejected at parse time and operators must omit the field for always-active
-// behavior.
+// An unconfigured window (zero value) is always active. Equal start and end
+// would be ambiguous, so they are rejected at parse time.
 type TimeWindow struct {
 	spans []timeSpan
 }
 
-// timeSpan is one HH:MM-HH:MM window on the weekdays set in days
-// (bit n = time.Weekday(n)).
+// timeSpan is one window on the weekdays set in days (bit n = time.Weekday(n)).
+// endMin runs past 24*60 when the window crosses midnight.
 type timeSpan struct {
 	days             uint8
 	startMin, endMin int
@@ -32,14 +31,11 @@ type timeSpan struct {
 
 const allDays uint8 = 1<<7 - 1
 
-// weekdayNames lists day names Monday first so "sat-sun" is a plain range.
-var weekdayNames = []string{"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
+// weekdayNames is indexed by time.Weekday.
+var weekdayNames = []string{"sun", "mon", "tue", "wed", "thu", "fri", "sat"}
 
-// ParseTimeWindow parses a comma-separated list of "[days ]HH:MM-HH:MM"
-// entries. An empty string returns an unconfigured (always-active) window with
-// no error. Equal start and end minutes are rejected - operators should omit
-// the field instead, since there is no sensible interpretation of a
-// zero-length window.
+// ParseTimeWindow parses the syntax described on TimeWindow. An empty string
+// returns an unconfigured (always-active) window with no error.
 func ParseTimeWindow(s string) (TimeWindow, error) {
 	if s == "" {
 		return TimeWindow{}, nil
@@ -77,38 +73,32 @@ func parseSpan(s string) (timeSpan, error) {
 		return timeSpan{}, err
 	}
 	if span.startMin == span.endMin {
-		return timeSpan{}, fmt.Errorf("invalid window %q: start and end are equal; omit the field for always-active", s)
+		return timeSpan{}, fmt.Errorf("invalid window %q: start and end are equal (an empty active_window means all day, every day)", s)
+	}
+	if span.endMin < span.startMin {
+		span.endMin += 24 * 60
 	}
 	return span, nil
 }
 
-// parseDays parses "mon" or a range such as "mon-fri" or "fri-mon" into a
-// time.Weekday bit mask.
+// parseDays parses "mon" or a range such as "mon-fri" or "sat-sun" (ranges
+// wrap past Saturday) into a time.Weekday bit mask.
 func parseDays(s string) (uint8, error) {
 	from, to, isRange := strings.Cut(strings.ToLower(s), "-")
 	if !isRange {
 		to = from
 	}
-	start, end := indexOfDay(from), indexOfDay(to)
+	start, end := slices.Index(weekdayNames, from), slices.Index(weekdayNames, to)
 	if start < 0 || end < 0 {
 		return 0, fmt.Errorf("invalid days %q, expected mon..sun or a range like mon-fri", s)
 	}
 	var mask uint8
-	for i := start; ; i = (i + 1) % 7 {
-		mask |= 1 << ((i + 1) % 7) // Monday-first index to time.Weekday
-		if i == end {
+	for d := start; ; d = (d + 1) % 7 {
+		mask |= 1 << d
+		if d == end {
 			return mask, nil
 		}
 	}
-}
-
-func indexOfDay(name string) int {
-	for i, n := range weekdayNames {
-		if n == name {
-			return i
-		}
-	}
-	return -1
 }
 
 func parseHHMM(s string) (int, error) {
@@ -137,16 +127,9 @@ func (w TimeWindow) Active(t time.Time) bool {
 		return true
 	}
 	cur := t.Hour()*60 + t.Minute()
-	today := uint8(1) << t.Weekday()
-	yesterday := uint8(1) << ((t.Weekday() + 6) % 7)
+	today, yesterday := uint8(1)<<t.Weekday(), uint8(1)<<((t.Weekday()+6)%7)
 	for _, s := range w.spans {
-		if s.startMin < s.endMin {
-			if s.days&today != 0 && cur >= s.startMin && cur < s.endMin {
-				return true
-			}
-			continue
-		}
-		if (s.days&today != 0 && cur >= s.startMin) || (s.days&yesterday != 0 && cur < s.endMin) {
+		if (s.days&today != 0 && cur >= s.startMin && cur < s.endMin) || (s.days&yesterday != 0 && cur+24*60 < s.endMin) {
 			return true
 		}
 	}

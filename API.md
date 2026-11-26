@@ -658,4 +658,4 @@ Mogelijke fouten:
 
 Cron-schema's en `active_window` gebruiken de lokale tijdzone van het proces. Stel in Docker daarom `TZ`, bijvoorbeeld `TZ=Europe/Amsterdam`.
 
-`active_window` is een venster als `06:00-22:00`, of een lijst per weekdag, gescheiden door komma's: `mon-fri 06:25-21:00, sat-sun 07:25-18:00`. Dagen zijn `mon` tot en met `sun`, los of als reeks. Zonder dagen geldt een venster voor elke dag. Een venster over middernacht, zoals `fri 22:00-02:00`, hoort bij de dag waarop het begint.
+`active_window` is een venster als `06:00-22:00`, of een lijst per weekdag, gescheiden door komma's: `mon-fri 06:25-21:00, sat-sun 07:25-18:00`. Dagen zijn `mon` tot en met `sun`, los of als reeks. Een reeks telt beide dagen mee en mag doorlopen, zoals `fri-mon`. Zonder dagen geldt een venster voor elke dag. De begintijd valt binnen het venster, de eindtijd niet. Een venster over middernacht, zoals `fri 22:00-02:00`, hoort bij de dag waarop het begint.

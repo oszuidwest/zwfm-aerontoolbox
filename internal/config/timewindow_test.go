@@ -57,6 +57,10 @@ func TestParseTimeWindow_Cases(t *testing.T) {
 		{name: "equal start and end", input: "12:00-12:00", wantErr: true},
 		{name: "midnight equal", input: "00:00-00:00", wantErr: true},
 		{name: "trailing junk in time", input: "06:00:00-22:00", wantErr: true},
+		{name: "unknown day", input: "funday 06:00-07:00", wantErr: true},
+		{name: "unknown range end", input: "mon-xyz 06:00-07:00", wantErr: true},
+		{name: "days without time", input: "mon-fri", wantErr: true},
+		{name: "trailing comma", input: "06:00-07:00,", wantErr: true},
 	}
 
 	for _, tc := range tests {
@@ -113,11 +117,6 @@ func TestParseTimeWindow_Weekdays(t *testing.T) {
 		}
 	}
 
-	for _, bad := range []string{"funday 06:00-07:00", "mon-xyz 06:00-07:00", "mon-fri", "06:00-07:00,"} {
-		if _, err := ParseTimeWindow(bad); err == nil {
-			t.Errorf("ParseTimeWindow(%q) = nil error, want error", bad)
-		}
-	}
 }
 
 func TestFileMonitorValidation_ActiveWindow(t *testing.T) {
