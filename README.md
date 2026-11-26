@@ -53,7 +53,7 @@ Back-ups buiten Docker hebben `pg_dump` en `pg_restore` nodig, van dezelfde of e
 
 ## Configuratie
 
-Kopieer [`config.example.json`](config.example.json) naar `config.json`. Het bestand heeft deze secties:
+Kopieer [`config.example.json`](config.example.json) naar `config.json` en pas de instellingen aan je eigen omgeving aan. Het bestand heeft deze secties:
 
 | Sectie | Doel |
 |---|---|

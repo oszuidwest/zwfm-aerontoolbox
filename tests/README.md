@@ -63,7 +63,7 @@ go build -o zwfm-aerontoolbox .
 
 ## Testconfiguratie
 
-De tests gebruiken PostgreSQL 17 op poort 5433, in CI en lokaal. De container koppelt 5433 aan 5432. De API-sleutels zijn `test-api-key-12345` en `another-test-key-67890`.
+De tests gebruiken PostgreSQL 17 op poort 5433, in CI en lokaal. De container koppelt 5433 aan 5432. CI gebruikt de API-sleutels `test-api-key-12345` en `another-test-key-67890`.
 
 ## Benodigdheden voor lokaal testen
 

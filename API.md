@@ -285,7 +285,7 @@ Response voor een track:
 
 Bij een artiest ontbreekt `track`. Fouten zijn onder meer `400` (ongeldige invoer), `404` (onbekend ID), `408` (body niet op tijd gelezen) en `413` (JSON-body te groot).
 
-Alleen JPEG en PNG worden geaccepteerd. Een URL moet HTTP of HTTPS gebruiken. Een afbeelding groter dan de doelafmetingen wordt verkleind met behoud van verhouding en dan als JPEG gecodeerd. Is die JPEG niet kleiner dan het origineel, dan worden de oorspronkelijke bytes opgeslagen. Met `image.reject_smaller` worden afbeeldingen kleiner dan de doelafmetingen geweigerd.
+Alleen JPEG en PNG worden geaccepteerd. Een URL moet HTTP of HTTPS gebruiken. Een afbeelding van precies de doelafmetingen wordt ongewijzigd opgeslagen. Een grotere afbeelding wordt eerst verkleind met behoud van verhouding. Daarna wordt de afbeelding als JPEG gecodeerd. Is die JPEG niet kleiner dan het origineel, dan worden de oorspronkelijke bytes opgeslagen. Met `image.reject_smaller` worden afbeeldingen kleiner dan de doelafmetingen geweigerd.
 
 ### Afbeelding verwijderen
 
