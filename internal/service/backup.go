@@ -221,7 +221,7 @@ func (s *BackupService) buildPgDumpArgs(compression int) []string {
 		"--host=" + s.config.Database.Host,
 		"--port=" + s.config.Database.Port,
 		"--username=" + s.config.Database.User,
-		"--dbname=" + s.config.Database.Name,
+		"--dbname=" + s.config.Database.DBNameConnString(),
 		"--schema=" + s.config.Database.Schema,
 		"--no-password",
 	}
