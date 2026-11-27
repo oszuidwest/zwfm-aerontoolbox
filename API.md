@@ -66,15 +66,15 @@ Bij een synchrone `5xx`-fout gaan interne details naar de log en krijgt de clien
 
 ### Achtergrondtaken pollen
 
-Bestandscontroles geven een `run_id` terug. Poll het opgegeven statusendpoint tot:
+Bestandscontroles en back-ups geven een `run_id` terug. Poll het opgegeven statusendpoint tot:
 
 ```text
 completed_run_id >= run_id && running == false
 ```
 
-Bij `completed_run_id == run_id` hoort het resultaat bij jouw run. Een hogere waarde betekent dat een latere geplande run het al heeft vervangen.
+Bij `completed_run_id == run_id` hoort het resultaat bij jouw run. Een hogere waarde betekent dat een latere run, bijvoorbeeld een geplande, het al heeft vervangen.
 
-Een back-up geeft geen `run_id`. Poll tot `running` `false` is. De status toont alleen de laatste back-up: start er intussen een geplande back-up, dan zie je de uitkomst daarvan en niet die van jouw aanvraag.
+Handmatige en geplande back-ups delen één teller. Start er na jouw back-up een geplande, dan krijgt die een hogere `run_id`. De tellers staan alleen in het geheugen en beginnen na een herstart weer bij `0`.
 
 ## Endpointoverzicht
 
@@ -406,6 +406,7 @@ Start een back-up op de achtergrond. De body is optioneel:
   "success": true,
   "data": {
     "message": "Backup started in background",
+    "run_id": 7,
     "check": "/api/db/backup/status"
   }
 }
@@ -418,6 +419,8 @@ Een ongeldige compressiewaarde geeft `400`, een tweede gelijktijdige aanvraag `4
 | Veld | Betekenis |
 |---|---|
 | `running` | Of een back-up draait |
+| `run_id` | Laatst gestarte back-up; `0` vóór de eerste |
+| `completed_run_id` | Laatst afgeronde back-up; `0` vóór de eerste |
 | `started_at`, `ended_at` | Start- en eventuele eindtijd |
 | `success` | Uitkomst; betekenisvol zodra `ended_at` er is |
 | `error` | Aanwezig na een mislukking |

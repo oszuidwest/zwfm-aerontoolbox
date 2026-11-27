@@ -34,13 +34,15 @@ func (s *Server) handleCreateBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.service.Backup.Start(req); err != nil {
+	runID, err := s.service.Backup.Start(req)
+	if err != nil {
 		respondServiceError(w, err)
 		return
 	}
 
 	respondJSON(w, http.StatusAccepted, AsyncStartResponse{
 		Message: "Backup started in background",
+		RunID:   runID,
 		Check:   "/api/db/backup/status",
 	})
 }

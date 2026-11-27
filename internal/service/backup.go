@@ -37,19 +37,26 @@ type BackupService struct {
 	pgDumpPath    string
 	pgRestorePath string
 
-	statusMu sync.RWMutex
-	status   *BackupStatus
+	// statusMu guards status and both run IDs. completedRunID is bumped in
+	// setStatusDone, so it only names a run whose outcome is final.
+	statusMu       sync.RWMutex
+	status         *BackupStatus
+	runID          uint64
+	completedRunID uint64
 }
 
-// BackupStatus is the latest backup run snapshot.
+// BackupStatus is the latest backup run snapshot. Manual and scheduled
+// backups share one run counter; the polling rule matches the file checks.
 type BackupStatus struct {
-	Running   bool          `json:"running"`
-	StartedAt *time.Time    `json:"started_at,omitempty"`
-	EndedAt   *time.Time    `json:"ended_at,omitempty"`
-	Success   bool          `json:"success"`
-	Error     string        `json:"error,omitempty"`
-	Filename  string        `json:"filename,omitempty"`
-	S3Sync    *S3SyncStatus `json:"s3_sync,omitempty"`
+	Running        bool          `json:"running"`
+	RunID          uint64        `json:"run_id"`
+	CompletedRunID uint64        `json:"completed_run_id"`
+	StartedAt      *time.Time    `json:"started_at,omitempty"`
+	EndedAt        *time.Time    `json:"ended_at,omitempty"`
+	Success        bool          `json:"success"`
+	Error          string        `json:"error,omitempty"`
+	Filename       string        `json:"filename,omitempty"`
+	S3Sync         *S3SyncStatus `json:"s3_sync,omitempty"`
 }
 
 // S3SyncStatus is the latest remote sync result for a backup.
@@ -365,22 +372,22 @@ func (s *BackupService) executePgDump(
 	return fileInfo, duration, nil
 }
 
-// Start initiates a database backup in the background. Returns an error if
-// validation fails or a backup is already running.
-func (s *BackupService) Start(req BackupRequest) error {
+// Start initiates a database backup in the background and returns its run ID.
+// Returns an error if validation fails or a backup is already running.
+func (s *BackupService) Start(req BackupRequest) (uint64, error) {
 	if err := s.checkEnabled(); err != nil {
-		return err
+		return 0, err
 	}
 	if _, err := s.compressionLevel(req.Compression); err != nil {
-		return err
+		return 0, err
 	}
 
 	if !s.runner.TryStart() {
-		return types.NewConflictError("backup", "backup already in progress")
+		return 0, types.NewConflictError("backup", "backup already in progress")
 	}
 
 	// Initialize status before spawning the goroutine to avoid a race.
-	s.setStatusStarted()
+	runID := s.setStatusStarted()
 
 	s.runner.Go(func() {
 		ctx, cancel := s.runner.Context(s.config.Backup.GetTimeout())
@@ -389,7 +396,7 @@ func (s *BackupService) Start(req BackupRequest) error {
 		_ = s.execute(ctx, req) // Error tracked in status
 	})
 
-	return nil
+	return runID, nil
 }
 
 // Run executes a database backup synchronously.
@@ -491,12 +498,13 @@ func (s *BackupService) Status() *BackupStatus {
 	s.statusMu.RLock()
 	defer s.statusMu.RUnlock()
 
-	if s.status == nil {
-		return &BackupStatus{Running: s.runner.IsRunning()}
+	var status BackupStatus
+	if s.status != nil {
+		status = *s.status
 	}
-
-	status := *s.status
 	status.Running = s.runner.IsRunning()
+	status.RunID = s.runID
+	status.CompletedRunID = s.completedRunID
 	return &status
 }
 
@@ -514,11 +522,13 @@ func (s *BackupService) uploadBackupToS3(ctx context.Context, filename string) e
 	return s.s3.upload(ctx, filename, file)
 }
 
-func (s *BackupService) setStatusStarted() {
+func (s *BackupService) setStatusStarted() uint64 {
 	s.statusMu.Lock()
 	defer s.statusMu.Unlock()
 	now := time.Now()
 	s.status = &BackupStatus{StartedAt: &now}
+	s.runID++
+	return s.runID
 }
 
 func (s *BackupService) setStatusFilename(filename string) {
@@ -537,6 +547,7 @@ func (s *BackupService) setStatusDone(success bool, filename, errMsg string) {
 		s.status = &BackupStatus{StartedAt: &now}
 	}
 	s.status.EndedAt = &now
+	s.completedRunID = s.runID // the runner slot is still held, so s.runID is this run
 	s.status.Success = success
 	s.status.Error = errMsg
 	if filename != "" {

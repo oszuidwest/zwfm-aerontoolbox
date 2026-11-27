@@ -16,9 +16,12 @@ type Response struct {
 	Error   string `json:"error,omitempty"`
 }
 
-// AsyncStartResponse points clients to the status endpoint for async work.
+// AsyncStartResponse is returned when async work starts. RunID is the
+// monotonic ID of the run just started; clients poll Check until
+// completed_run_id >= RunID && running == false.
 type AsyncStartResponse struct {
 	Message string `json:"message"`
+	RunID   uint64 `json:"run_id"`
 	Check   string `json:"check"`
 }
 
