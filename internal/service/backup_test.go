@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -184,12 +185,12 @@ func TestBackupStatusCompletedRunIDWaitsForRunEnd(t *testing.T) {
 
 // newRunnableBackupService returns a service whose Run succeeds: pg_dump and
 // pg_restore are shell stubs, and S3 uploads go to store.
-func newRunnableBackupService(t *testing.T, store backupObjectStore) *BackupService {
+func newRunnableBackupService(t *testing.T, store backupObjectStore, opts ...backupTestOption) *BackupService {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("test uses a POSIX shell as pg_dump")
 	}
-	svc := newTestBackupService(t, withStore(store))
+	svc := newTestBackupService(t, append(opts, withStore(store))...)
 	svc.notify = notify.New(svc.config)
 	svc.pgRestorePath = writePgRestoreStub(t)
 	svc.pgDumpPath = filepath.Join(t.TempDir(), "pg_dump")
@@ -241,10 +242,11 @@ func TestBackupS3SyncStatusIgnoresEarlierRun(t *testing.T) {
 	}
 }
 
-// Three overlapping backups with max_backups 1: each cleanup deletes the
-// previous file while uploads are still queued. Every upload must still reach
-// S3, in run order, and each S3 delete must come after the upload of its file,
-// or the upload recreates the object after the delete and it stays in S3.
+// Two backups in a row with max_backups 1 while the first upload hangs and then
+// fails: the second run's cleanup deletes file 1 and the test deletes file 2
+// while both uploads are queued. Both uploads must still reach S3, in run order,
+// and each S3 delete must come after the upload of its file, or the upload
+// creates the object after the delete and it stays in S3.
 func TestBackupS3UploadsAndDeletesRunInOrder(t *testing.T) {
 	var mu sync.Mutex
 	var events []string
@@ -252,32 +254,31 @@ func TestBackupS3UploadsAndDeletesRunInOrder(t *testing.T) {
 	started, release := make(chan struct{}), make(chan struct{})
 	releaseUpload := sync.OnceFunc(func() { close(release) })
 	defer releaseUpload() // a failed check must not leave the upload blocking Close
-	uploads := 0
+	var uploads atomic.Int32
 	svc := newRunnableBackupService(t, &fakeBackupObjectStore{
 		uploadFunc: func(filename string) error {
-			mu.Lock()
-			uploads++
-			n := uploads
-			mu.Unlock()
-			if n == 1 {
+			first := uploads.Add(1) == 1
+			if first {
 				close(started)
 				<-release
 			}
 			record("upload " + filename)
+			if first {
+				return errors.New("first upload fails") // a failed upload must free the line too
+			}
 			return nil
 		},
 		deleteFunc: func(_ context.Context, filename string) error {
 			record("delete " + filename)
 			return nil
 		},
-	})
+	}, withoutRootCleanup()) // closed below, so a stuck line fails fast instead of hanging cleanup
 	svc.config.Backup.MaxBackups = 1
 
 	var files []string
-	for i := range 3 {
-		if i > 0 {
-			time.Sleep(1100 * time.Millisecond) // backup filenames have one-second resolution
-		}
+	base := time.Now()
+	for i := range 2 {
+		pinNow(t, base.Add(time.Duration(i)*time.Second)) // backup filenames have one-second resolution
 		if err := svc.Run(t.Context(), BackupRequest{}); err != nil {
 			t.Fatalf("Run %d: %v", i+1, err)
 		}
@@ -286,9 +287,14 @@ func TestBackupS3UploadsAndDeletesRunInOrder(t *testing.T) {
 			mustReceive(t, started, "first upload start")
 		}
 	}
+	if err := svc.Delete(files[1]); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
 	time.Sleep(50 * time.Millisecond) // room for an upload or delete that skips the line
 	releaseUpload()
-	svc.runner.Close()
+	closed := make(chan struct{})
+	go func() { svc.Close(); close(closed) }()
+	mustReceive(t, closed, "queued S3 work to finish")
 
 	var uploaded []string
 	for _, e := range events {
@@ -299,7 +305,7 @@ func TestBackupS3UploadsAndDeletesRunInOrder(t *testing.T) {
 	if !slices.Equal(uploaded, files) {
 		t.Fatalf("uploads = %v, want %v (events %v)", uploaded, files, events)
 	}
-	for _, f := range files[:2] {
+	for _, f := range files {
 		if up, del := slices.Index(events, "upload "+f), slices.Index(events, "delete "+f); del < up {
 			t.Fatalf("delete of %s at %d, upload at %d (events %v)", f, del, up, events)
 		}

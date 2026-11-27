@@ -44,11 +44,13 @@ type BackupService struct {
 	runID          uint64
 	completedRunID uint64
 
-	// uploadsDone is closed when the last queued S3 upload has finished. Each
-	// upload waits for the one before it, so results are reported in run order,
-	// and S3 deletes wait for it, so a delete cannot overtake an upload.
-	uploadMu    sync.Mutex
-	uploadsDone chan struct{}
+	// S3 uploads run one after another in run order: each waits for lastUpload,
+	// the done channel of the upload before it. uploading holds that channel per
+	// file until the upload has reported, so an S3 delete of the same file waits
+	// for it instead of overtaking it.
+	uploadMu   sync.Mutex
+	lastUpload chan struct{}
+	uploading  map[string]chan struct{}
 }
 
 // BackupStatus is the latest backup run snapshot. Manual and scheduled
@@ -323,7 +325,7 @@ func (s *BackupService) validateManagedBackupFile(ctx context.Context, filename 
 
 // generateBackupFilename returns a managed timestamped .dump filename.
 func generateBackupFilename() string {
-	timestamp := time.Now().Format("2006-01-02-150405")
+	timestamp := nowFunc().Format("2006-01-02-150405")
 	return fmt.Sprintf("%s%s%s", backupPrefix, timestamp, backupSuffix)
 }
 
@@ -477,12 +479,13 @@ func (s *BackupService) execute(ctx context.Context, req BackupRequest, runID ui
 	// execute() always runs within an active TryStart()+Go() or TryStart()+Done()
 	// body, so Close() is already blocking on the primary WaitGroup slot.
 	if s.s3 != nil {
-		// Open the file before queueing: a later backup's cleanup may remove it
-		// while this upload waits, and an open file stays readable.
+		// Queue first, so a delete that misses this upload already removed the
+		// file and the open fails. Open before waiting: a later cleanup may
+		// remove the file while this upload waits, and an open file stays readable.
+		prev, done := s.queueUpload(filename)
 		file, _, openErr := s.OpenFile(filename)
-		prev, done := s.queueUpload()
 		s.runner.GoChild(func() {
-			defer close(done)
+			defer s.finishUpload(filename, done)
 			if prev != nil {
 				<-prev
 			}
@@ -526,25 +529,42 @@ func (s *BackupService) Status() *BackupStatus {
 	return &status
 }
 
-// queueUpload puts a new upload at the end of the line. The caller waits for
-// prev (nil when the line is empty) before uploading and closes done after.
-func (s *BackupService) queueUpload() (prev <-chan struct{}, done chan struct{}) {
+// queueUpload puts the upload of filename at the end of the line. The caller
+// waits for prev (nil for the first upload) before uploading, and calls
+// finishUpload after reporting its result, also when the upload failed.
+func (s *BackupService) queueUpload(filename string) (prev <-chan struct{}, done chan struct{}) {
 	s.uploadMu.Lock()
 	defer s.uploadMu.Unlock()
-	prev, done = s.uploadsDone, make(chan struct{})
-	s.uploadsDone = done
+	prev, done = s.lastUpload, make(chan struct{})
+	s.lastUpload = done
+	if s.uploading == nil {
+		s.uploading = make(map[string]chan struct{})
+	}
+	s.uploading[filename] = done
 	return prev, done
 }
 
-// waitForUploads blocks until every upload queued so far has finished.
-func (s *BackupService) waitForUploads() {
+// finishUpload lets the next upload and any waiting delete of filename go on.
+func (s *BackupService) finishUpload(filename string, done chan struct{}) {
+	close(done)
 	s.uploadMu.Lock()
-	last := s.uploadsDone
-	s.uploadMu.Unlock()
-	if last != nil {
-		<-last
+	defer s.uploadMu.Unlock()
+	if s.uploading[filename] == done {
+		delete(s.uploading, filename)
 	}
 }
+
+// waitForUpload blocks until a queued or running upload of filename is done.
+func (s *BackupService) waitForUpload(filename string) {
+	s.uploadMu.Lock()
+	ch := s.uploading[filename]
+	s.uploadMu.Unlock()
+	if ch != nil {
+		<-ch
+	}
+}
+
+// uploadBackupToS3 uploads file under filename and closes it.
 
 func (s *BackupService) uploadBackupToS3(ctx context.Context, filename string, file *os.File) error {
 	defer func() {
@@ -715,7 +735,7 @@ func (s *BackupService) deleteDuringRun(filename string) error {
 // an orphaned remote object (the local copy is already gone), so it is logged at
 // Error for parity with the upload path.
 func (s *BackupService) deleteS3Backup(filename string) {
-	s.waitForUploads()
+	s.waitForUpload(filename)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
