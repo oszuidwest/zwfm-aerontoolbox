@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
-	"sync"
 	"testing"
 	"time"
 
@@ -181,20 +180,13 @@ func TestBackupStatusCompletedRunIDWaitsForRunEnd(t *testing.T) {
 	}
 }
 
-// An S3 upload that ends after the next run started must not write its result
-// into that run's status.
-func TestBackupS3SyncStatusIgnoresEarlierRun(t *testing.T) {
+// newRunnableBackupService returns a service whose Run succeeds: pg_dump and
+// pg_restore are shell stubs, and S3 uploads go to store.
+func newRunnableBackupService(t *testing.T, store backupObjectStore) *BackupService {
+	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("test uses a POSIX shell as pg_dump")
 	}
-	started, release := make(chan struct{}), make(chan struct{})
-	releaseUpload := sync.OnceFunc(func() { close(release) })
-	defer releaseUpload() // a failed check must not leave the upload blocking Close
-	store := &fakeBackupObjectStore{uploadFunc: func() error {
-		close(started)
-		<-release
-		return nil
-	}}
 	svc := newTestBackupService(t, withStore(store))
 	svc.notify = notify.New(svc.config)
 	svc.pgRestorePath = writePgRestoreStub(t)
@@ -203,18 +195,44 @@ func TestBackupS3SyncStatusIgnoresEarlierRun(t *testing.T) {
 	if err := os.WriteFile(svc.pgDumpPath, []byte(script), 0o700); err != nil { //nolint:gosec // G306: test tools must be executable.
 		t.Fatalf("write pg_dump helper: %v", err)
 	}
+	return svc
+}
+
+// A run shows its S3 sync as pending while it uploads, then its own result.
+func TestBackupS3SyncStatusRecordsOwnRun(t *testing.T) {
+	var svc *BackupService
+	var pending *S3SyncStatus
+	svc = newRunnableBackupService(t, &fakeBackupObjectStore{uploadFunc: func() error {
+		pending = svc.Status().S3Sync
+		return errors.New("boom")
+	}})
 
 	if err := svc.Run(t.Context(), BackupRequest{}); err != nil {
-		t.Fatalf("first Run: %v", err)
+		t.Fatalf("Run: %v", err)
 	}
-	mustReceive(t, started, "first run's S3 upload start")
+	svc.runner.Close() // waits for the upload
 
-	svc.pgDumpPath = filepath.Join(t.TempDir(), "missing") // the second run fails before its upload
-	if err := svc.Run(t.Context(), BackupRequest{}); err == nil {
-		t.Fatal("second Run succeeded, want a pg_dump error")
+	if pending == nil || *pending != (S3SyncStatus{}) {
+		t.Fatalf("s3_sync during upload = %+v, want pending", pending)
 	}
-	releaseUpload()
-	svc.runner.Close() // waits for the first upload
+	if st := svc.Status(); st.S3Sync == nil || *st.S3Sync != (S3SyncStatus{Error: "boom"}) {
+		t.Fatalf("s3_sync = %+v, want the failed upload", st.S3Sync)
+	}
+}
+
+// An S3 upload that ends after the next run started must not write its result
+// into that run's status.
+func TestBackupS3SyncStatusIgnoresEarlierRun(t *testing.T) {
+	var svc *BackupService
+	svc = newRunnableBackupService(t, &fakeBackupObjectStore{uploadFunc: func() error {
+		svc.setStatusStarted() // act as a newer run: reset the status and bump the run ID
+		return nil
+	}})
+
+	if err := svc.Run(t.Context(), BackupRequest{}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	svc.runner.Close() // waits for the upload
 
 	if st := svc.Status(); st.RunID != 2 || st.S3Sync != nil {
 		t.Fatalf("run_id=%d s3_sync=%+v, want run 2 without an S3 result", st.RunID, st.S3Sync)

@@ -555,8 +555,8 @@ func (s *BackupService) setStatusDone(success bool, filename, errMsg string) {
 	}
 }
 
-// setS3SyncStatus records the upload result of run runID. The upload can end
-// after a newer run has started; its result is then dropped.
+// setS3SyncStatus records the S3 state of run runID, pending or final. The
+// upload can end after a newer run has started; its result is then dropped.
 func (s *BackupService) setS3SyncStatus(runID uint64, synced bool, errMsg string) {
 	s.statusMu.Lock()
 	defer s.statusMu.Unlock()
