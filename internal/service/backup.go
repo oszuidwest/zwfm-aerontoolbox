@@ -393,7 +393,7 @@ func (s *BackupService) Start(req BackupRequest) (uint64, error) {
 		ctx, cancel := s.runner.Context(s.config.Backup.GetTimeout())
 		defer cancel()
 
-		_ = s.execute(ctx, req) // Error tracked in status
+		_ = s.execute(ctx, req, runID) // Error tracked in status
 	})
 
 	return runID, nil
@@ -406,14 +406,14 @@ func (s *BackupService) Run(ctx context.Context, req BackupRequest) error {
 	}
 	defer s.runner.Done()
 
-	s.setStatusStarted()
+	runID := s.setStatusStarted()
 
-	return s.execute(ctx, req)
+	return s.execute(ctx, req, runID)
 }
 
 // execute creates a backup and starts optional S3 synchronization.
-// The caller must publish the started status first.
-func (s *BackupService) execute(ctx context.Context, req BackupRequest) error {
+// The caller must publish the started status first and pass its run ID.
+func (s *BackupService) execute(ctx context.Context, req BackupRequest, runID uint64) error {
 	if err := s.checkEnabled(); err != nil {
 		s.setStatusDone(false, "", err.Error())
 		return err
@@ -457,7 +457,7 @@ func (s *BackupService) execute(ctx context.Context, req BackupRequest) error {
 
 	// Set S3 sync status before completing to prevent race condition in status reporting.
 	if s.s3 != nil {
-		s.setS3SyncStatus(false, "")
+		s.setS3SyncStatus(runID, false, "")
 	}
 
 	s.setStatusDone(true, filename, "")
@@ -477,10 +477,10 @@ func (s *BackupService) execute(ctx context.Context, req BackupRequest) error {
 
 			if err := s.uploadBackupToS3(uploadCtx, filename); err != nil {
 				slog.Error("S3 synchronization failed", "filename", filename, "error", err)
-				s.setS3SyncStatus(false, err.Error())
+				s.setS3SyncStatus(runID, false, err.Error())
 				s.notify.NotifyS3SyncResult(filename, &notify.S3SyncResult{Synced: false, Error: err.Error()})
 			} else {
-				s.setS3SyncStatus(true, "")
+				s.setS3SyncStatus(runID, true, "")
 				s.notify.NotifyS3SyncResult(filename, &notify.S3SyncResult{Synced: true})
 			}
 		})
@@ -555,10 +555,12 @@ func (s *BackupService) setStatusDone(success bool, filename, errMsg string) {
 	}
 }
 
-func (s *BackupService) setS3SyncStatus(synced bool, errMsg string) {
+// setS3SyncStatus records the S3 state of run runID, pending or final. The
+// upload can end after a newer run has started; its result is then dropped.
+func (s *BackupService) setS3SyncStatus(runID uint64, synced bool, errMsg string) {
 	s.statusMu.Lock()
 	defer s.statusMu.Unlock()
-	if s.status != nil {
+	if s.status != nil && s.runID == runID {
 		s.status.S3Sync = &S3SyncStatus{Synced: synced, Error: errMsg}
 	}
 }
