@@ -20,11 +20,15 @@ import (
 const testBackupFilename = "aeron-backup-2026-01-02-030405.dump"
 
 type fakeBackupObjectStore struct {
+	uploadFunc func() error
 	deleteFunc func(context.Context, string) error
 }
 
 func (f *fakeBackupObjectStore) upload(context.Context, string, io.Reader) error {
-	return nil
+	if f.uploadFunc == nil {
+		return nil
+	}
+	return f.uploadFunc()
 }
 
 func (f *fakeBackupObjectStore) delete(ctx context.Context, filename string) error {
@@ -173,6 +177,44 @@ func TestBackupStatusCompletedRunIDWaitsForRunEnd(t *testing.T) {
 	if st := svc.Status(); !st.Running || st.RunID != 1 || st.CompletedRunID != 0 {
 		t.Fatalf("during run: running=%v run_id=%d completed_run_id=%d, want true, 1, 0",
 			st.Running, st.RunID, st.CompletedRunID)
+	}
+}
+
+// An S3 upload that ends after the next run started must not write its result
+// into that run's status.
+func TestBackupS3SyncStatusIgnoresEarlierRun(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test uses a POSIX shell as pg_dump")
+	}
+	started, release := make(chan struct{}), make(chan struct{})
+	store := &fakeBackupObjectStore{uploadFunc: func() error {
+		close(started)
+		<-release
+		return nil
+	}}
+	svc := newTestBackupService(t, withStore(store))
+	svc.notify = notify.New(svc.config)
+	svc.pgRestorePath = writePgRestoreStub(t)
+	svc.pgDumpPath = filepath.Join(t.TempDir(), "pg_dump")
+	script := "#!/bin/sh\nfor a; do case $a in --file=*) printf backup-data > \"${a#--file=}\";; esac; done\n"
+	if err := os.WriteFile(svc.pgDumpPath, []byte(script), 0o700); err != nil { //nolint:gosec // G306: test tools must be executable.
+		t.Fatalf("write pg_dump helper: %v", err)
+	}
+
+	if err := svc.Run(t.Context(), BackupRequest{}); err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+	mustReceive(t, started, "first run's S3 upload start")
+
+	svc.pgDumpPath = filepath.Join(t.TempDir(), "missing") // the second run fails before its upload
+	if err := svc.Run(t.Context(), BackupRequest{}); err == nil {
+		t.Fatal("second Run succeeded, want a pg_dump error")
+	}
+	close(release)
+	svc.runner.Close() // waits for the first upload
+
+	if st := svc.Status(); st.RunID != 2 || st.S3Sync != nil {
+		t.Fatalf("run_id=%d s3_sync=%+v, want run 2 without an S3 result", st.RunID, st.S3Sync)
 	}
 }
 
