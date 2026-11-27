@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -187,6 +188,8 @@ func TestBackupS3SyncStatusIgnoresEarlierRun(t *testing.T) {
 		t.Skip("test uses a POSIX shell as pg_dump")
 	}
 	started, release := make(chan struct{}), make(chan struct{})
+	releaseUpload := sync.OnceFunc(func() { close(release) })
+	defer releaseUpload() // a failed check must not leave the upload blocking Close
 	store := &fakeBackupObjectStore{uploadFunc: func() error {
 		close(started)
 		<-release
@@ -210,7 +213,7 @@ func TestBackupS3SyncStatusIgnoresEarlierRun(t *testing.T) {
 	if err := svc.Run(t.Context(), BackupRequest{}); err == nil {
 		t.Fatal("second Run succeeded, want a pg_dump error")
 	}
-	close(release)
+	releaseUpload()
 	svc.runner.Close() // waits for the first upload
 
 	if st := svc.Status(); st.RunID != 2 || st.S3Sync != nil {
