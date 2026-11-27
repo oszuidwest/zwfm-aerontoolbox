@@ -43,6 +43,12 @@ type BackupService struct {
 	status         *BackupStatus
 	runID          uint64
 	completedRunID uint64
+
+	// uploadsDone is closed when the last queued S3 upload has finished. Each
+	// upload waits for the one before it, so results are reported in run order,
+	// and S3 deletes wait for it, so a delete cannot overtake an upload.
+	uploadMu    sync.Mutex
+	uploadsDone chan struct{}
 }
 
 // BackupStatus is the latest backup run snapshot. Manual and scheduled
@@ -471,11 +477,23 @@ func (s *BackupService) execute(ctx context.Context, req BackupRequest, runID ui
 	// execute() always runs within an active TryStart()+Go() or TryStart()+Done()
 	// body, so Close() is already blocking on the primary WaitGroup slot.
 	if s.s3 != nil {
+		// Open the file before queueing: a later backup's cleanup may remove it
+		// while this upload waits, and an open file stays readable.
+		file, _, openErr := s.OpenFile(filename)
+		prev, done := s.queueUpload()
 		s.runner.GoChild(func() {
+			defer close(done)
+			if prev != nil {
+				<-prev
+			}
 			uploadCtx, cancel := context.WithTimeout(context.Background(), s.config.Backup.GetTimeout())
 			defer cancel()
 
-			if err := s.uploadBackupToS3(uploadCtx, filename); err != nil {
+			err := openErr
+			if err == nil {
+				err = s.uploadBackupToS3(uploadCtx, filename, file)
+			}
+			if err != nil {
 				slog.Error("S3 synchronization failed", "filename", filename, "error", err)
 				s.setS3SyncStatus(runID, false, err.Error())
 				s.notify.NotifyS3SyncResult(filename, &notify.S3SyncResult{Synced: false, Error: err.Error()})
@@ -508,11 +526,27 @@ func (s *BackupService) Status() *BackupStatus {
 	return &status
 }
 
-func (s *BackupService) uploadBackupToS3(ctx context.Context, filename string) error {
-	file, _, err := s.OpenFile(filename)
-	if err != nil {
-		return err
+// queueUpload puts a new upload at the end of the line. The caller waits for
+// prev (nil when the line is empty) before uploading and closes done after.
+func (s *BackupService) queueUpload() (prev <-chan struct{}, done chan struct{}) {
+	s.uploadMu.Lock()
+	defer s.uploadMu.Unlock()
+	prev, done = s.uploadsDone, make(chan struct{})
+	s.uploadsDone = done
+	return prev, done
+}
+
+// waitForUploads blocks until every upload queued so far has finished.
+func (s *BackupService) waitForUploads() {
+	s.uploadMu.Lock()
+	last := s.uploadsDone
+	s.uploadMu.Unlock()
+	if last != nil {
+		<-last
 	}
+}
+
+func (s *BackupService) uploadBackupToS3(ctx context.Context, filename string, file *os.File) error {
 	defer func() {
 		if closeErr := file.Close(); closeErr != nil {
 			slog.Debug("Failed to close backup upload file", "filename", filename, "error", closeErr)
@@ -681,6 +715,7 @@ func (s *BackupService) deleteDuringRun(filename string) error {
 // an orphaned remote object (the local copy is already gone), so it is logged at
 // Error for parity with the upload path.
 func (s *BackupService) deleteS3Backup(filename string) {
+	s.waitForUploads()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 

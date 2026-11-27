@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,15 +22,15 @@ import (
 const testBackupFilename = "aeron-backup-2026-01-02-030405.dump"
 
 type fakeBackupObjectStore struct {
-	uploadFunc func() error
+	uploadFunc func(filename string) error
 	deleteFunc func(context.Context, string) error
 }
 
-func (f *fakeBackupObjectStore) upload(context.Context, string, io.Reader) error {
+func (f *fakeBackupObjectStore) upload(_ context.Context, filename string, _ io.Reader) error {
 	if f.uploadFunc == nil {
 		return nil
 	}
-	return f.uploadFunc()
+	return f.uploadFunc(filename)
 }
 
 func (f *fakeBackupObjectStore) delete(ctx context.Context, filename string) error {
@@ -202,7 +204,7 @@ func newRunnableBackupService(t *testing.T, store backupObjectStore) *BackupServ
 func TestBackupS3SyncStatusRecordsOwnRun(t *testing.T) {
 	var svc *BackupService
 	var pending *S3SyncStatus
-	svc = newRunnableBackupService(t, &fakeBackupObjectStore{uploadFunc: func() error {
+	svc = newRunnableBackupService(t, &fakeBackupObjectStore{uploadFunc: func(string) error {
 		pending = svc.Status().S3Sync
 		return errors.New("boom")
 	}})
@@ -224,7 +226,7 @@ func TestBackupS3SyncStatusRecordsOwnRun(t *testing.T) {
 // into that run's status.
 func TestBackupS3SyncStatusIgnoresEarlierRun(t *testing.T) {
 	var svc *BackupService
-	svc = newRunnableBackupService(t, &fakeBackupObjectStore{uploadFunc: func() error {
+	svc = newRunnableBackupService(t, &fakeBackupObjectStore{uploadFunc: func(string) error {
 		svc.setStatusStarted() // act as a newer run: reset the status and bump the run ID
 		return nil
 	}})
@@ -236,6 +238,74 @@ func TestBackupS3SyncStatusIgnoresEarlierRun(t *testing.T) {
 
 	if st := svc.Status(); st.RunID != 2 || st.S3Sync != nil {
 		t.Fatalf("run_id=%d s3_sync=%+v, want run 2 without an S3 result", st.RunID, st.S3Sync)
+	}
+}
+
+// Three overlapping backups with max_backups 1: each cleanup deletes the
+// previous file while uploads are still queued. Every upload must still reach
+// S3, in run order, and each S3 delete must come after the upload of its file,
+// or the upload recreates the object after the delete and it stays in S3.
+func TestBackupS3UploadsAndDeletesRunInOrder(t *testing.T) {
+	var mu sync.Mutex
+	var events []string
+	record := func(e string) { mu.Lock(); events = append(events, e); mu.Unlock() }
+	started, release := make(chan struct{}), make(chan struct{})
+	releaseUpload := sync.OnceFunc(func() { close(release) })
+	defer releaseUpload() // a failed check must not leave the upload blocking Close
+	uploads := 0
+	svc := newRunnableBackupService(t, &fakeBackupObjectStore{
+		uploadFunc: func(filename string) error {
+			mu.Lock()
+			uploads++
+			n := uploads
+			mu.Unlock()
+			if n == 1 {
+				close(started)
+				<-release
+			}
+			record("upload " + filename)
+			return nil
+		},
+		deleteFunc: func(_ context.Context, filename string) error {
+			record("delete " + filename)
+			return nil
+		},
+	})
+	svc.config.Backup.MaxBackups = 1
+
+	var files []string
+	for i := range 3 {
+		if i > 0 {
+			time.Sleep(1100 * time.Millisecond) // backup filenames have one-second resolution
+		}
+		if err := svc.Run(t.Context(), BackupRequest{}); err != nil {
+			t.Fatalf("Run %d: %v", i+1, err)
+		}
+		files = append(files, svc.Status().Filename)
+		if i == 0 {
+			mustReceive(t, started, "first upload start")
+		}
+	}
+	time.Sleep(50 * time.Millisecond) // room for an upload or delete that skips the line
+	releaseUpload()
+	svc.runner.Close()
+
+	var uploaded []string
+	for _, e := range events {
+		if f, ok := strings.CutPrefix(e, "upload "); ok {
+			uploaded = append(uploaded, f)
+		}
+	}
+	if !slices.Equal(uploaded, files) {
+		t.Fatalf("uploads = %v, want %v (events %v)", uploaded, files, events)
+	}
+	for _, f := range files[:2] {
+		if up, del := slices.Index(events, "upload "+f), slices.Index(events, "delete "+f); del < up {
+			t.Fatalf("delete of %s at %d, upload at %d (events %v)", f, del, up, events)
+		}
+	}
+	if st := svc.Status(); st.S3Sync == nil || !st.S3Sync.Synced {
+		t.Fatalf("s3_sync = %+v, want synced", st.S3Sync)
 	}
 }
 
