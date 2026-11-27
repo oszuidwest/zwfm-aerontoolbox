@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"testing"
 	"time"
 
@@ -650,6 +651,16 @@ func TestExecutePgDumpPassesConfiguredSSLMode(t *testing.T) {
 	}
 	if string(got) != "verify-full" {
 		t.Fatalf("pg_dump PGSSLMODE = %q, want verify-full", got)
+	}
+}
+
+// pg_dump reads a plain --dbname value with "=" as a connection string.
+func TestBuildPgDumpArgsQuotesDatabaseName(t *testing.T) {
+	svc := newTestBackupService(t)
+	svc.config.Database.Name = "a=b"
+
+	if args := svc.buildPgDumpArgs(1); !slices.Contains(args, "--dbname=dbname='a=b'") {
+		t.Fatalf("buildPgDumpArgs = %q, want --dbname=dbname='a=b'", args)
 	}
 }
 

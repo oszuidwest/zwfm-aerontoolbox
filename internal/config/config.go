@@ -667,9 +667,17 @@ func tagMessage(tag, param string) string {
 	}
 }
 
+// quote escapes a value for use inside single quotes in a PostgreSQL connection string.
+var quote = strings.NewReplacer(`\`, `\\`, `'`, `\'`).Replace
+
 // ConnectionString returns a PostgreSQL connection string with escaped, quoted values.
 func (c *DatabaseConfig) ConnectionString() string {
-	quote := strings.NewReplacer(`\`, `\\`, `'`, `\'`).Replace
 	return fmt.Sprintf("host='%s' port='%s' user='%s' password='%s' dbname='%s' sslmode='%s'",
 		quote(c.Host), quote(c.Port), quote(c.User), quote(c.Password), quote(c.Name), quote(c.SSLMode))
+}
+
+// DBNameConnString returns the database name as a quoted dbname connection string,
+// so tools like pg_dump never read the name itself as a connection string.
+func (c *DatabaseConfig) DBNameConnString() string {
+	return "dbname='" + quote(c.Name) + "'"
 }

@@ -27,6 +27,18 @@ func TestConnectionStringKeepsValuesUnchanged(t *testing.T) {
 	}
 }
 
+func TestDBNameConnStringEscapesQuotes(t *testing.T) {
+	db := DatabaseConfig{Name: "o'brien"}
+
+	got, err := pq.NewConfig(db.DBNameConnString())
+	if err != nil {
+		t.Fatalf("NewConfig: %v", err)
+	}
+	if got.Database != db.Name {
+		t.Fatalf("parsed dbname=%q, want %q", got.Database, db.Name)
+	}
+}
+
 func TestFileMonitorValidation(t *testing.T) {
 	tests := []struct {
 		name    string
