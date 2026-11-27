@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,15 +23,15 @@ import (
 const testBackupFilename = "aeron-backup-2026-01-02-030405.dump"
 
 type fakeBackupObjectStore struct {
-	uploadFunc func() error
+	uploadFunc func(filename string) error
 	deleteFunc func(context.Context, string) error
 }
 
-func (f *fakeBackupObjectStore) upload(context.Context, string, io.Reader) error {
+func (f *fakeBackupObjectStore) upload(_ context.Context, filename string, _ io.Reader) error {
 	if f.uploadFunc == nil {
 		return nil
 	}
-	return f.uploadFunc()
+	return f.uploadFunc(filename)
 }
 
 func (f *fakeBackupObjectStore) delete(ctx context.Context, filename string) error {
@@ -182,12 +185,12 @@ func TestBackupStatusCompletedRunIDWaitsForRunEnd(t *testing.T) {
 
 // newRunnableBackupService returns a service whose Run succeeds: pg_dump and
 // pg_restore are shell stubs, and S3 uploads go to store.
-func newRunnableBackupService(t *testing.T, store backupObjectStore) *BackupService {
+func newRunnableBackupService(t *testing.T, store backupObjectStore, opts ...backupTestOption) *BackupService {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("test uses a POSIX shell as pg_dump")
 	}
-	svc := newTestBackupService(t, withStore(store))
+	svc := newTestBackupService(t, append(opts, withStore(store))...)
 	svc.notify = notify.New(svc.config)
 	svc.pgRestorePath = writePgRestoreStub(t)
 	svc.pgDumpPath = filepath.Join(t.TempDir(), "pg_dump")
@@ -202,7 +205,7 @@ func newRunnableBackupService(t *testing.T, store backupObjectStore) *BackupServ
 func TestBackupS3SyncStatusRecordsOwnRun(t *testing.T) {
 	var svc *BackupService
 	var pending *S3SyncStatus
-	svc = newRunnableBackupService(t, &fakeBackupObjectStore{uploadFunc: func() error {
+	svc = newRunnableBackupService(t, &fakeBackupObjectStore{uploadFunc: func(string) error {
 		pending = svc.Status().S3Sync
 		return errors.New("boom")
 	}})
@@ -224,7 +227,7 @@ func TestBackupS3SyncStatusRecordsOwnRun(t *testing.T) {
 // into that run's status.
 func TestBackupS3SyncStatusIgnoresEarlierRun(t *testing.T) {
 	var svc *BackupService
-	svc = newRunnableBackupService(t, &fakeBackupObjectStore{uploadFunc: func() error {
+	svc = newRunnableBackupService(t, &fakeBackupObjectStore{uploadFunc: func(string) error {
 		svc.setStatusStarted() // act as a newer run: reset the status and bump the run ID
 		return nil
 	}})
@@ -236,6 +239,79 @@ func TestBackupS3SyncStatusIgnoresEarlierRun(t *testing.T) {
 
 	if st := svc.Status(); st.RunID != 2 || st.S3Sync != nil {
 		t.Fatalf("run_id=%d s3_sync=%+v, want run 2 without an S3 result", st.RunID, st.S3Sync)
+	}
+}
+
+// Two backups in a row with max_backups 1 while the first upload hangs and then
+// fails: the second run's cleanup deletes file 1 and the test deletes file 2
+// while both uploads are queued. Both uploads must still reach S3, in run order,
+// and each S3 delete must come after the upload of its file, or the upload
+// creates the object after the delete and it stays in S3.
+func TestBackupS3UploadsAndDeletesRunInOrder(t *testing.T) {
+	var mu sync.Mutex
+	var events []string
+	record := func(e string) { mu.Lock(); events = append(events, e); mu.Unlock() }
+	started, release := make(chan struct{}), make(chan struct{})
+	releaseUpload := sync.OnceFunc(func() { close(release) })
+	defer releaseUpload() // a failed check must not leave the upload blocking Close
+	var uploads atomic.Int32
+	svc := newRunnableBackupService(t, &fakeBackupObjectStore{
+		uploadFunc: func(filename string) error {
+			first := uploads.Add(1) == 1
+			if first {
+				close(started)
+				<-release
+			}
+			record("upload " + filename)
+			if first {
+				return errors.New("first upload fails") // a failed upload must free the line too
+			}
+			return nil
+		},
+		deleteFunc: func(_ context.Context, filename string) error {
+			record("delete " + filename)
+			return nil
+		},
+	}, withoutRootCleanup()) // closed below, so a stuck line fails fast instead of hanging cleanup
+	svc.config.Backup.MaxBackups = 1
+
+	var files []string
+	base := time.Now()
+	for i := range 2 {
+		pinNow(t, base.Add(time.Duration(i)*time.Second)) // backup filenames have one-second resolution
+		if err := svc.Run(t.Context(), BackupRequest{}); err != nil {
+			t.Fatalf("Run %d: %v", i+1, err)
+		}
+		files = append(files, svc.Status().Filename)
+		if i == 0 {
+			mustReceive(t, started, "first upload start")
+		}
+	}
+	if err := svc.Delete(files[1]); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond) // room for an upload or delete that skips the line
+	releaseUpload()
+	closed := make(chan struct{})
+	go func() { svc.Close(); close(closed) }()
+	mustReceive(t, closed, "queued S3 work to finish")
+
+	var uploaded []string
+	for _, e := range events {
+		if f, ok := strings.CutPrefix(e, "upload "); ok {
+			uploaded = append(uploaded, f)
+		}
+	}
+	if !slices.Equal(uploaded, files) {
+		t.Fatalf("uploads = %v, want %v (events %v)", uploaded, files, events)
+	}
+	for _, f := range files {
+		if up, del := slices.Index(events, "upload "+f), slices.Index(events, "delete "+f); del < up {
+			t.Fatalf("delete of %s at %d, upload at %d (events %v)", f, del, up, events)
+		}
+	}
+	if st := svc.Status(); st.S3Sync == nil || !st.S3Sync.Synced {
+		t.Fatalf("s3_sync = %+v, want synced", st.S3Sync)
 	}
 }
 

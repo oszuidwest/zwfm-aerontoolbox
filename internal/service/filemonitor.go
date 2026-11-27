@@ -22,8 +22,8 @@ import (
 // file system.
 var osStat = os.Stat
 
-// nowFunc returns the current time. Wrapped here so windowing tests can pin
-// a deterministic clock without depending on time-of-day at run time.
+// nowFunc returns the current time. Wrapped here so windowing and backup
+// filename tests can pin a deterministic clock without depending on time-of-day at run time.
 // ActiveWindow comparisons use the location of the returned time, matching
 // how operators configure local-time windows (TZ env, see scheduler.go).
 var nowFunc = time.Now

@@ -43,6 +43,14 @@ type BackupService struct {
 	status         *BackupStatus
 	runID          uint64
 	completedRunID uint64
+
+	// S3 uploads run one after another in run order: each waits for lastUpload,
+	// the done channel of the upload before it. uploading holds that channel per
+	// file until the upload has reported, so an S3 delete of the same file waits
+	// for it instead of overtaking it.
+	uploadMu   sync.Mutex
+	lastUpload chan struct{}
+	uploading  map[string]chan struct{}
 }
 
 // BackupStatus is the latest backup run snapshot. Manual and scheduled
@@ -317,7 +325,7 @@ func (s *BackupService) validateManagedBackupFile(ctx context.Context, filename 
 
 // generateBackupFilename returns a managed timestamped .dump filename.
 func generateBackupFilename() string {
-	timestamp := time.Now().Format("2006-01-02-150405")
+	timestamp := nowFunc().Format("2006-01-02-150405")
 	return fmt.Sprintf("%s%s%s", backupPrefix, timestamp, backupSuffix)
 }
 
@@ -471,11 +479,24 @@ func (s *BackupService) execute(ctx context.Context, req BackupRequest, runID ui
 	// execute() always runs within an active TryStart()+Go() or TryStart()+Done()
 	// body, so Close() is already blocking on the primary WaitGroup slot.
 	if s.s3 != nil {
+		// Queue first, so a delete that misses this upload already removed the
+		// file and the open fails. Open before waiting: a later cleanup may
+		// remove the file while this upload waits, and an open file stays readable.
+		prev, done := s.queueUpload(filename)
+		file, _, openErr := s.OpenFile(filename)
 		s.runner.GoChild(func() {
+			defer s.finishUpload(filename, done)
+			if prev != nil {
+				<-prev
+			}
 			uploadCtx, cancel := context.WithTimeout(context.Background(), s.config.Backup.GetTimeout())
 			defer cancel()
 
-			if err := s.uploadBackupToS3(uploadCtx, filename); err != nil {
+			err := openErr
+			if err == nil {
+				err = s.uploadBackupToS3(uploadCtx, filename, file)
+			}
+			if err != nil {
 				slog.Error("S3 synchronization failed", "filename", filename, "error", err)
 				s.setS3SyncStatus(runID, false, err.Error())
 				s.notify.NotifyS3SyncResult(filename, &notify.S3SyncResult{Synced: false, Error: err.Error()})
@@ -508,11 +529,44 @@ func (s *BackupService) Status() *BackupStatus {
 	return &status
 }
 
-func (s *BackupService) uploadBackupToS3(ctx context.Context, filename string) error {
-	file, _, err := s.OpenFile(filename)
-	if err != nil {
-		return err
+// queueUpload puts the upload of filename at the end of the line. The caller
+// waits for prev (nil for the first upload) before uploading, and calls
+// finishUpload after reporting its result, also when the upload failed.
+func (s *BackupService) queueUpload(filename string) (prev <-chan struct{}, done chan struct{}) {
+	s.uploadMu.Lock()
+	defer s.uploadMu.Unlock()
+	prev, done = s.lastUpload, make(chan struct{})
+	s.lastUpload = done
+	if s.uploading == nil {
+		s.uploading = make(map[string]chan struct{})
 	}
+	s.uploading[filename] = done
+	return prev, done
+}
+
+// finishUpload lets the next upload and any waiting delete of filename go on.
+func (s *BackupService) finishUpload(filename string, done chan struct{}) {
+	close(done)
+	s.uploadMu.Lock()
+	defer s.uploadMu.Unlock()
+	if s.uploading[filename] == done {
+		delete(s.uploading, filename)
+	}
+}
+
+// waitForUpload blocks until a queued or running upload of filename is done.
+func (s *BackupService) waitForUpload(filename string) {
+	s.uploadMu.Lock()
+	ch := s.uploading[filename]
+	s.uploadMu.Unlock()
+	if ch != nil {
+		<-ch
+	}
+}
+
+// uploadBackupToS3 uploads file under filename and closes it.
+
+func (s *BackupService) uploadBackupToS3(ctx context.Context, filename string, file *os.File) error {
 	defer func() {
 		if closeErr := file.Close(); closeErr != nil {
 			slog.Debug("Failed to close backup upload file", "filename", filename, "error", closeErr)
@@ -681,6 +735,7 @@ func (s *BackupService) deleteDuringRun(filename string) error {
 // an orphaned remote object (the local copy is already gone), so it is logged at
 // Error for parity with the upload path.
 func (s *BackupService) deleteS3Backup(filename string) {
+	s.waitForUpload(filename)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
